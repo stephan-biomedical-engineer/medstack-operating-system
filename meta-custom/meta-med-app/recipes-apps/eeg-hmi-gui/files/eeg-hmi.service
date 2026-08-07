@@ -1,0 +1,40 @@
+[Unit]
+Description=MedPlatform EEG operator display
+# The compositor has to exist before a Wayland client can attach to it.
+Requires=weston.service
+After=weston.service eeg-acquisition.service
+# The HMI is a viewer: it starts whether or not acquisition is up, and shows
+# "waiting for the acquisition service" until frames arrive. Coupling the two
+# would mean a display fault could stop acquisition.
+Wants=eeg-acquisition.service
+
+[Service]
+Type=simple
+Environment=QT_QPA_PLATFORM=wayland
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=MED_EEG_SOCKET=/run/medplatform/eeg.sock
+ExecStart=/usr/bin/eeg-hmi-gui
+Restart=on-failure
+RestartSec=3s
+
+# Rendering only. The HMI has no business writing records, reaching the
+# network or touching the front-end, and IEC 62304 software partitioning is
+# only credible if the partition is actually enforced.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

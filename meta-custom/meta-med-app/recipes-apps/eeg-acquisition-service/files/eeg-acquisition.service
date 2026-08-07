@@ -1,0 +1,67 @@
+[Unit]
+Description=MedPlatform EEG acquisition service
+Documentation=file:/etc/medplatform/eeg.conf
+# The encrypted record volume, when the machine has one. Wants, not Requires:
+# on a target without the partition the mount unit is skipped and the service
+# is expected to fail loudly on its own terms (with an audit record) rather
+# than be silently held back by systemd.
+Wants=data.mount
+After=data.mount dbus.service systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/eeg-acquisition-service --config /etc/medplatform/eeg.conf
+Restart=on-failure
+RestartSec=2s
+
+# Acquisition is the real-time half of the device. Without this it competes
+# with the HMI for CPU and frames arrive late under load.
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=50
+IOSchedulingClass=realtime
+
+# /run/medplatform (the published sample socket) and /var/lib/medplatform (the
+# audit hash chain head) are created and owned by systemd, so they exist with
+# the right mode on a read-only rootfs.
+RuntimeDirectory=medplatform
+RuntimeDirectoryMode=0750
+StateDirectory=medplatform
+StateDirectoryMode=0700
+
+# Sandboxing. The service handles patient data on a device that cannot be
+# patched quickly, so it gets the smallest surface it can still work in.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# No network of any kind: acquisition talks to a co-processor and to a local
+# socket. Anything else would be an exfiltration path for patient data.
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+
+# The record volume is the only place outside its own runtime/state
+# directories this service may write.
+ReadWritePaths=/data
+
+# The rpmsg endpoint to the Cortex-M4, on machines that have one. Harmless on
+# targets where the node does not exist.
+DeviceAllow=/dev/rpmsg0 rw
+DeviceAllow=/dev/rpmsg_ctrl0 rw
+
+[Install]
+WantedBy=multi-user.target
