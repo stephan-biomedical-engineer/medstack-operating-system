@@ -13,3 +13,17 @@ repos:
 
 target:
   - med-image-eeg
+
+local_conf_header:
+  eeg-stm32mp2: |
+    # The Cortex-M4 runs the acquisition firmware and publishes sample frames
+    # over OpenAMP rpmsg; the service reaches them through MedicalIPC. Compare
+    # with kas/project-eeg-qemu.yml: same image, same applications, same
+    # framework, different front-end driver.
+    MED_EEG_DRIVER = "rpmsg"
+    MED_EEG_REQUIRE_ENCRYPTION = "true"
+
+    # Co-processor firmware is a BSP artefact. Point this at the recipe that
+    # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
+    # without meta-med-app ever naming a machine.
+    # MED_AMP_FIRMWARE = "<bsp-firmware-recipe>"

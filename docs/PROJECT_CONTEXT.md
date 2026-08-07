@@ -68,10 +68,11 @@ All code written in this repository must strictly adhere to the 4-layer unidirec
 ## 4. Key Components Breakdown
 
 ### 4.1. `kas/` (Build Configuration Directory)
-* `kas/kas-base.yml`: Common repository definitions (`poky`, `meta-openembedded`, `meta-rauc`), layer paths, and BitBake environment settings.
-* `kas/project-eeg-qemu.yml`: KAS entrypoint for simulation (`machine: qemux86-64`, `target: med-image-eeg`).
-* `kas/project-eeg-stm32mp2.yml`: KAS entrypoint for physical target (`machine: stm32mp257f-ev1`, `target: med-image-eeg`).
+* `kas/kas-base.yml`: Common repository definitions (`poky`, `meta-openembedded`, `meta-rauc`, `meta-qt6`), layer paths, and BitBake environment settings.
+* `kas/project-eeg-qemu.yml`: KAS entrypoint for simulation (`machine: qemux86-64`, `target: med-image-eeg`, `MED_EEG_DRIVER = "simulated"`).
+* `kas/project-eeg-stm32mp2.yml`: KAS entrypoint for physical target (`machine: stm32mp257f-ev1`, `target: med-image-eeg`, `MED_EEG_DRIVER = "rpmsg"`).
 * `kas/project-tomograph.yml`: KAS entrypoint for Tomograph profile validation (`target: med-image-tomograph`).
+* `kas-project.yml` (repo root): alias for `kas/project-eeg-qemu.yml`, so the default entrypoint is the PoC.
 
 ### 4.2. `meta-med-distro` (OS Infrastructure & Regulatory Foundation)
 * **Distro Config**: `conf/distro/med-os.conf` enforces `INIT_MANAGER = "systemd"`, `usrmerge`, `rauc`.
@@ -88,9 +89,15 @@ Contains 6 standardized C++ abstraction classes:
 6. `MedicalDevice`: Universal abstraction interface for biomedical sensors (AFEs, ADCs) and actuators.
 
 ### 4.4. `meta-med-app` (Pure Userspace Applications & Profiles)
-* **Applications**: `eeg-acquisition-service` (data daemon using `MedicalIPC` & `MedicalLogger`), `eeg-hmi-gui` (Qt/Wayland user interface).
-* **Packagegroups**: `packagegroup-med-core.bb` (common), `packagegroup-med-amp.bb` (real-time acquisition), `packagegroup-med-gui.bb` (HMI graphics).
-* **Images**: `med-image-eeg.bb` (PoC image inheriting `core-image`), `med-image-tomograph.bb`.
+* **Applications**: `eeg-acquisition-service` (data daemon using `MedicalIPC`, `MedicalDevice`, `MedicalStorage`, `MedicalConfiguration`, `MedicalUpdate` & `MedicalLogger`), `eeg-hmi-gui` (Qt6 Quick / Wayland user interface).
+* **Packagegroups** carry reusable platform capability and **never an application**: `packagegroup-med-core.bb` (MedFramework runtime), `packagegroup-med-amp.bb` (AMP enablement plus the `MED_AMP_FIRMWARE` hook a BSP fills in), `packagegroup-med-gui.bb` (weston + Qt runtime). Applications are installed by the image that owns them, which is what lets the tomograph profile reuse `med-core` and `med-gui` byte for byte.
+* **Images**: `med-image-eeg.bb` (PoC) and `med-image-tomograph.bb`, both `require recipes-core/images/med-image-base.bb` from `meta-med-distro`.
+
+### 4.5. Implementation status
+
+The three layers are implemented; **no `kas build` has run yet**, so the BitBake metadata itself is unverified. Validated on the host toolchain: the seven MedFramework translation units compile warning-free under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`; a 55-check functional test of `MedicalConfiguration`, `MedicalStorage`, `MedicalDevice` and `MedicalLogger` passes; and `eeg-acquisition-service` runs end to end — publishing CRC-valid AMP frames to an IPC client, writing session records with `0600`, and refusing to start on either a tampered configuration or an out-of-range safety parameter.
+
+Two assumptions to confirm on the first real build: `rauc-conf_%.bbappend` expects meta-rauc to provide a `rauc-conf` recipe, and `meta-qt6` is pinned to branch `6.8`.
 
 ---
 

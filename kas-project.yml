@@ -1,0 +1,16 @@
+# Default MedPlatform entrypoint.
+#
+# The real configuration lives in kas/ - one standalone file per device profile
+# and target. This file exists so that "kas build kas-project.yml" from the
+# repository root does the obvious thing (the EEG proof of concept on QEMU),
+# and so that the verification commands written in docs/ keep working.
+#
+# Build a different profile by naming its file directly:
+#   kas build kas/project-eeg-qemu.yml       EEG on QEMU x86-64
+#   kas build kas/project-eeg-stm32mp2.yml   EEG on the STM32MP257
+#   kas build kas/project-tomograph.yml      Tomograph profile (reuse metric)
+
+header:
+  version: 14
+  includes:
+    - kas/project-eeg-qemu.yml

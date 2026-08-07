@@ -7,3 +7,17 @@ machine: qemux86-64
 
 target:
   - med-image-eeg
+
+local_conf_header:
+  eeg-qemu: |
+    # QEMU has no analogue front-end and no co-processor, so the acquisition
+    # service uses the framework's synthetic EEG source. This one line is the
+    # entire difference between the simulation profile and the hardware
+    # profile - see kas/project-eeg-stm32mp2.yml.
+    MED_EEG_DRIVER = "simulated"
+
+    # No LUKS volume on the simulation image, so the service is told to accept
+    # an unencrypted record store. It audits the fact that it was told to
+    # (AuditEvent::SecurityEvent), which is why this is safe to allow here and
+    # impossible to do accidentally in the field.
+    MED_EEG_REQUIRE_ENCRYPTION = "false"

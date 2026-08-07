@@ -10,7 +10,13 @@ Yocto release: **Scarthgap (5.0 LTS)**. Build orchestration: Siemens **KAS**.
 
 `docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. `docs/implementation_plan*.md` are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
 
-**Current state**: the entire `meta-custom/` tree (all `.bb`, `.bbappend`, `.conf`, `layer.conf`, and header/source files) exists only as an empty scaffold — every file is 0 bytes. This is directory/file structure staged ahead of implementation, not working recipes. Don't assume any recipe, class, or config actually contains the logic its filename implies; check before relying on it.
+**Current state**: the three `meta-med-*` layers are implemented (distro policy, kernel fragment, RAUC/LUKS config, the MedFramework C++ library, both EEG applications, packagegroups and images). What has **not** happened yet is a real Yocto build: no `kas build` has ever run in this repo, so nothing here has been validated by bitbake. What *has* been validated, on the host toolchain:
+
+- all 7 MedFramework translation units compile clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`;
+- a functional test of `MedicalConfiguration`, `MedicalStorage`, `MedicalDevice` and `MedicalLogger` (55 checks) passes;
+- `eeg-acquisition-service` builds, runs, publishes CRC-valid frames to an IPC client, writes session records, and refuses to start on a tampered config or an out-of-range safety parameter.
+
+Treat the bitbake metadata (recipe syntax, layer resolution, package split) as unverified until a build runs. Two known risks to check first: `rauc-conf_%.bbappend` assumes meta-rauc provides a `rauc-conf` recipe, and `kas-base.yml` pins `meta-qt6` to branch `6.8`.
 
 ## Build Commands
 
@@ -34,9 +40,15 @@ kas shell kas/kas-base.yml -c "bitbake-layers show-layers"
 
 # Verify a kernel config fragment made it into the build for the active target
 kas shell kas/project-eeg-qemu.yml -c "bitbake -e virtual/kernel | grep ^SRC_URI="
+
+# Fast inner loop: acquisition path only, skips compiling Qt
+kas build kas/project-eeg-qemu.yml --extra-conf \
+  'MED_EEG_INSTALL = "packagegroup-med-core packagegroup-med-amp eeg-acquisition-service"'
 ```
 
-Each `kas/project-*.yml` is a standalone entrypoint that includes `kas/kas-base.yml` and sets its own `machine:` and `target:` — there is no single default project file at the repo root (`kas-project.yml` exists but is currently empty).
+Each `kas/project-*.yml` is a standalone entrypoint that includes `kas/kas-base.yml` and sets its own `machine:`, `target:` and the `MED_EEG_*` variables that select the acquisition backend. `kas-project.yml` at the repo root is a thin alias for `kas/project-eeg-qemu.yml`.
+
+The hardware adaptation surface is deliberately one variable: `MED_EEG_DRIVER` (`simulated` on QEMU, `rpmsg` on the STM32MP257) is substituted into `/etc/medplatform/eeg.conf` at build time. No application source differs between the two targets — that is what the portability metric measures.
 
 ## Architecture: the 4-layer `MedStack`
 
@@ -65,9 +77,11 @@ BSP layer            (priority 6-7) — vendor layers (meta-st-stm32mp, meta-yoc
   - `MedicalConfiguration` — calibration tables, operational thresholds, DERS safety-parameter checks
   - `MedicalDevice` — universal sensor/actuator abstraction (AFEs, ADCs)
 
-- **`meta-med-app`** (`meta-custom/meta-med-app/`): pure userspace. Apps: `eeg-acquisition-service` (data daemon, uses `MedicalIPC`/`MedicalLogger`), `eeg-hmi-gui` (Qt/Wayland UI). Packagegroups: `packagegroup-med-core` (common), `packagegroup-med-amp` (real-time acquisition), `packagegroup-med-gui` (HMI graphics). Images: `med-image-eeg.bb`, `med-image-tomograph.bb`.
+  Implementation notes: the library is one shared object (`libmedframework.so`, CMake, C++17) whose only external dependencies are `libsystemd` (sd-journal, sd-bus) and `libcrypto` (SHA-256) — everything else is POSIX, which is why it builds unchanged for both targets. `MedicalTypes.h` carries the shared `Status`/`Result<T>` vocabulary; `MedicalDevice.h` also defines the `med::amp::FrameHeader` wire format used both by the rpmsg link and by the service→HMI socket. Built-in device drivers: `simulated` and `rpmsg`.
 
-- **`kas/`**: `kas-base.yml` is the single source of truth for external repo deps (`poky`, `meta-openembedded`, `meta-rauc`) and the three `meta-med-*` layer paths, plus `local_conf_header` (package format, sstate/downloads dirs, etc). Per-target files (`project-eeg-qemu.yml`, `project-eeg-stm32mp2.yml`, `project-tomograph.yml`) only set `machine:`, `target:`, and any hardware-specific repo (e.g. `meta-st-stm32mp` for the STM32 target).
+- **`meta-med-app`** (`meta-custom/meta-med-app/`): pure userspace. Apps: `eeg-acquisition-service` (data daemon, uses `MedicalIPC`/`MedicalLogger`), `eeg-hmi-gui` (Qt6 Quick/Wayland UI). Packagegroups hold **platform capability only, never applications** — `packagegroup-med-core` (framework runtime), `packagegroup-med-amp` (AMP enablement + BSP firmware hook via `MED_AMP_FIRMWARE`), `packagegroup-med-gui` (weston + Qt, no app). Images install the apps: `med-image-eeg.bb`, `med-image-tomograph.bb`, both `require recipes-core/images/med-image-base.bb` across the layer boundary.
+
+- **`kas/`**: `kas-base.yml` is the single source of truth for external repo deps (`poky`, `meta-openembedded`, `meta-rauc`, `meta-qt6`) and the three `meta-med-*` layer paths, plus `local_conf_header` (package format, sstate/downloads dirs, buildstats). Per-target files (`project-eeg-qemu.yml`, `project-eeg-stm32mp2.yml`, `project-tomograph.yml`) set `machine:`, `target:`, the `MED_EEG_*` variables, and any hardware-specific repo (e.g. `meta-st-stm32mp` for the STM32 target). `debug-tweaks` is deliberately *not* set globally — dev images request it themselves so `med-image-prod` stays hardened.
 
 ## Rules when editing this codebase
 
@@ -76,3 +90,6 @@ BSP layer            (priority 6-7) — vendor layers (meta-st-stm32mp, meta-yoc
 3. **Kernel changes** belong in `meta-med-distro/recipes-kernel/linux/linux-%.bbappend` (wildcard, not a vendor-specific bbappend) so they stay portable across BSPs.
 4. Do not commit build outputs (`build/`, `layers/`, `downloads/`, `sstate-cache/`, `.kas/`) — already covered by `.gitignore`.
 5. Security features (read-only rootfs, RAUC A/B, audit logging, LUKS) exist to satisfy IEC 62304 software-partitioning/traceability requirements — treat them as architectural constraints, not optional hardening.
+6. **Applications never gain a second dependency.** `eeg-acquisition-service` and `eeg-hmi-gui` link `medframework` and (for the HMI) Qt, and nothing else. If a new feature seems to need a system library in an app recipe's `DEPENDS`, the feature belongs behind a framework API instead — that constraint is the thesis, not a style rule.
+7. **`linux-%` also matches non-kernels** (`linux-libc-headers`, `linux-firmware`). The bbappend guards on `bb.data.inherits_class('kernel', d)`; keep that guard when extending it.
+8. **Config stores are sealed at build time.** `MedicalConfiguration` refuses to load a store without a matching `.sha256` sidecar, so any recipe shipping one must generate the sidecar after substituting variables (see `do_seal_configuration` in `eeg-acquisition-service_1.0.0.bb`).
