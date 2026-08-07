@@ -33,7 +33,3 @@ FILES:${PN}-dev += " \
     ${includedir}/medplatform \
     ${libdir}/pkgconfig/medframework.pc \
 "
-
-# The shared library is what applications RDEPEND on; nothing else in the image
-# needs it.
-RDEPENDS:${PN} = ""

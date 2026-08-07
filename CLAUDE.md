@@ -16,7 +16,11 @@ Yocto release: **Scarthgap (5.0 LTS)**. Build orchestration: Siemens **KAS**.
 - a functional test of `MedicalConfiguration`, `MedicalStorage`, `MedicalDevice` and `MedicalLogger` (55 checks) passes;
 - `eeg-acquisition-service` builds, runs, publishes CRC-valid frames to an IPC client, writes session records, and refuses to start on a tampered config or an out-of-range safety parameter.
 
-Treat the bitbake metadata (recipe syntax, layer resolution, package split) as unverified until a build runs. Two known risks to check first: `rauc-conf_%.bbappend` assumes meta-rauc provides a `rauc-conf` recipe, and `kas-base.yml` pins `meta-qt6` to branch `6.8`.
+Treat the bitbake metadata (recipe syntax, layer resolution, package split) as unverified until a build runs. Three known risks to check first:
+
+1. `rauc-conf_%.bbappend` assumes meta-rauc provides a `rauc-conf` recipe (`bitbake-layers show-recipes rauc-conf`) — a dangling bbappend is a hard error.
+2. `kas-base.yml` pins `meta-qt6` to branch `6.8`.
+3. `packagegroup-med-gui` names `qtbase-plugins` and `qtdeclarative-qmlplugins`; confirm meta-qt6's package split actually produces them.
 
 ## Build Commands
 
