@@ -1,0 +1,9 @@
+header:
+  version: 14
+  includes:
+    - kas/kas-base.yml
+
+machine: qemux86-64
+
+target:
+  - med-image-tomograph

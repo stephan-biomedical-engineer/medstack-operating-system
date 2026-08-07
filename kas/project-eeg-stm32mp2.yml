@@ -1,0 +1,15 @@
+header:
+  version: 14
+  includes:
+    - kas/kas-base.yml
+
+machine: stm32mp257f-ev1
+
+repos:
+  meta-st-stm32mp:
+    url: "https://github.com/STMicroelectronics/meta-st-stm32mp.git"
+    branch: "scarthgap"
+    path: "layers/meta-st-stm32mp"
+
+target:
+  - med-image-eeg
