@@ -1,0 +1,9 @@
+# MedOS encrypted data volume.
+#
+# name       source device                          key file  options
+#
+# "none" as the key file means the key comes from the TPM/OP-TEE backed
+# provisioning step rather than from the rootfs - a key stored in a read-only
+# image would be identical on every unit shipped and therefore worthless.
+# "nofail" keeps a unit without the partition (QEMU) booting normally.
+med-data   /dev/disk/by-partlabel/med-data   none   luks,nofail,discard

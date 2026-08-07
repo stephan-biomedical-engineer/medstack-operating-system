@@ -1,0 +1,38 @@
+# short-description: MedPlatform GPT A/B layout with a separate encrypted /data
+# long-description:
+# Reference disk layout for MedOS. Two identical rootfs slots (RAUC A/B) plus a
+# persistent data partition that no update ever touches.
+#
+#   +------+-------------+-------------+------------------+
+#   | ESP  | med-root-a  | med-root-b  |     med-data     |
+#   | boot |  (active)   | (inactive)  | LUKS -> /data    |
+#   +------+-------------+-------------+------------------+
+#
+# GPT partition *names* (--part-name) are what /dev/disk/by-partlabel/ exposes,
+# and they are what rauc-conf/system.conf and /etc/crypttab refer to. They are
+# stable across machines, which is why nothing above the BSP has to know the
+# actual block device names.
+#
+# Scope: this layout targets EFI/GRUB machines (qemux86-64 and generic x86
+# hardware). Vendor BSPs that need TF-A/U-Boot at fixed offsets - the
+# STM32MP257 among them - ship their own WKS_FILE from the machine
+# configuration, and med-os.conf sets WKS_FILE with "?=" so the BSP wins.
+# Bootloader placement is a BSP concern by definition; the A/B *policy* above
+# is the part that stays portable.
+
+bootloader --ptable gpt --timeout=3 --append="rootwait console=ttyS0,115200 console=tty0"
+
+part /boot --source bootimg-efi --sourceparams="loader=grub-efi" --part-name esp --label boot --fstype=vfat --active --align 1024 --size 64
+
+part / --source rootfs --part-name med-root-a --label med-root-a --fstype=ext4 --align 1024 --size 1024 --use-uuid
+
+# Slot B is created empty and identical in size to slot A: RAUC writes the
+# incoming bundle here. Same size is a hard requirement, not a convention.
+part --part-name med-root-b --label med-root-b --fstype=ext4 --align 1024 --size 1024
+
+# LUKS container for patient data, calibration and the sealed journal.
+# wic cannot produce a LUKS header, so the partition is created as plain ext4
+# and converted on first boot by the provisioning step (cryptsetup luksFormat
+# with a device-unique key). Doing it on-device is also the correct answer for
+# a real product: a key baked into a factory image is not a key.
+part --part-name med-data --label med-data --fstype=ext4 --align 1024 --size 512

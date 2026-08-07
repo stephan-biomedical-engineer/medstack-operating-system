@@ -1,0 +1,25 @@
+# MedOS default wired network profile.
+#
+# Deliberately conservative: a medical device gets an address so it can reach
+# an OTA server, and nothing else. No mDNS/LLMNR advertisement, no IPv6
+# privacy games, no forwarding.
+[Match]
+Name=en* eth*
+Type=ether
+
+[Network]
+DHCP=yes
+IPForward=no
+LLMNR=no
+MulticastDNS=no
+LLDP=no
+EmitLLDP=no
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseHostname=false
+UseDomains=false
+SendHostname=false
+
+[Link]
+RequiredForOnline=no
