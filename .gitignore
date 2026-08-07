@@ -1,0 +1,12 @@
+# BitBake & KAS Build Outputs
+build/
+layers/
+downloads/
+sstate-cache/
+.kas/
+*.pyc
+*.swp
+*~
+
+# Editor / vault local state
+.obsidian/
