@@ -25,7 +25,8 @@ make that reliable rather than flaky:
     marker of its own, so nothing depends on matching a shell prompt that the
     guest is free to change.
 
-Usage:  make check          (or: python3 scripts/med-check.py)
+Usage:  make check              the EEG device profile (all assertions)
+        make check-tomograph    the tomograph profile (platform assertions only)
 """
 
 import os
@@ -81,8 +82,14 @@ def rx(pattern, flags=0):
     return predicate
 
 
-# (id, o que se afirma, comando no guest, predicado)
-CHECKS = [
+# As asserções são divididas do mesmo jeito que a plataforma é. As de PLATFORM
+# valem para qualquer imagem MedOS - são exatamente o que o perfil tomograph
+# herda sem escrever uma linha - e as de EEG pertencem ao perfil de dispositivo.
+#
+# Rodar as primeiras contra o tomógrafo é o que transforma "a plataforma se
+# sustenta sozinha, sem aplicação nenhuma" de inferência sobre listas de pacotes
+# em observação sobre um sistema em execução.
+PLATFORM_CHECKS = [
     ("system-state", "o sistema atingiu um estado terminal",
      "systemctl is-system-running || true", rx(r"^(running|degraded)$", re.M)),
 
@@ -90,42 +97,19 @@ CHECKS = [
      "systemctl list-units --state=failed --no-legend --plain | awk '{print $1}'",
      check_failed_units),
 
-    ("config-seal", "eeg.conf casa com o sidecar sha256",
-     'test "$(sha256sum /etc/medplatform/eeg.conf | cut -d" " -f1)" '
-     '= "$(cat /etc/medplatform/eeg.conf.sha256)" && echo SEAL_OK || echo SEAL_BAD',
-     rx(r"SEAL_OK")),
-
-    ("config-substituted", "nenhum placeholder @MED_*@ sobrou em eeg.conf",
-     "grep -c '@MED_' /etc/medplatform/eeg.conf || true", rx(r"^0$", re.M)),
-
-    ("config-seal-owner", "o sidecar do selo pertence a root:root",
-     "stat -c '%U:%G %a' /etc/medplatform/eeg.conf.sha256", rx(r"^root:root 640$", re.M)),
-
-    # NRestarts, not just is-active. A Type=simple service with
-    # Restart=on-failure passes through a brief "active" window on every restart
-    # attempt, so "is-active" alone returns active for a service that is
-    # crash-looping - this check gave a false PASS during the fault-injection
-    # run against a damaged /data volume, where the service was correctly
-    # refusing to start and restarting every two seconds.
-    ("acq-active", "o serviço de aquisição está rodando, sem reinícios",
-     "systemctl show eeg-acquisition.service -p ActiveState -p NRestarts",
-     rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
-
-    ("acq-socket", "o socket de amostras foi publicado",
-     "test -S /run/medplatform/eeg.sock && echo OK", rx(r"OK")),
-
-    ("acq-realtime", "o kernel concedeu SCHED_RR prioridade 50",
-     "chrt -p $(pidof eeg-acquisition-service) 2>&1",
-     rx(r"SCHED_RR[\s\S]*priority:\s*50")),
-
     ("journal-persistent", "/var/log/journal é diretório real, não tmpfs",
      "test -d /var/log/journal && test ! -L /var/log && echo OK", rx(r"OK")),
 
     ("journal-sealed", "o Forward Secure Sealing do journal valida",
      "journalctl --verify 2>&1 | tail -1", rx(r"^PASS", re.M)),
 
-    ("rauc-active", "o serviço de atualização está rodando",
-     "systemctl is-active rauc.service", rx(r"^active$", re.M)),
+    # rauc.service is Type=dbus with BusName=de.pengutronix.rauc, so it is
+    # activated on demand and being inactive is not a fault - on a platform
+    # image with no application, nothing has asked it for anything yet. What
+    # the platform owes is a service that is available and has not failed; that
+    # its slots resolve is asserted separately, and does not need the daemon.
+    ("rauc-available", "o serviço de atualização está disponível e não falhou",
+     "systemctl is-failed rauc.service || true", rx(r"^(inactive|active)$", re.M)),
 
     ("rauc-slots", "os dois slots A/B resolvem e o bootado é identificado",
      "rauc status 2>/dev/null",
@@ -148,6 +132,38 @@ CHECKS = [
     ("data-encrypted", "o backing de /data é LUKS2 ativo",
      "cryptsetup status med-data 2>&1",
      rx(r"is active[\s\S]*type:\s*LUKS2|type:\s*LUKS2[\s\S]*is active")),
+]
+
+EEG_CHECKS = [
+    # Stricter than the platform's rauc-available, and it asserts something the
+    # platform image cannot: on a device profile the update service is *active*,
+    # which on a D-Bus activated unit means something actually spoke to it. That
+    # something is MedicalUpdate, so this is evidence the framework's update
+    # wrapper reached the daemon - not merely that the daemon exists.
+    ("rauc-active", "MedicalUpdate ativou o serviço de atualização via D-Bus",
+     "systemctl is-active rauc.service", rx(r"^active$", re.M)),
+
+    ("config-seal", "eeg.conf casa com o sidecar sha256",
+     'test "$(sha256sum /etc/medplatform/eeg.conf | cut -d" " -f1)" '
+     '= "$(cat /etc/medplatform/eeg.conf.sha256)" && echo SEAL_OK || echo SEAL_BAD',
+     rx(r"SEAL_OK")),
+
+    ("config-substituted", "nenhum placeholder @MED_*@ sobrou em eeg.conf",
+     "grep -c '@MED_' /etc/medplatform/eeg.conf || true", rx(r"^0$", re.M)),
+
+    ("config-seal-owner", "o sidecar do selo pertence a root:root",
+     "stat -c '%U:%G %a' /etc/medplatform/eeg.conf.sha256", rx(r"^root:root 640$", re.M)),
+
+    ("acq-active", "o serviço de aquisição está rodando, sem reinícios",
+     "systemctl show eeg-acquisition.service -p ActiveState -p NRestarts",
+     rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
+
+    ("acq-socket", "o socket de amostras foi publicado",
+     "test -S /run/medplatform/eeg.sock && echo OK", rx(r"OK")),
+
+    ("acq-realtime", "o kernel concedeu SCHED_RR prioridade 50",
+     "chrt -p $(pidof eeg-acquisition-service) 2>&1",
+     rx(r"SCHED_RR[\s\S]*priority:\s*50")),
 
     # The framework's own acceptance test. MedicalStorage resolves the device
     # behind /data and refuses to open the store unless its dm/uuid starts with
@@ -167,6 +183,11 @@ CHECKS = [
      "systemd-analyze security eeg-acquisition.service --no-pager 2>&1 | tail -3",
      check_exposure),
 ]
+
+PROFILES = {
+    "eeg": ("make runqemu", PLATFORM_CHECKS + EEG_CHECKS),
+    "tomograph": ("make runqemu-tomograph", PLATFORM_CHECKS),
+}
 
 
 class Console:
@@ -252,11 +273,17 @@ class Console:
 
 
 def main():
-    argv = ["make", "runqemu"]
+    profile = sys.argv[1] if len(sys.argv) > 1 else "eeg"
+    if profile not in PROFILES:
+        print(f"perfil desconhecido '{profile}' (use: {', '.join(PROFILES)})", file=sys.stderr)
+        return 2
+    target, checks = PROFILES[profile]
+
+    argv = target.split()
     if os.environ.get("NATIVE") == "1":
         argv.append("NATIVE=1")
 
-    print("== MedPlatform :: suite de aceitação em runtime ==\n")
+    print(f"== MedPlatform :: suite de aceitação em runtime :: perfil {profile} ==\n")
     print("bootando a imagem QEMU ...", flush=True)
     con = Console(argv)
     results = []
@@ -286,7 +313,7 @@ def main():
         con.expect(re.escape(PROMPT), 30, "prompt fixado")
 
         print("executando verificações ...\n", flush=True)
-        for cid, claim, command, predicate in CHECKS:
+        for cid, claim, command, predicate in checks:
             out = con.run(cid, command)
             if out is None:
                 ok, detail = False, "sem resposta do guest"

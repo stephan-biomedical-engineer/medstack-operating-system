@@ -56,7 +56,7 @@ else
 endif
 
 .PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
-        tomograph bundle verify-bundle bundle-disk shell runqemu check image-info clean purge
+        tomograph bundle verify-bundle bundle-disk shell runqemu runqemu-tomograph check check-tomograph image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -78,6 +78,7 @@ help:
 	@echo "  shell       interactive build environment"
 	@echo "  runqemu     boot the GPT disk image, KVM accelerated, serial console"
 	@echo "  check       boot and assert on the running system (exits non-zero on failure)"
+	@echo "  check-tomograph  the same platform assertions against the control-case profile"
 	@echo "  image-info  size and package count of the last build"
 	@echo "  clean       drop build artefacts, keep sstate and downloads"
 	@echo "  purge       drop everything kas manages"
@@ -203,7 +204,18 @@ runqemu: $(TOOL)
 # six defects found while implementing the A/B update path failed no build at
 # all, so building is not the place those regressions will be caught.
 check: $(TOOL)
-	python3 scripts/med-check.py
+	python3 scripts/med-check.py eeg
+
+# Boots the tomograph and runs only the platform assertions - the ones that
+# profile inherits without writing a line. It is what turns "the platform
+# stands on its own with zero applications installed" from an inference about
+# package lists into an observation about a running system.
+runqemu-tomograph: $(TOOL)
+	$(KAS) $(RUNTIME_ARGS) shell $(TOMO_CFG) \
+	  -c 'runqemu qemux86-64 $$(echo $$BUILDDIR/tmp*/deploy/images/qemux86-64/med-image-tomograph-qemux86-64.rootfs.wic) nographic slirp'
+
+check-tomograph: $(TOOL)
+	python3 scripts/med-check.py tomograph
 
 image-info:
 	@cat $(KAS_BUILD_DIR)/buildhistory/images/qemux86_64/glibc/$(IMAGE)/image-info.txt 2>/dev/null \

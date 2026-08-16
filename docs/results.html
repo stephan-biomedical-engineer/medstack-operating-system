@@ -380,7 +380,7 @@
     <div><span class="v">3</span><span class="k">Delta do EEG</span></div>
     <div><span class="v">3.7</span><span class="k">Exposure systemd</span></div>
     <div><span class="v">6 %</span><span class="k">CPU · 8 ch a 250 Hz</span></div>
-    <div><span class="v">20/20</span><span class="k">Asserções em runtime</span></div>
+    <div><span class="v">21/21</span><span class="k">Asserções em runtime</span></div>
   </div>
 </section>
 
@@ -406,9 +406,9 @@ diff &lt;(cut -d' ' -f1 $BH/med-image-eeg/installed-package-names.txt) \
         <tr><th>Perfil</th><th class="num">Pacotes</th><th class="num">IMAGESIZE</th></tr>
       </thead>
       <tbody>
-        <tr><td>med-image-eeg</td><td class="num">209</td><td class="num">275.500 KB</td></tr>
-        <tr><td>med-image-tomograph</td><td class="num">206</td><td class="num">275.388 KB</td></tr>
-        <tr class="total"><td>Diferença</td><td class="num">3</td><td class="num">112 KB</td></tr>
+        <tr><td>med-image-eeg</td><td class="num">209</td><td class="num">275.540 KB</td></tr>
+        <tr><td>med-image-tomograph</td><td class="num">206</td><td class="num">275.424 KB</td></tr>
+        <tr class="total"><td>Diferença</td><td class="num">3</td><td class="num">116 KB</td></tr>
       </tbody>
     </table>
   </div>
@@ -439,6 +439,16 @@ diff &lt;(cut -d' ' -f1 $BH/med-image-eeg/installed-package-names.txt) \
     </p>
   </div>
 
+  <div class="callout">
+    <p>
+      E isso deixou de ser inferência sobre listas de pacotes:
+      <strong><code>make check-tomograph</code> boota a imagem do tomógrafo e passa 11/11</strong>
+      nas asserções de plataforma — journal persistente e selado, slots A/B resolvidos, as quatro
+      partições GPT, e o volume <code>/data</code> provisionado, montado e criptografado. Um sistema
+      completo, em execução, com zero aplicações instaladas.
+    </p>
+  </div>
+
   <h3>Nível de metadata</h3>
   <div class="scroll">
     <table>
@@ -459,9 +469,15 @@ diff &lt;(cut -d' ' -f1 $BH/med-image-eeg/installed-package-names.txt) \
   <div class="limit">
     <span class="tag">Limite</span>
     <p>
-      Os 112 KB são pequenos porque o Qt já está nas duas imagens — a HMI é apenas o binário
+      Os 116 KB são pequenos porque o Qt já está nas duas imagens — a HMI é apenas o binário
       linkando bibliotecas compartilhadas. O número mede o custo marginal de uma aplicação sobre uma
-      plataforma que já tem o toolkit, <strong>não</strong> “uma HMI Qt cabe em 112 KB”.
+      plataforma que já tem o toolkit, <strong>não</strong> “uma HMI Qt cabe em 116 KB”.
+    </p>
+    <p>
+      Os números publicados antes (275.500 / 275.388, diferença de 112 KB) vinham de builds de
+      <strong>commits diferentes</strong>: o tomógrafo não fora reconstruído desde antes do trabalho
+      de LUKS, então não carregava os ~36 KB do passo de provisionamento. A diferença de 4 KB é
+      pequena; o método não é.
     </p>
     <p>
       A medição só é honesta porque os dois perfis passaram a diferir exclusivamente por classe de
@@ -669,10 +685,13 @@ make qemu
 make tomograph
 make bundle &amp;&amp; make verify-bundle
 make bundle-disk
-make check        # 20 asserções sobre o sistema em execução</code></pre>
+make check            # 21 asserções: plataforma + perfil EEG
+make check-tomograph  # 11 asserções: só as de plataforma</code></pre>
   <p>
-    <code>make check</code> boota a imagem, executa 20 asserções e sai com código não-zero se
-    alguma falhar. É o que transforma “verificado uma vez” em “verificável” — o que a IEC 62304
+    <code>make check</code> boota a imagem, executa 21 asserções e sai com código não-zero se
+    alguma falhar; <code>make check-tomograph</code> roda as 11 de plataforma contra o caso de
+    controle. A divisão espelha a arquitetura: as asserções de plataforma são exatamente o que um
+    novo perfil de dispositivo herda sem escrever uma linha. É o que transforma “verificado uma vez” em “verificável” — o que a IEC 62304
     pede de uma atividade de verificação.
   </p>
   <div class="limit">
@@ -683,7 +702,7 @@ make check        # 20 asserções sobre o sistema em execução</code></pre>
       <em>active</em> a cada tentativa — ela dava PASS para um serviço em <em>crash loop</em>,
       precisamente o caso que existia para pegar. Só a injeção de falha da seção 07 revelou isso.
       <strong>Uma asserção que nunca viu a falha que procura é uma afirmação, não uma
-      verificação</strong>, e o mesmo ceticismo vale para as outras dezenove.
+      verificação</strong>, e o mesmo ceticismo vale para as outras vinte.
     </p>
   </div>
 </section>

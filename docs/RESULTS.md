@@ -46,9 +46,9 @@ grep IMAGESIZE $BH/med-image-*/image-info.txt
 
 | | Pacotes instalados | `IMAGESIZE` |
 |---|---|---|
-| `med-image-eeg` | 209 | 275.500 KB |
-| `med-image-tomograph` | 206 | 275.388 KB |
-| **Diferença** | **3** | **112 KB** |
+| `med-image-eeg` | 209 | 275.540 KB |
+| `med-image-tomograph` | 206 | 275.424 KB |
+| **Diferença** | **3** | **116 KB** |
 
 O `diff` produz apenas remoções: o conjunto do tomógrafo é **subconjunto estrito** do conjunto do
 EEG. Os três pacotes de diferença são `eeg-acquisition-service`, `eeg-hmi-gui` e
@@ -75,10 +75,21 @@ runtime do MedFramework, pilha gráfica, stack de atualização, volume de dados
 de lógica de dispositivo. Uma nova classe de dispositivo parte de 206 pacotes funcionando e
 acrescenta apenas a própria aplicação.
 
-**Sobre os 112 KB**: eles são pequenos porque o Qt já está nas duas imagens (`packagegroup-med-gui`
+E isso deixou de ser inferência sobre listas de pacotes: **`make check-tomograph` boota a imagem do
+tomógrafo e passa 11/11** nas asserções de plataforma — journal persistente e selado, slots A/B
+resolvidos, as quatro partições GPT, e o volume `/data` provisionado, montado e criptografado. Um
+sistema completo, em execução, com zero aplicações instaladas.
+
+Uma asserção precisou mudar de lista para isso, e a mudança é informativa. `rauc.service` é
+`Type=dbus`: no tomógrafo ele fica inativo porque nenhuma aplicação pede nada a ele, o que é
+correto. A plataforma responde por `rauc-available` (existe e não falhou); o perfil EEG responde
+por `rauc-active`, e numa unit ativada por D-Bus estar *ativa* significa que **alguém falou com
+ela** — evidência de que o `MedicalUpdate` alcançou o daemon, não apenas de que o daemon existe.
+
+**Sobre os 116 KB**: eles são pequenos porque o Qt já está nas duas imagens (`packagegroup-med-gui`
 está em ambas), então a HMI é apenas o binário linkando bibliotecas compartilhadas. O número mede o
 **custo marginal de uma aplicação sobre uma plataforma que já tem o toolkit** — não "uma HMI Qt cabe
-em 112 KB".
+em 116 KB".
 
 ### Nível de metadata
 
@@ -100,6 +111,12 @@ dispositivo. Antes do commit `f0e4427` eles não diferiam: a configuração de b
 o conjunto de ferramentas de verificação estavam apenas no perfil do EEG, e o `diff` teria contado
 essa deriva acidental como se fosse diferença de classe de dispositivo. O caso de controle estava
 contaminado. Ver `med-image-dev.inc`.
+
+**E uma correção**: os números publicados antes (275.500 / 275.388, diferença de 112 KB) vinham de
+builds de **commits diferentes** — o tomógrafo não havia sido reconstruído desde antes do trabalho
+de LUKS, então não carregava os ~36 KB do passo de provisionamento que o EEG já carregava. A
+diferença de 4 KB é pequena; o método não é, e num documento cuja disciplina é essa a comparação
+cruzada é o defeito, não o valor. Os números acima são do mesmo commit.
 
 ---
 
@@ -240,8 +257,9 @@ falha deliberada.
 
 ### Resultado
 
-`20/20` no primeiro boot (provisionamento) e `20/20` no segundo (idempotência: o volume é aberto,
-não reformatado). No `.wic`, o offset da partição `med-data` passou a conter o magic LUKS
+`21/21` no primeiro boot (provisionamento) e no segundo (idempotência: o volume é aberto, não
+reformatado). O mesmo volume é provisionado e verificado no perfil tomógrafo (`11/11`), sem
+nenhuma aplicação instalada. No `.wic`, o offset da partição `med-data` passou a conter o magic LUKS
 `4c554b53babe`.
 
 O teste de ponta a ponta é o do `implementation_plan_luks.md` §2: com
@@ -301,7 +319,8 @@ make qemu
 make tomograph
 make bundle && make verify-bundle
 make bundle-disk
-make check        # 20 asserções sobre o sistema em execução
+make check            # 21 asserções: plataforma + perfil EEG
+make check-tomograph  # 11 asserções: só as de plataforma
 ```
 
 **A verificação de runtime é automatizada.** `make check` boota a imagem, executa 20 asserções e
@@ -313,4 +332,4 @@ Uma ressalva sobre a suíte, aprendida ao exercitá-la: a asserção `acq-active
 breve de `active` a cada tentativa — ela dava PASS para um serviço em *crash loop*, precisamente o
 caso que existia para pegar. Só a injeção de falha da §7 revelou isso. **Uma asserção que nunca viu
 a falha que procura é uma afirmação, não uma verificação**, e o mesmo ceticismo vale para as outras
-dezenove.
+vinte.
