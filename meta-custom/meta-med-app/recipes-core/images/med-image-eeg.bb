@@ -16,6 +16,12 @@ require recipes-core/images/med-image-base.bb
 # hardened counterpart, and the OS policy underneath is identical.
 MED_ROOTFS_FEATURES = ""
 
+# This is the image the thesis runs its verification steps against, so it needs
+# the tooling those steps use. med-image-test carries the same set for the
+# device-class agnostic checks; see med-image-base.bb for what is in it and why
+# the default is empty.
+MED_VERIFICATION_TOOLS = "${MED_VERIFICATION_TOOLSET}"
+
 IMAGE_FEATURES += " \
     ssh-server-openssh \
     debug-tweaks \

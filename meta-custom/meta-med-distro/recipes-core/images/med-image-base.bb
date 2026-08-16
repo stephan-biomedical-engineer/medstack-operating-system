@@ -40,6 +40,33 @@ MED_OS_INSTALL = " \
 
 IMAGE_INSTALL:append = " ${MED_OS_INSTALL}"
 
+# The tooling that turns this repository's platform claims into measurements
+# rather than assertions:
+#   systemd-analyze     - "systemd-analyze security <unit>" scores the sandbox
+#                         of each service, which is the evidence for the
+#                         IEC 62304 5.3 software-partitioning argument.
+#   util-linux-chrt     - confirms the acquisition service actually got the
+#                         SCHED_RR priority its unit asks for; busybox has no
+#                         chrt, and the image installs only util-linux-blkid
+#                         and util-linux-lsblk, not the full util-linux.
+#   util-linux-taskset  - CPU affinity, for the AMP partitioning measurements.
+#   procps              - a ps/top that reports scheduling class and cgroup.
+#
+# Deliberately NOT in MED_OS_INSTALL: an empty default means a new image
+# recipe ships without introspection tooling unless it asks for it, so
+# med-image-prod cannot acquire it by forgetting to opt out. Development
+# profiles opt in with MED_VERIFICATION_TOOLS = "${MED_VERIFICATION_TOOLSET}".
+MED_VERIFICATION_TOOLSET = " \
+    systemd-analyze \
+    util-linux-chrt \
+    util-linux-taskset \
+    procps \
+"
+
+MED_VERIFICATION_TOOLS ?= ""
+
+IMAGE_INSTALL:append = " ${MED_VERIFICATION_TOOLS}"
+
 # Enough headroom for the journal, a downloaded bundle and a session of
 # acquisition data before /data is mounted.
 IMAGE_ROOTFS_EXTRA_SPACE ?= "131072"

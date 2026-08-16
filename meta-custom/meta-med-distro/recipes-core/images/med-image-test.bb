@@ -12,6 +12,11 @@ require recipes-core/images/med-image-base.bb
 # is a separate recipe instead of a flag on med-image-prod.
 MED_ROOTFS_FEATURES = ""
 
+# Platform-policy introspection (see med-image-base.bb). Distinct from the
+# general debugging tools below: this set is what the verification procedure
+# needs, the list below is what a developer wants at a prompt.
+MED_VERIFICATION_TOOLS = "${MED_VERIFICATION_TOOLSET}"
+
 IMAGE_FEATURES += " \
     ssh-server-openssh \
     debug-tweaks \
