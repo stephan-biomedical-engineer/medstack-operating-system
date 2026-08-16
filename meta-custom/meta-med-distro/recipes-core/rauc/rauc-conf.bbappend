@@ -29,6 +29,18 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 # stay outside this repository.
 RAUC_KEYRING_FILE = "med-keyring.pem"
 
+# The bootloader is a property of the machine, not of the distro. qemux86-64
+# boots through GRUB/EFI (see med-partitions.wks) and the STM32MP257 through
+# U-Boot; naming either one in this layer would make the OS policy layer carry
+# BSP knowledge, which is the coupling MED_EEG_DRIVER exists to avoid for the
+# acquisition front-end. Same treatment, same reason.
+#
+# The default is "noop" rather than a real backend: a target that forgets to
+# declare its bootloader gets a RAUC that starts, enumerates its slots and
+# declines to mark anything bootable - which is a legible failure, unlike a
+# dead service or, worse, an A/B switch the bootloader will not honour.
+MED_BOOTLOADER ?= "noop"
+
 # system.conf is a plain configuration file, so bitbake does not expand
 # variables inside it. The compatible string has to match the machine the
 # bundle was built for, otherwise RAUC refuses to install - substitute it here
@@ -37,6 +49,14 @@ do_install:append() {
     if [ -f ${D}${sysconfdir}/rauc/system.conf ]; then
         sed -i -e "s|@MED_COMPATIBLE@|${DISTRO}-${MACHINE}|g" \
                -e "s|@MED_VERSION@|${DISTRO_VERSION}|g" \
+               -e "s|@MED_BOOTLOADER@|${MED_BOOTLOADER}|g" \
                ${D}${sysconfdir}/rauc/system.conf
+    fi
+
+    # A leftover placeholder means the substitution above silently missed one,
+    # and the failure would only surface on a device. Fail the build instead.
+    if grep -q "@MED_[A-Z_]*@" ${D}${sysconfdir}/rauc/system.conf; then
+        bbfatal "unsubstituted placeholder left in system.conf: \
+$(grep -o '@MED_[A-Z_]*@' ${D}${sysconfdir}/rauc/system.conf | sort -u | tr '\n' ' ')"
     fi
 }

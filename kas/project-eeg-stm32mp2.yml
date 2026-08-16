@@ -23,6 +23,14 @@ local_conf_header:
     MED_EEG_DRIVER = "rpmsg"
     MED_EEG_REQUIRE_ENCRYPTION = "true"
 
+    # U-Boot is what actually selects the boot slot on this SoC, and it is the
+    # only backend besides barebox for which RAUC accepts boot-attempts - so
+    # the try-count fallback that the A/B story depends on exists here and
+    # nowhere else in this repository. The BSP also supplies its own WKS_FILE
+    # (TF-A/U-Boot live at fixed offsets), which is why the bootloader cannot
+    # be a distro-wide constant.
+    MED_BOOTLOADER = "uboot"
+
     # Co-processor firmware is a BSP artefact. Point this at the recipe that
     # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
     # without meta-med-app ever naming a machine.

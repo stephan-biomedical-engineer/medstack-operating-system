@@ -21,3 +21,13 @@ local_conf_header:
     # (AuditEvent::SecurityEvent), which is why this is safe to allow here and
     # impossible to do accidentally in the field.
     MED_EEG_REQUIRE_ENCRYPTION = "false"
+
+    # "noop", not "grub", and the choice is deliberate - see
+    # docs/implementation_plan_rauc.md §3. With noop, RAUC starts, enumerates
+    # the A/B slots and writes the inactive one; it just does not mark anything
+    # bootable. Reaching a real GRUB switch here would need grub-efi plus OVMF
+    # and would still exercise the wrong mechanism: boot-attempts is rejected
+    # for any backend other than uboot/barebox, so GRUB fallback on QEMU is not
+    # the fallback the STM32MP257 ships. The A/B policy is validated here; the
+    # bootloader integration is validated on hardware.
+    MED_BOOTLOADER = "noop"
