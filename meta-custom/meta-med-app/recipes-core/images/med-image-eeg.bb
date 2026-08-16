@@ -46,3 +46,31 @@ IMAGE_INSTALL:append = " ${MED_EEG_INSTALL}"
 # Room for a session of acquisition data on targets where /data is not a
 # separate volume (QEMU).
 IMAGE_ROOTFS_EXTRA_SPACE = "262144"
+
+# The GPT disk is what makes /dev/disk/by-partlabel/med-root-{a,b} exist, and
+# without those RAUC resolves no slots at all and its service dies at startup.
+# It belongs to the *development* profile on purpose: med-image-prod has no
+# login, and an update path that can only be inspected on an image without a
+# shell is not an inspectable update path.
+#
+# Sizing check before changing anything here: the rootfs measures ~267 MB
+# (IMAGESIZE) plus the 256 MB of IMAGE_ROOTFS_EXTRA_SPACE above, against the
+# 1024 MB each slot gets in med-partitions.wks. Roughly 50% headroom, which
+# disappears quickly if this profile grows.
+IMAGE_FSTYPES += "wic wic.bmap"
+
+# Boot the GPT disk without needing a bootloader inside it.
+#
+# runqemu's default is to treat a .wic as a self-booting VM image (see
+# scripts/runqemu, "treat wic images as vmimages (with kernel) or as fsimages"),
+# which for this EFI/GRUB layout would mean dragging in OVMF. "no-kernel-in-fs"
+# makes it treat the disk as a rootfs instead and load the kernel directly with
+# -kernel, so QEMU gets a real partitioned disk and RAUC gets real slots -
+# without a bootloader, which is exactly what MED_BOOTLOADER = "noop" says we
+# are testing.
+#
+# The rootfs is partition 2: med-partitions.wks puts the ESP first. This is
+# also why there is a single QEMU boot path - QB_KERNEL_ROOT takes one value,
+# and the bare ext4 image would need /dev/vda.
+QB_FSINFO = "wic:no-kernel-in-fs"
+QB_KERNEL_ROOT = "/dev/vda2"

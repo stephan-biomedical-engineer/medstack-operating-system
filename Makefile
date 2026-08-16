@@ -56,7 +56,7 @@ else
 endif
 
 .PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
-        tomograph shell runqemu image-info clean purge
+        tomograph bundle verify-bundle bundle-disk shell runqemu image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -72,8 +72,11 @@ help:
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
+	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
+	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
+	@echo "  bundle-disk    wrap the bundle in a disk the QEMU guest can mount"
 	@echo "  shell       interactive build environment"
-	@echo "  runqemu     boot the QEMU image, KVM accelerated, serial console"
+	@echo "  runqemu     boot the GPT disk image, KVM accelerated, serial console"
 	@echo "  image-info  size and package count of the last build"
 	@echo "  clean       drop build artefacts, keep sstate and downloads"
 	@echo "  purge       drop everything kas manages"
@@ -133,15 +136,66 @@ stm32: $(TOOL)
 tomograph: $(TOOL)
 	$(KAS) build $(TOMO_CFG)
 
+# Cheapest test of the update path: no image boot, no bootloader, no slots -
+# just the signature, the keyring, the codeSigning purpose and the CRL.
+bundle: $(TOOL)
+	$(KAS) shell $(QEMU_CFG) -c "bitbake med-bundle-eeg"
+
+# Verifies with the *device's* keyring settings, which is the whole point: with
+# rauc's defaults this same bundle fails with "unsuitable certificate purpose",
+# because OpenSSL's CMS code falls back to the smime_sign purpose and rejects a
+# codeSigning certificate. Verifying without these two flags would be a test of
+# something the device does not do.
+RAUC_NATIVE := $(KAS_BUILD_DIR)/tmp-glibc/work/qemux86_64-med-linux/med-bundle-eeg/1.0/recipe-sysroot-native/usr/bin/rauc
+KEYRING     := meta-custom/meta-med-distro/recipes-core/rauc/rauc-conf/med-keyring.pem
+BUNDLE      := $(KAS_BUILD_DIR)/tmp-glibc/deploy/images/qemux86-64/med-bundle-eeg-qemux86-64.raucb
+
+# RAUC refuses a block device ("Bundle is not a regular file"), so the bundle
+# cannot simply be attached raw - it has to arrive as a file in a filesystem.
+# mkfs.ext4 -d populates the image without needing root or a loop mount.
+# Attach the result and install from it inside the guest:
+#   runqemu ... qemuparams="-drive file=$(BUNDLE_DISK),if=virtio,format=raw,readonly=on"
+#   mount -o ro /dev/vdb /mnt && rauc install /mnt/update.raucb
+BUNDLE_DISK := $(KAS_BUILD_DIR)/bundle-disk.ext4
+
+bundle-disk:
+	@test -f $(BUNDLE) || { echo "no bundle - run 'make bundle' first"; exit 1; }
+	@rm -rf $(KAS_BUILD_DIR)/bundle-stage && mkdir -p $(KAS_BUILD_DIR)/bundle-stage
+	cp $(BUNDLE) $(KAS_BUILD_DIR)/bundle-stage/update.raucb
+	rm -f $(BUNDLE_DISK) && truncate -s 200M $(BUNDLE_DISK)
+	mkfs.ext4 -F -q -d $(KAS_BUILD_DIR)/bundle-stage $(BUNDLE_DISK)
+	@rm -rf $(KAS_BUILD_DIR)/bundle-stage
+	@echo "bundle disk ready at $(BUNDLE_DISK)"
+
+verify-bundle:
+	@test -x $(RAUC_NATIVE) || { echo "no rauc-native - run 'make bundle' first"; exit 1; }
+	$(RAUC_NATIVE) info --keyring=$(KEYRING) \
+	  -C keyring:check-purpose=codesign \
+	  -C keyring:check-crl=true \
+	  $(BUNDLE)
+
 shell: $(TOOL)
 	$(KAS) shell $(QEMU_CFG)
 
 # nographic + slirp: no X11 reaches the container (see docs/BUILD_CONTAINER.md)
 # and slirp keeps qemu's networking in userspace, which avoids needing a tap
 # device and CAP_NET_ADMIN. Port 2222 is forwarded out for ssh.
+# Boots the GPT disk, not the bare ext4. That is the difference between a
+# rootfs on /dev/vda (no partition table, so RAUC finds no booted slot and its
+# service dies) and one on /dev/vda2 labelled med-root-a. There is deliberately
+# only one boot path: QB_KERNEL_ROOT is a single value per image, so serving
+# both would need contradictory kernel roots - the same class of silent
+# divergence that put "uboot" in system.conf next to an EFI/GRUB wks file.
+# The .wic is named explicitly rather than passing "wic" as an fstype. runqemu
+# resolves an fstype by globbing IMAGE_NAME first and the IMAGE_LINK_NAME
+# symlink only as a fallback (scripts/runqemu:699), and IMAGE_NAME comes from
+# the .qemuboot.conf - which do_write_qemuboot_conf does not rewrite when a
+# build changes only WKS_FILE or the .wks, because neither is one of its
+# vardeps. The result is that runqemu silently boots a stale disk image. Naming
+# the symlink skips the glob entirely.
 runqemu: $(TOOL)
 	$(KAS) $(RUNTIME_ARGS) shell $(QEMU_CFG) \
-	  -c "runqemu qemux86-64 nographic slirp"
+	  -c 'runqemu qemux86-64 $$(echo $$BUILDDIR/tmp*/deploy/images/qemux86-64/$(IMAGE)-qemux86-64.rootfs.wic) nographic slirp'
 
 image-info:
 	@cat $(KAS_BUILD_DIR)/buildhistory/images/qemux86_64/glibc/$(IMAGE)/image-info.txt 2>/dev/null \
