@@ -52,8 +52,17 @@ local_conf_header:
     PACKAGE_CLASSES = "package_ipk"
     SDKMACHINE = "x86_64"
     PATCHRESOLVE = "noop"
-    DL_DIR = "${TOPDIR}/../downloads"
-    SSTATE_DIR = "${TOPDIR}/../sstate-cache"
+    # Weak assignment on purpose. kas forwards DL_DIR and SSTATE_DIR from the
+    # environment into bitbake, and kas-container sets both to the paths it
+    # bind-mounts (/downloads, /sstate). With "=" here, local.conf would win
+    # and the container would write its sstate cache to /sstate-cache - a path
+    # inside the ephemeral container filesystem, discarded on every --rm run.
+    # With "?=", the environment wins in the container and this default still
+    # applies to a native build. See docs/BUILD_CONTAINER.md.
+    DL_DIR ?= "${TOPDIR}/../downloads"
+    SSTATE_DIR ?= "${TOPDIR}/../sstate-cache"
+    BB_NUMBER_THREADS = "6"
+    PARALLEL_MAKE = "-j 6"
 
   # Note the absence of EXTRA_IMAGE_FEATURES += "debug-tweaks" here. It used to
   # be global, which silently weakened med-image-prod too. Development images

@@ -4,6 +4,11 @@ layers/
 downloads/
 sstate-cache/
 .kas/
+
+# Pinned kas-container script, fetched and checksum-verified by "make tool".
+# Version and hash live in the Makefile; the script itself is upstream code and
+# is deliberately not vendored here.
+.kas-container/
 *.pyc
 *.swp
 *~
