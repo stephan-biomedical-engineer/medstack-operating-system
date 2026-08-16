@@ -30,6 +30,10 @@ Treat the bitbake metadata (recipe syntax, layer resolution, package split) as u
 
 There is no local toolchain beyond `kas` — all builds run through it, which clones `poky`, `meta-openembedded`, `meta-rauc`, etc. into `layers/` on first run (network access required; outputs are gitignored).
 
+**Prefer the `Makefile`**: it runs the same builds inside the pinned upstream kas container (`ghcr.io/siemens/kas/kas:5.2`), which is how the build host itself stays reproducible. `make help` lists the targets; `make risks` (parse-only, seconds) is the right first command on a fresh clone, and `make framework` / `make service` are the cheap inner loops. Append `NATIVE=1` to any target to use the host's own kas instead — both modes share `downloads/` and `sstate-cache/`. `docs/BUILD_CONTAINER.md` covers the setup and its measured limits (notably: no X11 reaches the container under snap-packaged Docker, so the Qt HMI must be exercised with `NATIVE=1`).
+
+The raw kas commands below still work and are what the Makefile targets wrap:
+
 ```bash
 # Build the EEG PoC image for QEMU (fast inner-loop target, no hardware needed)
 kas build kas/project-eeg-qemu.yml
@@ -49,9 +53,11 @@ kas shell kas/kas-base.yml -c "bitbake-layers show-layers"
 # Verify a kernel config fragment made it into the build for the active target
 kas shell kas/project-eeg-qemu.yml -c "bitbake -e virtual/kernel | grep ^SRC_URI="
 
-# Fast inner loop: acquisition path only, skips compiling Qt
-kas build kas/project-eeg-qemu.yml --extra-conf \
-  'MED_EEG_INSTALL = "packagegroup-med-core packagegroup-med-amp eeg-acquisition-service"'
+# Fast inner loop: build the acquisition path alone, never compiling Qt.
+# (`kas build` has no --extra-conf option — building the recipes directly is
+# the way to skip the image, and `make framework` / `make service` wrap these.)
+kas shell kas/project-eeg-qemu.yml -c "bitbake med-framework-api"
+kas shell kas/project-eeg-qemu.yml -c "bitbake eeg-acquisition-service"
 ```
 
 Each `kas/project-*.yml` is a standalone entrypoint that includes `kas/kas-base.yml` and sets its own `machine:`, `target:` and the `MED_EEG_*` variables that select the acquisition backend. `kas-project.yml` at the repo root is a thin alias for `kas/project-eeg-qemu.yml`.

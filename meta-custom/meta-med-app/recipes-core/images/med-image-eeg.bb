@@ -23,8 +23,10 @@ IMAGE_FEATURES += " \
 
 # One knob for the fast inner loop: override MED_EEG_INSTALL without the GUI
 # entries to build and boot the acquisition path in QEMU without compiling Qt.
-#   kas build kas/project-eeg-qemu.yml \
-#     --extra-conf 'MED_EEG_INSTALL = "packagegroup-med-core packagegroup-med-amp eeg-acquisition-service"'
+# Set it from a KAS fragment composed onto the project file
+# (kas build a.yml:b.yml, where b.yml carries a local_conf_header) - kas build
+# has no --extra-conf option. To skip the image entirely, build the recipes
+# directly: make service, or bitbake eeg-acquisition-service.
 MED_EEG_INSTALL ?= " \
     packagegroup-med-core \
     packagegroup-med-amp \
