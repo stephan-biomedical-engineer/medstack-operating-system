@@ -8,14 +8,18 @@ only asserted in a document."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# Source tree in a subdirectory, not directly in WORKDIR - see the same note in
+# med-framework-api_1.0.0.bb: S = ${WORKDIR} puts PKGD inside S and the
+# debug-source hardlinks of do_package make pseudo abort on any task re-run.
+# The unit file stays in WORKDIR because do_install reads it from there.
 SRC_URI = " \
-    file://CMakeLists.txt \
-    file://src \
-    file://qml \
+    file://CMakeLists.txt;subdir=sources \
+    file://src;subdir=sources \
+    file://qml;subdir=sources \
     file://eeg-hmi.service \
 "
 
-S = "${WORKDIR}"
+S = "${WORKDIR}/sources"
 
 DEPENDS = "qtbase qtdeclarative med-framework-api"
 

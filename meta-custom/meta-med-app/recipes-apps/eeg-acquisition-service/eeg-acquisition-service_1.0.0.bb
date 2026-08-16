@@ -7,14 +7,19 @@ hardware is a configuration change (MED_EEG_DRIVER), not a code change."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# Source tree in a subdirectory, not directly in WORKDIR - see the same note in
+# med-framework-api_1.0.0.bb: S = ${WORKDIR} puts PKGD inside S and the
+# debug-source hardlinks of do_package make pseudo abort on any task re-run.
+# eeg.conf and the unit file stay in WORKDIR because do_install reads them from
+# there, and they are not part of the compiled tree.
 SRC_URI = " \
-    file://CMakeLists.txt \
-    file://src \
+    file://CMakeLists.txt;subdir=sources \
+    file://src;subdir=sources \
     file://eeg.conf \
     file://eeg-acquisition.service \
 "
 
-S = "${WORKDIR}"
+S = "${WORKDIR}/sources"
 
 DEPENDS = "med-framework-api"
 

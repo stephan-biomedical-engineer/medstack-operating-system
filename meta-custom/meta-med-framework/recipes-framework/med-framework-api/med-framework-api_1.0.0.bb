@@ -10,14 +10,24 @@ HOMEPAGE = "https://github.com/stephan-biomedical-engineer"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# The source tree is unpacked into a subdirectory instead of straight into
+# WORKDIR. With S = ${WORKDIR}, PKGD (${WORKDIR}/package) sits *inside* S, and
+# the debug-source step of do_package hardlinks every source file into
+# package/usr/src/debug/... Pseudo then holds one inode under two paths, and
+# re-running a task in an existing workdir aborts the build:
+#   path mismatch [3 links]: ino N
+#     db  '.../package/usr/src/debug/.../include/MedicalDevice.h'
+#     req '.../include/MedicalDevice.h'
+# Keeping S below WORKDIR also makes the cmake build tree (B, ${WORKDIR}/build)
+# genuinely out-of-tree, which it was not before.
 SRC_URI = " \
-    file://CMakeLists.txt \
-    file://medframework.pc.in \
-    file://include \
-    file://src \
+    file://CMakeLists.txt;subdir=sources \
+    file://medframework.pc.in;subdir=sources \
+    file://include;subdir=sources \
+    file://src;subdir=sources \
 "
 
-S = "${WORKDIR}"
+S = "${WORKDIR}/sources"
 
 DEPENDS = "systemd openssl"
 
