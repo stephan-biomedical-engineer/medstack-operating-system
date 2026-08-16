@@ -314,3 +314,91 @@ até o passo de provisionamento existir. Ver §7.
 5. **O Nível 2 pode não valer o custo.** Se o STM32MP257 validar a integração U-Boot, o GRUB no
    QEMU passa a testar um mecanismo que não é o do produto. Decidir depois do build do alvo físico,
    não antes.
+
+---
+
+## 8. Resultado da execução (2026-08-16)
+
+O plano foi executado na ordem da §5. **Nível 0 e Nível 1 estão validados**; o Nível 2 continua
+fora de escopo pelas razões da §3. O que segue é medição, não previsão.
+
+### 8.1. Nível 0 — verificação de bundle no host
+
+`make bundle` + `make verify-bundle`. O resultado mais útil foi a **falha** intermediária: com as
+opções default do `rauc info`, o bundle é recusado com
+
+```
+signature verification failed: Verify error: unsuitable certificate purpose
+```
+
+que é exatamente o que a §4 previa a partir da leitura de `src/signature.c`, agora demonstrado em
+vez de deduzido. Com a configuração do dispositivo (`check-purpose=codesign`, `check-crl=true`):
+
+```
+Verified inline signature by 'CN = MedPlatform Bundle Signing'
+Compatible:     'med-os-qemux86-64'
+Bundle Format:  verity
+Certificate Chain: leaf -> MedPlatform Development Root CA
+```
+
+O alvo `make verify-bundle` fixa essas duas flags justamente para que ninguém verifique com a
+configuração errada e conclua a coisa errada nos dois sentidos.
+
+### 8.2. Nível 1 — QEMU
+
+`rauc.service` sobe (`active`), e:
+
+```
+Compatible:  med-os-qemux86-64
+Booted from: rootfs.0 (/dev/vda2)
+o [rootfs.1] (/dev/disk/by-partlabel/med-root-b, ext4, inactive)  bootname: B
+o [rootfs.0] (/dev/disk/by-partlabel/med-root-a, ext4, booted)    bootname: A
+```
+
+`rauc install` **completa**: `device-mapper: verity` no log do kernel (o formato verity é
+verificado no dispositivo, contra o keyring do dispositivo), `Copying image to rootfs.1`, e
+`Installing succeeded`. A previsão da §6 de que a instalação falharia na marcação de bootável
+estava errada por um detalhe: `noop` é um backend válido cuja marcação é um *no-op*, então a
+instalação termina com sucesso. O efeito prático é o previsto — `Activated: none`, e
+`Failed getting primary slot: Obtaining primary entry from bootloader 'noop' not supported yet`.
+
+**A entrega do bundle ao guest não é trivial**: o RAUC recusa um dispositivo de bloco
+(`Bundle is not a regular file`), então o bundle tem de chegar como arquivo dentro de um sistema de
+arquivos. `make bundle-disk` embrulha o bundle num ext4 de 200 MB (via `mkfs.ext4 -d`, sem root e
+sem loop mount) para anexar como segundo disco virtio.
+
+### 8.3. Seis defeitos encontrados, cinco deles silenciosos
+
+Este é o resultado com mais valor para o texto do TCC. **Cinco dos seis não falham build algum** —
+produzem artefato válido, que compila, boota e roda, e só se manifestariam num dispositivo em campo:
+
+| # | Defeito | Como se manifestaria |
+|---|---|---|
+| 1 | `check-purpose` ausente no `system.conf` | Todo bundle recusado no campo, com o certificado *correto* como causa |
+| 2 | `RAUC_BUNDLE_COMPATIBLE` default (`qemux86-64-med`) ≠ `system.conf` (`med-os-qemux86-64`) | Bundle constrói e assina limpo, recusado na instalação |
+| 3 | `WKS_FILE ?=` no `med-os.conf` nunca vencia `qemux86-64.conf:41` — `bitbake.conf` inclui a conf de máquina (l. 829) **antes** da de distro (l. 831). O layout A/B nunca esteve na imagem | Disco MBR de 2 partições em vez de GPT A/B; RAUC sem slots |
+| 4 | Slots assimétricos: `--size` é mínimo e leva fator 1.3 numa partição com `--source`, mas não numa sem. A = 1.33 GB, B = 1.0 GB, num arquivo que declara simetria como requisito | Instalação falha quando a imagem cresce além do slot menor |
+| 5 | `/etc/fstab` com `/dev/sda1 /boot` (o `--ondisk` do wic assume `sda`; QEMU usa virtio `vda`) | Boot inteiro em modo de emergência |
+| 6 | `--fsopts` não existe no wic (é `--fsoptions`) | **Falhou o build** — o único que falhou alto |
+
+Vale registrar também um sétimo, que não é do repositório mas custou tempo de diagnóstico:
+`do_write_qemuboot_conf` não re-executa quando um build muda apenas `WKS_FILE` ou o `.wks` (nenhum
+é vardep dele), e `runqemu` resolve o rootfs pelo glob de `IMAGE_NAME` **antes** do symlink
+`IMAGE_LINK_NAME` (`scripts/runqemu:699`). Resultado: o `runqemu` boota silenciosamente um disco de
+builds anteriores. O alvo `runqemu` do `Makefile` agora nomeia o symlink explicitamente.
+
+### 8.4. O risco do `med-data` (§7.1) — medido
+
+O `nofail` do `crypttab` contém o estrago, como se esperava mas não se sabia:
+`systemd-cryptsetup@med-data.service` fica `failed` (a partição existe e é ext4 pura, sem cabeçalho
+LUKS), o boot **completa**, e `data.mount` fica `inactive` por condição não satisfeita. O sistema
+fica `degraded` com duas unidades falhas — `systemd-cryptsetup@med-data` e `weston.service` (esta
+por `nographic`). O passo de provisionamento de primeiro boot que o `.wks` descreve continua sendo
+trabalho em aberto.
+
+### 8.5. O que continua em aberto
+
+- Nível 2 (GRUB/EFI + OVMF), pelas razões da §3 — reavaliar só depois do build do STM32MP257.
+- Provisionamento LUKS de primeiro boot para `med-data` (§8.4).
+- A chave privada de assinatura continua visível ao build (§7.2), o que é aceitável para a CA de
+  desenvolvimento e não é o modelo de produção.
