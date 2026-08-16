@@ -1,0 +1,694 @@
+<!--
+  Fonte da página compartilhável dos resultados medidos.
+
+  ATENÇÃO: docs/RESULTS.md é a fonte de verdade. Este arquivo é uma segunda
+  cópia dos mesmos números, e duas cópias divergem - que é exatamente a classe
+  de defeito que este projeto passou a sessão inteira encontrando. Ao alterar
+  uma medição, altere as duas, ou o número publicado passa a mentir.
+
+  Publicado em:
+    https://claude.ai/code/artifact/0f8bfe5b-7f6f-4a3a-af51-1c00e99b090d
+
+  Para atualizar mantendo o mesmo link (e portanto o que já foi compartilhado),
+  republique passando essa URL - publicar sem ela cria um artefato separado.
+-->
+<title>Registro de Medição MedPlatform</title>
+<style>
+  :root {
+    --ground: #F6F8F8;
+    --surface: #FFFFFF;
+    --sunken: #ECF1F1;
+    --ink: #131C1F;
+    --ink-muted: #566669;
+    --ink-faint: #869599;
+    --rule: #D7E0E1;
+    --rule-strong: #B8C6C8;
+    --accent: #0D7C86;
+    --accent-soft: #E0EFF0;
+    --caution: #8A6234;
+    --caution-soft: #F4EBE0;
+
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Palatino, Georgia, serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+    --measure: 68ch;
+    --step: clamp(1.6rem, 4vw, 2.6rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1315;
+      --surface: #141C1E;
+      --sunken: #101719;
+      --ink: #E2E9EA;
+      --ink-muted: #9AAAAE;
+      --ink-faint: #6E7F84;
+      --rule: #243033;
+      --rule-strong: #35474B;
+      --accent: #45B6BF;
+      --accent-soft: #10282B;
+      --caution: #C79A62;
+      --caution-soft: #241E15;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1315;
+    --surface: #141C1E;
+    --sunken: #101719;
+    --ink: #E2E9EA;
+    --ink-muted: #9AAAAE;
+    --ink-faint: #6E7F84;
+    --rule: #243033;
+    --rule-strong: #35474B;
+    --accent: #45B6BF;
+    --accent-soft: #10282B;
+    --caution: #C79A62;
+    --caution-soft: #241E15;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 1.0625rem;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: var(--measure); margin: 0 auto; }
+  .wrap > * { min-width: 0; }
+
+  /* ---------- masthead ---------- */
+
+  header.masthead {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding: clamp(3rem, 8vw, 5.5rem) 0 2rem;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.1rem;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(2rem, 5.5vw, 2.9rem);
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+  }
+
+  .standfirst {
+    color: var(--ink-muted);
+    font-size: 1.1rem;
+    line-height: 1.5;
+    margin: 0 0 2rem;
+    max-width: 56ch;
+  }
+
+  dl.meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1rem 1.5rem;
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+  }
+  dl.meta dt {
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.68rem;
+    margin-bottom: 0.3rem;
+  }
+  dl.meta dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---------- sections ---------- */
+
+  section { max-width: var(--measure); margin: 0 auto; padding-top: var(--step); }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.85rem;
+    margin: 0 0 0.9rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+  }
+  section:first-of-type .sec-head { border-top: none; padding-top: 0; }
+
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: clamp(1.35rem, 3vw, 1.7rem);
+    line-height: 1.2;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    margin: 1.9rem 0 0.7rem;
+  }
+
+  p { margin: 0 0 1rem; }
+  p:last-child { margin-bottom: 0; }
+
+  strong { font-weight: 600; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--sunken);
+    padding: 0.1em 0.34em;
+    color: var(--ink);
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    background: var(--sunken);
+    border-left: 2px solid var(--rule-strong);
+    padding: 0.9rem 1.1rem;
+    margin: 0 0 1.2rem;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  /* ---------- the limit block: the document's discipline, made visible ---------- */
+
+  .limit {
+    border-left: 2px solid var(--caution);
+    background: var(--caution-soft);
+    padding: 0.85rem 1.1rem;
+    margin: 1.2rem 0 0;
+  }
+  .limit .tag {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--caution);
+    margin-bottom: 0.45rem;
+  }
+  .limit p { font-size: 0.97rem; }
+
+  .callout {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.95rem 1.15rem;
+    margin: 1.3rem 0;
+    font-size: 1.02rem;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  /* ---------- readout strip ---------- */
+
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    margin: 1.6rem 0 0;
+  }
+  .readout div {
+    padding: 1rem 1.1rem 1.05rem 0;
+    border-right: 1px solid var(--rule);
+  }
+  .readout div:last-child { border-right: none; }
+  .readout .v {
+    display: block;
+    font-family: var(--mono);
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .readout .k {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 0.45rem;
+  }
+
+  /* ---------- tables ---------- */
+
+  .scroll { overflow-x: auto; margin: 0 0 1.2rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-bottom: 0.6rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.9rem 0.55rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: baseline;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    border-bottom-color: var(--rule-strong);
+  }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-size: 0.86rem; }
+  tr.total td { border-bottom: none; border-top: 1px solid var(--rule-strong); font-weight: 600; }
+  tr.total td.num { color: var(--accent); }
+
+  /* ---------- inventory (what was not measured) ---------- */
+
+  ul.inventory { list-style: none; margin: 0; padding: 0; }
+  ul.inventory li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  ul.inventory li:last-child { border-bottom: none; }
+  ul.inventory .what {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--ink);
+  }
+  ul.inventory .why { color: var(--ink-muted); font-size: 0.95rem; }
+
+  ul.plain { padding-left: 1.1rem; margin: 0 0 1rem; }
+  ul.plain li { margin-bottom: 0.4rem; }
+
+  footer {
+    max-width: var(--measure);
+    margin: 0 auto;
+    padding-top: var(--step);
+    border-top: 1px solid var(--rule);
+    margin-top: var(--step);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    line-height: 1.7;
+  }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<header class="masthead">
+  <p class="eyebrow">MedPlatform · TCC · Evidência experimental</p>
+  <h1>Registro de Medição</h1>
+  <p class="standfirst">
+    O que foi <em>observado</em> na plataforma — cada número com o comando que o produziu e uma
+    declaração explícita do que ele não significa.
+  </p>
+  <dl class="meta">
+    <div><dt>Data</dt><dd>2026-08-16</dd></div>
+    <div><dt>Commit</dt><dd>f0e4427</dd></div>
+    <div><dt>Máquina</dt><dd>qemux86-64</dd></div>
+    <div><dt>Perfis</dt><dd>eeg · tomograph</dd></div>
+  </dl>
+</header>
+
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>Como ler os resultados</h2></div>
+  <p>
+    Este projeto aprendeu, da forma cara, que num sistema com caminho de atualização
+    <strong>“compilou” e “bootou” não são evidência</strong>. Dos seis defeitos encontrados ao
+    implementar o caminho A/B, cinco não fizeram build nenhum falhar: produziram artefatos que
+    compilavam, bootavam e rodavam, e só se manifestariam num dispositivo em campo tentando
+    atualizar.
+  </p>
+  <p>
+    Por isso todo número abaixo vem de <strong>executar o artefato ou inspecionar o artefato</strong>,
+    nunca de o build ter terminado com sucesso.
+  </p>
+  <div class="readout">
+    <div><span class="v">206</span><span class="k">Pacotes de plataforma</span></div>
+    <div><span class="v">3</span><span class="k">Delta do EEG</span></div>
+    <div><span class="v">3.7</span><span class="k">Exposure systemd</span></div>
+    <div><span class="v">6 %</span><span class="k">CPU · 8 ch a 250 Hz</span></div>
+    <div><span class="v">20/20</span><span class="k">Asserções em runtime</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>Reuso entre classes de dispositivo</h2></div>
+  <p>
+    A afirmação central da tese é que a arquitetura em camadas permite construir classes distintas
+    de dispositivo médico reaproveitando a plataforma. O perfil <code>med-image-tomograph</code>
+    existe como caso de controle dessa afirmação.
+  </p>
+
+  <h3>Método</h3>
+  <pre><code>make qemu &amp;&amp; make tomograph
+BH=build/buildhistory/images/qemux86_64/glibc
+diff &lt;(cut -d' ' -f1 $BH/med-image-eeg/installed-package-names.txt) \
+     &lt;(cut -d' ' -f1 $BH/med-image-tomograph/installed-package-names.txt)</code></pre>
+
+  <h3>Resultado</h3>
+  <div class="scroll">
+    <table>
+      <caption>Imagens construídas para qemux86-64</caption>
+      <thead>
+        <tr><th>Perfil</th><th class="num">Pacotes</th><th class="num">IMAGESIZE</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>med-image-eeg</td><td class="num">209</td><td class="num">275.500 KB</td></tr>
+        <tr><td>med-image-tomograph</td><td class="num">206</td><td class="num">275.388 KB</td></tr>
+        <tr class="total"><td>Diferença</td><td class="num">3</td><td class="num">112 KB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    O <code>diff</code> produz apenas remoções: o conjunto do tomógrafo é <strong>subconjunto
+    estrito</strong> do conjunto do EEG. Os três pacotes de diferença são
+    <code>eeg-acquisition-service</code>, <code>eeg-hmi-gui</code> e
+    <code>packagegroup-med-amp</code>.
+  </p>
+
+  <h3>Interpretação</h3>
+  <p>
+    <strong>Não</strong> apresentar como “os dois perfis compartilham 98,6 %”. O tomógrafo não
+    instala nenhuma aplicação específica de tomografia, porque essa aplicação não existe. O delta
+    dele é zero <em>por construção</em>, não por mérito da arquitetura, e um percentual de
+    similaridade sozinho seria enganoso. A leitura defensável são dois números independentes: a
+    plataforma herdada por ambas as classes (206 pacotes) e o delta específico de cada dispositivo
+    (EEG = 3 pacotes / 112 KB; tomógrafo = 0).
+  </p>
+  <div class="callout">
+    <p>
+      O resultado mais forte não é percentual nenhum: o tomógrafo carrega
+      <code>libmedframework1</code>, <code>packagegroup-med-core</code>,
+      <code>packagegroup-med-framework</code> e <code>packagegroup-med-gui</code>
+      <strong>com zero aplicações instaladas</strong>. A plataforma se sustenta completa — runtime
+      do MedFramework, pilha gráfica, stack de atualização, volume de dados — sem uma única linha de
+      lógica de dispositivo.
+    </p>
+  </div>
+
+  <h3>Nível de metadata</h3>
+  <div class="scroll">
+    <table>
+      <caption>Linhas significativas por recipe de imagem</caption>
+      <thead><tr><th>Recipe</th><th class="num">Linhas</th></tr></thead>
+      <tbody>
+        <tr><td>med-image-base.bb</td><td class="num">51</td></tr>
+        <tr><td>med-image-eeg.bb</td><td class="num">17</td></tr>
+        <tr><td>med-image-tomograph.bb</td><td class="num">16</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    O conteúdo comportamental de cada perfil de dispositivo é: um <code>require</code> da imagem
+    base, um <code>require</code> do perfil de desenvolvimento, e uma lista de instalação.
+  </p>
+
+  <div class="limit">
+    <span class="tag">Limite</span>
+    <p>
+      Os 112 KB são pequenos porque o Qt já está nas duas imagens — a HMI é apenas o binário
+      linkando bibliotecas compartilhadas. O número mede o custo marginal de uma aplicação sobre uma
+      plataforma que já tem o toolkit, <strong>não</strong> “uma HMI Qt cabe em 112 KB”.
+    </p>
+    <p>
+      A medição só é honesta porque os dois perfis passaram a diferir exclusivamente por classe de
+      dispositivo. Antes do commit <code>f0e4427</code> a configuração de boot, o disco A/B e o
+      conjunto de ferramentas de verificação estavam apenas no perfil do EEG, e o <code>diff</code>
+      teria contado essa deriva acidental como diferença de classe de dispositivo.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>Caminho de aquisição</h2></div>
+  <h3>Método</h3>
+  <p>
+    Sessão de aquisição com o driver <code>simulated</code>, e conferência do arquivo de registro
+    contra o formato de quadro declarado em <code>MedicalDevice.h</code>.
+  </p>
+
+  <h3>Resultado</h3>
+  <pre><code>raw.bin = 2.709.840 bytes   (sessão de 5 min 22 s)
+
+40 (FrameHeader) + 8 canais × 25 amostras × 4 bytes = 840 bytes/quadro
+2.709.840 ÷ 840 = 3.226 quadros,  resto ZERO
+3.226 quadros ÷ 10 Hz  = 322,6 s</code></pre>
+  <p>
+    E 322,6 s é exatamente o intervalo entre o início da sessão e o <code>mtime</code> do arquivo. A
+    taxa configurada é a taxa real; o formato em disco bate com o
+    <code>static_assert(sizeof(FrameHeader) == 40)</code>; e <strong>resto zero</strong> significa
+    que não houve escrita parcial nem quadro truncado. Custo: 19,353 s de CPU em ~322 s, ou
+    <strong>6 % de um núcleo</strong> para 8 canais a 250 Hz.
+  </p>
+
+  <div class="limit">
+    <span class="tag">Limite</span>
+    <p>
+      Sob QEMU, sem garantia de tempo real. Este é um número de <em>throughput e correção de
+      formato</em>, não de latência. Latência só tem significado no STM32MP257.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>Particionamento de software</h2></div>
+  <p>Evidência para o requisito de segregação de itens de software da IEC 62304 §5.3.</p>
+
+  <h3>Método</h3>
+  <pre><code>systemd-analyze security eeg-acquisition.service
+chrt -p $(pidof eeg-acquisition-service)</code></pre>
+
+  <h3>Resultado</h3>
+  <p>
+    <strong>Exposure level 3.7</strong> — faixa <code>OK</code> do systemd, cujas faixas são
+    <code>SAFE</code> abaixo de 1.0, <code>OK</code> até 5.0, depois
+    <code>MEDIUM</code>/<code>EXPOSED</code>/<code>UNSAFE</code>. Escalonamento:
+    <strong>SCHED_RR, prioridade 50</strong> — o <code>CPUSchedulingPolicy</code> da unit é
+    concedido pelo kernel, não apenas declarado. O particionamento deixa de ser afirmação em prosa e
+    passa a ser número medido.
+  </p>
+
+  <div class="limit">
+    <span class="tag">Lacuna conhecida, não corrigida</span>
+    <p>
+      A unit não define <code>CapabilityBoundingSet=</code>. As linhas de capability somam ~3.0 dos
+      ~5.5 pontos brutos — o maior item isolado por margem larga. Faltam também
+      <code>UMask=0077</code>, <code>ProtectProc=invisible</code>, <code>ProcSubset=pid</code> e
+      <code>IPAddressDeny=any</code>. Corrigir e remedir daria um antes/depois.
+    </p>
+    <p>
+      Abertos <em>por projeto</em>, e devem ser descritos assim:
+      <code>RestrictAddressFamilies=~AF_UNIX</code> e <code>RestrictRealtime=</code>, dos quais o
+      serviço depende, e <code>PrivateDevices=</code>, incompatível com o acesso a
+      <code>/dev/rpmsg0</code> no alvo AMP.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>Trilha de auditoria</h2></div>
+  <h3>Método</h3>
+  <pre><code>ls -ld /var/log/journal &amp;&amp; journalctl --verify
+reboot &amp;&amp; journalctl --list-boots</code></pre>
+
+  <h3>Resultado</h3>
+  <p>
+    <code>/var/log/journal</code> é diretório real com setgid <code>systemd-journal</code>;
+    <code>journalctl --verify</code> retorna <code>PASS</code>, validando o <em>Forward Secure
+    Sealing</em>; e <code>--list-boots</code> lista o boot anterior depois de um reboot.
+  </p>
+  <p>
+    Isto é teste de regressão de um defeito real: o <code>VOLATILE_LOG_DIR</code> default do OE
+    transformava <code>/var/log</code> em symlink para um tmpfs, descartando a trilha a cada boot e
+    anulando em silêncio o <code>Storage=persistent</code> e o <code>Seal=yes</code> do
+    <code>10-journald-audit.conf</code>.
+  </p>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>Caminho de atualização A/B</h2></div>
+  <h3>Método</h3>
+  <pre><code>make bundle &amp;&amp; make verify-bundle      # host
+make bundle-disk &amp;&amp; make runqemu       # guest: rauc status; rauc install</code></pre>
+
+  <h3>Resultado — no host</h3>
+  <p>A falha intermediária é parte do resultado. Com as opções default do <code>rauc info</code>, o bundle é <strong>recusado</strong>:</p>
+  <pre><code>signature verification failed: Verify error: unsuitable certificate purpose</code></pre>
+  <p>Com a configuração do dispositivo (<code>check-purpose=codesign</code>, <code>check-crl=true</code>):</p>
+  <pre><code>Verified inline signature by 'CN = MedPlatform Bundle Signing'
+Compatible:     'med-os-qemux86-64'
+Bundle Format:  verity</code></pre>
+
+  <h3>Resultado — no dispositivo</h3>
+  <pre><code>Booted from: rootfs.0 (/dev/vda2)
+o [rootfs.1] (/dev/disk/by-partlabel/med-root-b, ext4, inactive)  bootname: B
+o [rootfs.0] (/dev/disk/by-partlabel/med-root-a, ext4, booted)    bootname: A
+
+Installing `/mnt/b/update.raucb` succeeded</code></pre>
+  <p>
+    Com <code>device-mapper: verity</code> no log do kernel: o bundle foi verificado
+    <strong>no dispositivo</strong>, contra o keyring do dispositivo, e escrito no slot inativo.
+    Slots simétricos, 2.097.152 setores cada.
+  </p>
+
+  <div class="limit">
+    <span class="tag">Limite — e ele é importante</span>
+    <p>
+      A <em>política</em> A/B está validada: atomicidade, escrita no slot inativo, verificação
+      criptográfica. A <em>integração com bootloader</em> não está — o QEMU roda com
+      <code>MED_BOOTLOADER = "noop"</code>. Além disso, <code>boot-attempts</code> é rejeitado pelo
+      RAUC para qualquer backend que não seja <code>uboot</code>/<code>barebox</code>, então o
+      mecanismo de fallback do QEMU seria diferente do que o STM32MP257 usa.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>Volume /data criptografado</h2></div>
+  <h3>Método</h3>
+  <pre><code>make check   # asserções data-provisioned, data-mounted, data-encrypted,
+             # storage-requires-encryption, no-encryption-waiver</code></pre>
+
+  <h3>Resultado</h3>
+  <p>
+    <strong>20/20</strong> no primeiro boot (provisionamento) e 20/20 no segundo — idempotência: o
+    volume é aberto, não reformatado. No <code>.wic</code>, o offset da partição
+    <code>med-data</code> passou a conter o magic LUKS <code>4c554b53babe</code>.
+  </p>
+  <div class="callout">
+    <p>
+      O teste de ponta a ponta: com <code>MED_EEG_REQUIRE_ENCRYPTION = "true"</code>, o serviço de
+      aquisição <strong>só sobe</strong> porque o <code>MedicalStorage</code> resolveu o dispositivo
+      por trás de <code>/data</code> e encontrou um <code>dm/uuid</code> começando em
+      <code>CRYPT-</code>. Um provisionamento quebrado para o serviço sozinho, sem precisar ser
+      notado.
+    </p>
+  </div>
+
+  <h3>Injeção de falha — o resultado mais informativo</h3>
+  <p>Zerado 1 MB no início da partição, simulando um cabeçalho LUKS corrompido:</p>
+  <pre><code>refusing to provision: /dev/disk/by-partlabel/med-data is not pristine
+(type='' label='', expected 'ext4'/'med-data'). This is also what a damaged
+LUKS header looks like, so refusing to format over what may be patient data.
+This needs deliberate intervention.</code></pre>
+  <p>
+    <strong>Não reformatou.</strong> E a cascata é a correta: o serviço registrou
+    <code>refusing to store medical records on the unencrypted backing of /data</code> e saiu;
+    <code>/data</code> ficou <strong>vazio</strong>, zero registros. O dispositivo degradou para
+    <em>não gravar</em>, não para <em>gravar em claro</em>.
+  </p>
+
+  <div class="limit">
+    <span class="tag">Limite</span>
+    <p>
+      A fonte de chave medida é <code>development</code>: LUKS real com chave aleatória por unidade,
+      mas a chave repousa na ESP porque não há TPM no alvo de simulação. <strong>Protege contra
+      remoção física da mídia, não contra root no dispositivo ligado.</strong> O caminho
+      <code>tpm2</code> recusa provisionar em vez de existir pela metade, e fica para o STM32MP257.
+    </p>
+    <p>
+      Achado que vale para além do TPM: a chave precisa sobreviver a uma troca de slot A/B. Uma
+      chave no rootfs seria destruída pela primeira atualização <em>bem-sucedida</em>, deixando o
+      dispositivo sem decifrar os próprios prontuários.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">08</span><h2>O que não foi medido</h2></div>
+  <p>Registrado explicitamente para que a ausência não seja lida como resultado.</p>
+  <ul class="inventory">
+    <li><span class="what">Caminho AMP · rpmsg · Cortex-M4</span><span class="why">O QEMU não tem co-processador. O driver medido é o <code>simulated</code>.</span></li>
+    <li><span class="what">Latência e jitter de tempo real</span><span class="why">O timing do QEMU não é significativo.</span></li>
+    <li><span class="what">Integração com bootloader e fallback A/B</span><span class="why">Ver o limite da seção 06.</span></li>
+    <li><span class="what">TPM · secure boot · OP-TEE</span><span class="why">Nenhum presente no alvo de simulação.</span></li>
+    <li><span class="what">HMI Qt em execução</span><span class="why">Exige runqemu gráfico; sob <code>nographic</code> o <code>weston.service</code> falha por projeto.</span></li>
+    <li><span class="what">Perfil med-image-prod</span><span class="why">Nunca construído. Rootfs read-only não foi exercitado.</span></li>
+    <li><span class="what">Alvo STM32MP257</span><span class="why">Nunca construído.</span></li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">09</span><h2>Reprodutibilidade</h2></div>
+  <p>Todos os números acima saem de:</p>
+  <pre><code>make pki          # uma vez: gera a CA de desenvolvimento
+make qemu
+make tomograph
+make bundle &amp;&amp; make verify-bundle
+make bundle-disk
+make check        # 20 asserções sobre o sistema em execução</code></pre>
+  <p>
+    <code>make check</code> boota a imagem, executa 20 asserções e sai com código não-zero se
+    alguma falhar. É o que transforma “verificado uma vez” em “verificável” — o que a IEC 62304
+    pede de uma atividade de verificação.
+  </p>
+  <div class="limit">
+    <span class="tag">Ressalva sobre a própria suíte</span>
+    <p>
+      A asserção <code>acq-active</code> usava <code>systemctl is-active</code>, e um serviço
+      <code>Type=simple</code> com <code>Restart=on-failure</code> passa por uma janela breve de
+      <em>active</em> a cada tentativa — ela dava PASS para um serviço em <em>crash loop</em>,
+      precisamente o caso que existia para pegar. Só a injeção de falha da seção 07 revelou isso.
+      <strong>Uma asserção que nunca viu a falha que procura é uma afirmação, não uma
+      verificação</strong>, e o mesmo ceticismo vale para as outras dezenove.
+    </p>
+  </div>
+</section>
+
+<footer>
+  Fonte no repositório: docs/RESULTS.md · Planos correntes: implementation_plan_rauc.md ·
+  implementation_plan_luks.md · implementation_plan_mac.md · implementation_plan_ads1299.md
+</footer>

@@ -71,14 +71,31 @@ All code written in this repository must strictly adhere to the 4-layer unidirec
 ### 4.1. `kas/` (Build Configuration Directory)
 * `kas/kas-base.yml`: Common repository definitions (`poky`, `meta-openembedded`, `meta-rauc`, `meta-qt6`), layer paths, and BitBake environment settings.
 * `kas/project-eeg-qemu.yml`: KAS entrypoint for simulation (`machine: qemux86-64`, `target: med-image-eeg`, `MED_EEG_DRIVER = "simulated"`).
-* `kas/project-eeg-stm32mp2.yml`: KAS entrypoint for physical target (`machine: stm32mp257f-ev1`, `target: med-image-eeg`, `MED_EEG_DRIVER = "rpmsg"`).
+* `kas/project-eeg-stm32mp2.yml`: KAS entrypoint for physical target (`machine: stm32mp257f-dk`, `target: med-image-eeg`, `MED_EEG_DRIVER = "rpmsg"`).
 * `kas/project-tomograph.yml`: KAS entrypoint for Tomograph profile validation (`target: med-image-tomograph`).
 * `kas-project.yml` (repo root): alias for `kas/project-eeg-qemu.yml`, so the default entrypoint is the PoC.
+
+**The hardware adaptation surface is a small, enumerable set of variables**, each valued in the
+project file of the target rather than hardcoded in a layer. This is a sharper and more honest
+form of the thesis claim than "one variable", and it is what a reviewer can check:
+
+| Variable | QEMU | STM32MP257 | Why it cannot live in a layer |
+|---|---|---|---|
+| `MED_EEG_DRIVER` | `simulated` | `rpmsg` | The front-end is the machine's, not the distro's |
+| `MED_BOOTLOADER` | `noop` | `uboot` | RAUC has to talk to the bootloader the board actually has |
+| `MED_WKS_FILE` | `med-partitions.wks` | BSP's own | TF-A/U-Boot live at fixed offsets on the SoC |
+| `MED_DATA_KEY_SOURCE` | `development` | `tpm2` | Key custody depends on the hardware present |
+| `MED_EEG_REQUIRE_ENCRYPTION` | `true` | `true` | Policy, defaulted safe, overridable only deliberately |
+| `MED_AMP_FIRMWARE` | unset | BSP recipe | Co-processor firmware is a BSP artefact |
+
+No application source, no framework source and no OS policy differs between the two targets.
 
 ### 4.2. `meta-med-distro` (OS Infrastructure & Regulatory Foundation)
 * **Distro Config**: `conf/distro/med-os.conf` enforces `INIT_MANAGER = "systemd"`, `usrmerge`, `rauc`.
 * **Kernel Policy**: `recipes-kernel/linux/linux-%.bbappend` injects `med-kernel-features.cfg` using wildcard `linux-%` so it automatically applies to any vendor kernel (`linux-yocto`, `linux-raspberrypi`, `linux-st`).
-* **OTA & Partitioning**: `recipes-core/rauc/` configures RAUC A/B slot system, and `wic/med-partitions.wks` defines GPT Dual-Boot layout with encrypted `/data`.
+* **OTA & Partitioning**: `recipes-core/rauc/` configures the RAUC A/B slot system, and `wic/med-partitions.wks` defines the GPT dual-boot layout with a separate `/data`. Slot sizes use `--fixed-size` so wic fails the build rather than producing asymmetric slots.
+* **Encrypted `/data`**: `recipes-core/med-data-volume/` owns the volume. wic cannot write a LUKS header, so `med-data-provision.service` converts the partition on first boot and opens it on every boot. Its safeguard distinguishes "never provisioned" from "LUKS header damaged" — identical symptoms — by keying on the pristine filesystem label wic writes, and refuses anything else rather than reformatting over patient records.
+* **Signing PKI**: `scripts/med-pki.sh` generates the update-signing CA. Only the public keyring (CA certificate + CRL) is committed, in `recipes-core/rauc/rauc-conf/`; private keys stay in the gitignored `pki/`.
 
 ### 4.3. `meta-med-framework` (C++ Middleware Domain Abstraction)
 Contains 6 standardized C++ abstraction classes:
@@ -92,13 +109,27 @@ Contains 6 standardized C++ abstraction classes:
 ### 4.4. `meta-med-app` (Pure Userspace Applications & Profiles)
 * **Applications**: `eeg-acquisition-service` (data daemon using `MedicalIPC`, `MedicalDevice`, `MedicalStorage`, `MedicalConfiguration`, `MedicalUpdate` & `MedicalLogger`), `eeg-hmi-gui` (Qt6 Quick / Wayland user interface).
 * **Packagegroups** carry reusable platform capability and **never an application**: `packagegroup-med-core.bb` (MedFramework runtime), `packagegroup-med-amp.bb` (AMP enablement plus the `MED_AMP_FIRMWARE` hook a BSP fills in), `packagegroup-med-gui.bb` (weston + Qt runtime). Applications are installed by the image that owns them, which is what lets the tomograph profile reuse `med-core` and `med-gui` byte for byte.
-* **Images**: `med-image-eeg.bb` (PoC) and `med-image-tomograph.bb`, both `require recipes-core/images/med-image-base.bb` from `meta-med-distro`.
+* **Images**: `med-image-eeg.bb` (PoC) and `med-image-tomograph.bb`, both `require recipes-core/images/med-image-base.bb` **and** `med-image-dev.inc` from `meta-med-distro`. The `.inc` holds the development profile (writable rootfs, ssh, debug-tweaks, verification tooling) in one place so the two device profiles cannot drift apart — which matters because the reuse metric is only meaningful if they differ exclusively by device class. `med-image-prod.bb` requires only the base, so production differs by not opting in.
+* **Update bundle**: `recipes-core/bundles/med-bundle-eeg.bb`. `RAUC_BUNDLE_COMPATIBLE` must equal what `rauc-conf.bbappend` writes into `system.conf`, and `RAUC_BUNDLE_FORMAT` must be `verity`; neither has a safe default, and a mismatch is only caught at install time on the device.
 
 ### 4.5. Implementation status
 
-The three layers are implemented; **no `kas build` has run yet**, so the BitBake metadata itself is unverified. Validated on the host toolchain: the seven MedFramework translation units compile warning-free under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`; a 55-check functional test of `MedicalConfiguration`, `MedicalStorage`, `MedicalDevice` and `MedicalLogger` passes; and `eeg-acquisition-service` runs end to end — publishing CRC-valid AMP frames to an IPC client, writing session records with `0600`, and refusing to start on either a tampered configuration or an out-of-range safety parameter.
+The QEMU profile builds, boots and is verified. `docs/RESULTS.md` is the authoritative record of
+what has been **measured**; this section only says where things stand.
 
-Two assumptions to confirm on the first real build: `rauc-conf_%.bbappend` expects meta-rauc to provide a `rauc-conf` recipe, and `meta-qt6` is pinned to branch `6.8`.
+Built and validated on `qemux86-64`: both device profiles, the signed A/B update path (bundle
+verified against the device keyring and written to the inactive slot), and the encrypted `/data`
+volume. `make check` boots the image and runs 20 runtime assertions, exiting non-zero on failure.
+
+Never built: the **STM32MP257** target and `med-image-prod`. Read-only rootfs, real-time latency,
+AMP/`rpmsg`, TPM and bootloader integration are therefore unmeasured — see `RESULTS.md` §8, which
+lists absences explicitly so they are not read as results.
+
+**The lesson that governs this repository**: in a system with an update path, *"it builds and
+boots" is not evidence*. Of the six defects found while implementing the A/B path, five failed no
+build at all — they produced artefacts that compiled, booted and ran, and would have surfaced on a
+device in the field attempting an update. Inspect the produced artefact (`sfdisk -l` the `.wic`,
+read the installed config) and run `make check`; do not trust a green build.
 
 ---
 
@@ -126,23 +157,59 @@ When editing or extending this codebase, AI Agents **MUST** strictly comply with
 5. **Regulatory Alignment (IEC 62304 / FDA)**:
    - Frame security features (Read-Only RootFS, RAUC A/B, Audit Logging, LUKS) as architectural enablers for IEC 62304 software partitioning and traceability.
 
+6. **Verify the artefact, not the build**:
+   - A successful `bitbake` run proves almost nothing about the update path, the disk layout or the
+     encrypted volume. Run `make check` after any change that could affect runtime behaviour.
+   - When adding an assertion, make it fail on purpose first. `acq-active` used
+     `systemctl is-active` and passed a crash-looping service, because a `Type=simple` unit with
+     `Restart=on-failure` is briefly active on every retry. **An assertion that has never seen the
+     failure it looks for is a claim, not a check.**
+
+7. **Machine properties belong in the project file**:
+   - Anything that differs between targets — bootloader, disk layout, key custody, front-end driver
+     — is a variable valued in `kas/project-*.yml`, never a constant in a layer. `system.conf` once
+     hardcoded `bootloader=uboot` while `med-partitions.wks`, in the same layer, documented itself
+     as targeting EFI/GRUB machines; no build could detect the contradiction.
+
 ---
 
 ## 6. Common Build Commands
 
-* **Build PoC EEG for QEMU**:
-  ```bash
-  kas build kas/project-eeg-qemu.yml
-  ```
-* **Build PoC EEG for STM32MP257**:
-  ```bash
-  kas build kas/project-eeg-stm32mp2.yml
-  ```
-* **Run QEMU Simulation**:
-  ```bash
-  kas shell kas/project-eeg-qemu.yml -c "runqemu qemux86-64 nographic"
-  ```
-* **Inspect BitBake Layers**:
-  ```bash
-  kas shell kas/kas-base.yml -c "bitbake-layers show-layers"
-  ```
+Prefer the `Makefile`: it runs the same builds inside the pinned upstream kas container, which is
+what keeps the build host itself reproducible. `make help` lists every target. Append `NATIVE=1` to
+use the host's own kas instead.
+
+```bash
+make pki          # once: generate the development signing CA (keys stay out of git)
+make qemu         # build med-image-eeg for qemux86-64
+make tomograph    # build the tomograph profile (the reuse control case)
+make bundle       # build the signed RAUC update bundle
+make verify-bundle  # verify it exactly as the device would (keyring + purpose + CRL)
+make runqemu      # boot the GPT disk, serial console
+make check        # boot and run 20 runtime assertions
+```
+
+Raw kas still works and is what those targets wrap:
+
+```bash
+kas build kas/project-eeg-qemu.yml
+kas shell kas/kas-base.yml -c "bitbake-layers show-layers"
+```
+
+Note that `make runqemu` boots the **`.wic`**, not the bare `ext4`. There is deliberately one QEMU
+boot path: `QB_KERNEL_ROOT` takes a single value, so serving both would need contradictory kernel
+roots, and without the partition table RAUC resolves no slots at all.
+
+---
+
+## 7. Documents
+
+* `docs/RESULTS.md` — measured evidence. Every number carries the command that produced it and what
+  it does **not** mean. Read before claiming anything about runtime behaviour.
+* `docs/implementation_plan_rauc.md`, `docs/implementation_plan_luks.md` — current, **implemented**;
+  their §8 sections record measured results.
+* `docs/implementation_plan_mac.md`, `docs/implementation_plan_ads1299.md` — current, **not yet
+  implemented**.
+* `docs/implementation_plan.md`, `_EEG.md`, `_improvements.md` — earlier design iterations, kept as
+  rationale. Some use the superseded `produto`/`meta-produto-*` naming. Not current spec.
+* `docs/BUILD_CONTAINER.md` — the container build host and its measured limits.
