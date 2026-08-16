@@ -69,6 +69,15 @@ python do_seal_configuration() {
 }
 addtask seal_configuration after do_install before do_package
 
+# The task writes into ${D}, so it has to run under pseudo like do_install
+# does. base.bbclass grants that to do_install only; a task added with addtask
+# inherits nothing, and without these two flags the sidecar is created with the
+# build user's uid instead of root:root. QA catches it as
+# [host-user-contaminated], and it would ship a device whose configuration seal
+# is owned by an unprivileged account - the one file that must not be.
+do_seal_configuration[fakeroot] = "1"
+do_seal_configuration[depends] += "virtual/fakeroot-native:do_populate_sysroot"
+
 FILES:${PN} += " \
     ${sysconfdir}/medplatform \
     ${systemd_system_unitdir}/eeg-acquisition.service \
