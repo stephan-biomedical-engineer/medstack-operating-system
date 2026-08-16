@@ -230,7 +230,52 @@ STM32MP257 usa. Ver `implementation_plan_rauc.md` §3.
 
 ---
 
-## 7. O que **não** foi medido
+## 7. Volume `/data` criptografado
+
+### Método
+
+`make check` (asserções `data-provisioned`, `data-mounted`, `data-encrypted`,
+`storage-requires-encryption`, `no-encryption-waiver`), mais inspeção do artefato e uma injeção de
+falha deliberada.
+
+### Resultado
+
+`20/20` no primeiro boot (provisionamento) e `20/20` no segundo (idempotência: o volume é aberto,
+não reformatado). No `.wic`, o offset da partição `med-data` passou a conter o magic LUKS
+`4c554b53babe`.
+
+O teste de ponta a ponta é o do `implementation_plan_luks.md` §2: com
+`MED_EEG_REQUIRE_ENCRYPTION = "true"`, o serviço de aquisição **só sobe** porque o
+`MedicalStorage` resolveu o dispositivo por trás de `/data` e encontrou um `dm/uuid` começando em
+`CRYPT-`. O registro de auditoria de dispensa de criptografia desapareceu do journal.
+
+### Injeção de falha — o resultado mais informativo
+
+Zerado 1 MB no início da partição, simulando um cabeçalho LUKS corrompido:
+
+```
+refusing to provision: /dev/disk/by-partlabel/med-data is not pristine (type='' label='',
+expected 'ext4'/'med-data'). This is also what a damaged LUKS header looks like, so refusing
+to format over what may be patient data. This needs deliberate intervention.
+```
+
+**Não reformatou.** E a cascata é a correta: o serviço registrou `refusing to store medical records
+on the unencrypted backing of /data` e saiu; `/data` ficou **vazio**, zero registros. O dispositivo
+degradou para *não gravar*, não para *gravar em claro*.
+
+**Limite**: a fonte de chave medida é `development` — LUKS real com chave aleatória por unidade,
+mas a chave repousa na ESP porque não há TPM no alvo de simulação. **Protege contra remoção física
+da mídia, não contra root no dispositivo ligado.** O caminho `tpm2` recusa provisionar em vez de
+existir pela metade, e fica para o STM32MP257.
+
+**Achado que vale para além do TPM**: a chave tem de sobreviver a uma troca de slot A/B. Uma chave
+no rootfs seria destruída pela primeira atualização **bem-sucedida**, deixando o dispositivo sem
+decifrar os próprios prontuários. Isso já era um risco conhecido do caminho TPM/PCR
+(`implementation_plan_luks.md` §7.3) e vale para qualquer fonte de chave.
+
+---
+
+## 8. O que **não** foi medido
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
 
@@ -239,8 +284,6 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
 - **Integração com bootloader e fallback A/B em boot falho** — §6.
 - **TPM, secure boot, OP-TEE** — nenhum presente.
-- **Volume `/data` criptografado** — `systemd-cryptsetup@med-data` falha hoje; o provisionamento
-  LUKS de primeiro boot não existe (`implementation_plan_luks.md`).
 - **A HMI Qt em execução** — exige `NATIVE=1` com runqemu gráfico; sob `nographic` o
   `weston.service` falha por projeto.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.
@@ -248,7 +291,7 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
 
 ---
 
-## 8. Reprodutibilidade
+## 9. Reprodutibilidade
 
 Todos os números acima saem de:
 
@@ -258,10 +301,16 @@ make qemu
 make tomograph
 make bundle && make verify-bundle
 make bundle-disk
-make runqemu
+make check        # 20 asserções sobre o sistema em execução
 ```
 
-**Ainda não há suíte automatizada.** Toda a verificação de runtime desta página foi conduzida
-manualmente (ou por um driver de console descartável). Converter isto num `make check` que boota e
-executa asserções é o próximo passo natural, e é o que transforma "verificado uma vez" em
-"verificável", que é o que a IEC 62304 pede de uma atividade de verificação.
+**A verificação de runtime é automatizada.** `make check` boota a imagem, executa 20 asserções e
+sai com código não-zero se alguma falhar — o que transforma "verificado uma vez" em "verificável",
+que é o que a IEC 62304 pede de uma atividade de verificação.
+
+Uma ressalva sobre a suíte, aprendida ao exercitá-la: a asserção `acq-active` usava
+`systemctl is-active`, e um serviço `Type=simple` com `Restart=on-failure` passa por uma janela
+breve de `active` a cada tentativa — ela dava PASS para um serviço em *crash loop*, precisamente o
+caso que existia para pegar. Só a injeção de falha da §7 revelou isso. **Uma asserção que nunca viu
+a falha que procura é uma afirmação, não uma verificação**, e o mesmo ceticismo vale para as outras
+dezenove.

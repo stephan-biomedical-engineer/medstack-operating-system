@@ -285,3 +285,84 @@ aparece mais no journal.
 5. **O `tomograph` herda tudo isso** sem ter sido considerado: ele usa o mesmo `med-image-base` e o
    mesmo `crypttab`. Confirmar que o perfil dele declara uma fonte de chave, ou que o default
    `tpm2` produz nele a falha alta esperada e não uma surpresa.
+
+---
+
+## 8. Resultado da execução (2026-08-16)
+
+**Implementado e validado.** O que segue é medição, não previsão. A verificação corre por
+`make check` (20 asserções), não à mão.
+
+### 8.1. Resultado
+
+`20/20` no primeiro boot (provisionamento), `20/20` no segundo (idempotência). As cinco asserções
+que este plano acrescentou:
+
+```
+PASS  data-provisioned             o volume /data foi provisionado e aberto
+PASS  data-mounted                 /data montado a partir do mapeamento dm-crypt
+PASS  data-encrypted               o backing de /data é LUKS2 ativo
+PASS  storage-requires-encryption  a aplicação exige backing criptografado
+PASS  no-encryption-waiver         nenhum registro de auditoria dispensando criptografia
+```
+
+O teste de ponta a ponta da §2 fechou: com `MED_EEG_REQUIRE_ENCRYPTION = "true"`, o serviço de
+aquisição só sobe porque o `MedicalStorage` encontrou um `dm/uuid` começando em `CRYPT-`. E o
+`AuditEvent::SecurityEvent` de dispensa de criptografia sumiu do journal.
+
+Confirmado também fora do guest, no artefato: o offset da partição `med-data` no `.wic` passou a
+conter o magic LUKS `4c554b53babe`.
+
+### 8.2. A salvaguarda da §4.2, exercitada
+
+Zerado 1 MB no início da partição (`dd if=/dev/zero`), o próximo boot registrou:
+
+```
+refusing to provision: /dev/disk/by-partlabel/med-data is not pristine (type='' label='',
+expected 'ext4'/'med-data'). This is also what a damaged LUKS header looks like, so refusing
+to format over what may be patient data. This needs deliberate intervention.
+```
+
+**Não reformatou.** E a cascata é a correta: o serviço de aquisição registrou `refusing to store
+medical records on the unencrypted backing of /data` e saiu; `/data` ficou **vazio**, zero
+registros. O dispositivo degradou para *não gravar*, não para *gravar em claro* — que é a
+distinção que importa numa avaliação de segurança.
+
+Este é o caminho de código que, errado, apagaria prontuários. Agora está exercitado em vez de
+argumentado.
+
+### 8.3. Três desvios do plano, todos forçados pela implementação
+
+1. **A chave de desenvolvimento mora na ESP, não no rootfs.** O plano não previu: o rootfs é um
+   slot A/B, então uma chave em `/etc` seria destruída pela primeira atualização RAUC
+   **bem-sucedida**, deixando o dispositivo sem conseguir decifrar os próprios prontuários. É a
+   mesma classe de problema do §7.3, que eu havia atribuído só ao TPM. A ESP é a única área
+   gravável deste layout que nenhuma atualização toca. Limitação declarada: vfat não carrega modo
+   POSIX, então o `chmod 0400` é melhor-esforço.
+
+2. **O `crypttab` fica vazio, não templatizado** (§4.3). O `systemd-cryptsetup` roda antes do
+   `local-fs.target`, então não lê chave de um sistema de arquivos ainda não montado, e ordenar a
+   montagem da ESP antes disso é ciclo de dependência. A unidade de provisionamento monta a ESP
+   privadamente e é dona da abertura. O caminho `tpm2` não terá esse problema (a chave é dessatelada
+   pelo TPM) e deve trazer o `crypttab` de volta.
+
+3. **`tpm2` recusa em vez de existir pela metade.** Sem hardware para exercitar, uma implementação
+   seria metadata não verificada.
+
+### 8.4. Um defeito no próprio teste, achado pela injeção de falha
+
+A asserção `acq-active` usava `systemctl is-active`. Um serviço `Type=simple` com
+`Restart=on-failure` passa por uma janela breve de `active` a cada tentativa, então a asserção
+retornava PASS para um serviço em *crash loop* — precisamente o cenário que ela existia para pegar.
+Passou a exigir `NRestarts=0` também.
+
+Vale registrar como método: **uma asserção que nunca viu a falha que procura é uma afirmação, não
+uma verificação.** Só a injeção de falha distinguiu as duas.
+
+### 8.5. O que continua em aberto
+
+- O caminho `tpm2`, com o build do STM32MP257 (§5 passo 5). Ler o §7.3 antes.
+- O §7.3 continua **não avaliado** e é o item mais sério: selar a chave a PCRs que cobrem o rootfs
+  faz uma atualização A/B bem-sucedida impedir o dispositivo de decifrar `/data`. A descoberta do
+  §8.3.1 mostra que o problema não é exclusivo do TPM — é a persistência da chave através de uma
+  troca de slot, e vale para qualquer fonte.
