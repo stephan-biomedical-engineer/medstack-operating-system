@@ -21,7 +21,11 @@ SRC_URI = " \
 
 S = "${WORKDIR}/sources"
 
-DEPENDS = "qtbase qtdeclarative med-framework-api"
+# qtdeclarative-native is not optional for a QML application: qt6-cmake.bbclass
+# only pulls qtbase-native and points QT_HOST_PATH at it, so the target
+# Qt6QmlConfig.cmake finds no Qt6QmlTools/Qt6QuickTools (qmlcachegen,
+# qmltyperegistrar, qmlimportscanner) and reports Qt6Qml as NOT FOUND.
+DEPENDS = "qtbase qtdeclarative qtdeclarative-native med-framework-api"
 
 inherit qt6-cmake pkgconfig systemd features_check
 
