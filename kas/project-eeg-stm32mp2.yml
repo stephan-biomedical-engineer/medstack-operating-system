@@ -3,7 +3,7 @@ header:
   includes:
     - kas/kas-base.yml
 
-machine: stm32mp257f-ev1
+machine: stm32mp257f-dk
 
 repos:
   meta-st-stm32mp:
