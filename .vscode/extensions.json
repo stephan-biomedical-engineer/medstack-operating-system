@@ -1,0 +1,17 @@
+{
+  // Recommendations, not requirements. Everything in this repository builds
+  // and is verified from the Makefile; these only make editing pleasant.
+  "recommendations": [
+    // Syntax and cross-references for .bb/.bbappend/.bbclass/.inc/.conf.
+    // settings.json maps those extensions to the "bitbake" language id, which
+    // only exists once this is installed - without it they fall back to plain
+    // text, which is harmless.
+    "yocto-project.yocto-bitbake",
+    // MedFramework and both applications are C++17.
+    "ms-vscode.cpptools",
+    // scripts/med-check.py and scripts/med-pki.sh.
+    "ms-python.python",
+    "timonwong.shellcheck"
+  ],
+  "unwantedRecommendations": []
+}

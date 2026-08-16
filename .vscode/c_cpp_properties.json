@@ -1,0 +1,32 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "MedPlatform (host IntelliSense)",
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64",
+      "includePath": [
+        "${workspaceFolder}/meta-custom/**",
+        // The framework's own sources include their headers unqualified
+        // ("MedicalStorage.h"), so this path resolves those.
+        "${workspaceFolder}/meta-custom/meta-med-framework/recipes-framework/med-framework-api/files/include",
+        // The applications include <medplatform/MedicalDevice.h>, and that
+        // directory does not exist in the tree: CMake creates it at install
+        // time (install(DIRECTORY include/ DESTINATION .../medplatform)). The
+        // staged copy in the build sysroot is the only place the qualified
+        // layout exists, so IntelliSense for the apps needs a build to have
+        // run. Harmless when absent - cpptools just skips a missing path.
+        "${workspaceFolder}/build/tmp-glibc/work/core2-64-med-linux/eeg-acquisition-service/1.0.0/recipe-sysroot/usr/include"
+      ],
+      "browse": {
+        // Deliberately NOT recursing into build/: it is ~89 GB.
+        "path": [
+          "${workspaceFolder}/meta-custom"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ]
+}

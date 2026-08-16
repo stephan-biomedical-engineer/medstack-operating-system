@@ -1,0 +1,86 @@
+{
+  // ---------------------------------------------------------------------
+  // Hide everything bitbake generates.
+  //
+  // The proportions here are the whole reason this file exists: the project
+  // is about 57 tracked files, sitting inside roughly 102 GB of build output
+  // (build/ alone is ~89 GB, plus downloads/ and sstate-cache/ at ~6.6 GB
+  // each and the cloned upstream layers at ~460 MB).
+  //
+  // files.exclude removes them from the explorer, search.exclude keeps them
+  // out of results, and files.watcherExclude is the one that actually
+  // matters for whether the editor stays usable - without it VS Code tries
+  // to place inotify watches across the whole build tree.
+  // ---------------------------------------------------------------------
+  "files.exclude": {
+    "**/.git": true,
+    "build": true,
+    "layers": true,
+    "downloads": true,
+    "sstate-cache": true,
+    ".kas-container": true,
+    // pki/ holds the update-signing private keys. Hidden deliberately: it is
+    // gitignored, but the point is not to have a key one careless click from
+    // being opened, or one careless search from being pasted somewhere.
+    "pki": true
+  },
+
+  "search.exclude": {
+    "build": true,
+    "layers": true,
+    "downloads": true,
+    "sstate-cache": true,
+    ".kas-container": true,
+    "pki": true
+  },
+
+  "files.watcherExclude": {
+    "**/build/**": true,
+    "**/layers/**": true,
+    "**/downloads/**": true,
+    "**/sstate-cache/**": true,
+    "**/.kas-container/**": true,
+    "**/pki/**": true
+  },
+
+  // ---------------------------------------------------------------------
+  // Language associations.
+  //
+  // Without the BitBake extension (see extensions.json) these fall back to
+  // plain text, which is harmless. systemd units and the wic layout get ini,
+  // which is built in and gives correct '#' comment handling today.
+  // ---------------------------------------------------------------------
+  "files.associations": {
+    "*.bb": "bitbake",
+    "*.bbappend": "bitbake",
+    "*.bbclass": "bitbake",
+    "*.inc": "bitbake",
+    "*.conf": "bitbake",
+    "*.service": "ini",
+    "*.mount": "ini",
+    "*.wks": "ini",
+    "crypttab": "properties",
+    "fstab": "properties"
+  },
+
+  // Rulers at the widths this repository actually writes to: 80 for the
+  // recipes and prose, 100 as the hard stop the C++ stays under.
+  "editor.rulers": [80, 100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+
+  // Recipes and kernel fragments are whitespace-sensitive in places; make it
+  // visible rather than surprising.
+  "editor.renderWhitespace": "boundary",
+
+  "[makefile]": {
+    // Tabs are syntax in a Makefile, not style.
+    "editor.insertSpaces": false
+  },
+  "[yaml]": {
+    "editor.tabSize": 2
+  },
+  "[python]": {
+    "editor.tabSize": 4
+  }
+}

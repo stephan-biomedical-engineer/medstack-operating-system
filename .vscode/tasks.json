@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  // Every target runs bitbake inside the pinned kas container, so these are
+  // minutes-to-hours, not seconds. They are here so the common ones are one
+  // keystroke away and always run the same way - not to pretend they are fast.
+  //
+  // "make check" is the test task (Ctrl+Shift+P -> Run Test Task): it boots
+  // the image and asserts on the running system, which is the only thing in
+  // this repository that catches a regression a build cannot.
+  "tasks": [
+    {
+      "label": "risks: parse-only sanity check",
+      "detail": "Seconds. The right first command on a fresh clone.",
+      "type": "shell",
+      "command": "make risks",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "build: EEG image for QEMU",
+      "detail": "make qemu - the default build target.",
+      "type": "shell",
+      "command": "make qemu",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "build: tomograph profile",
+      "detail": "make tomograph - the reuse control case.",
+      "type": "shell",
+      "command": "make tomograph",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "check: runtime acceptance suite",
+      "detail": "make check - boots the image and runs 20 assertions.",
+      "type": "shell",
+      "command": "make check",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "update: build and verify the RAUC bundle",
+      "detail": "Needs 'make pki' once first. Verifies with the device's own keyring settings.",
+      "type": "shell",
+      "command": "make bundle && make verify-bundle",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "run: boot QEMU (serial console)",
+      "detail": "Interactive. Exit with 'poweroff' inside the guest - closing the terminal leaves the container running and port 2222 bound.",
+      "type": "shell",
+      "command": "make runqemu",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "clean up: stop a leaked QEMU container",
+      "detail": "The container outlives the docker client, so a closed terminal leaves qemu running.",
+      "type": "shell",
+      "command": "docker ps -q --filter ancestor=ghcr.io/siemens/kas/kas:5.2 | xargs -r docker stop -t 5",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ]
+}
