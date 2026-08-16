@@ -56,7 +56,7 @@ else
 endif
 
 .PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
-        tomograph bundle verify-bundle bundle-disk shell runqemu image-info clean purge
+        tomograph bundle verify-bundle bundle-disk shell runqemu check image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -77,6 +77,7 @@ help:
 	@echo "  bundle-disk    wrap the bundle in a disk the QEMU guest can mount"
 	@echo "  shell       interactive build environment"
 	@echo "  runqemu     boot the GPT disk image, KVM accelerated, serial console"
+	@echo "  check       boot and assert on the running system (exits non-zero on failure)"
 	@echo "  image-info  size and package count of the last build"
 	@echo "  clean       drop build artefacts, keep sstate and downloads"
 	@echo "  purge       drop everything kas manages"
@@ -196,6 +197,13 @@ shell: $(TOOL)
 runqemu: $(TOOL)
 	$(KAS) $(RUNTIME_ARGS) shell $(QEMU_CFG) \
 	  -c 'runqemu qemux86-64 $$(echo $$BUILDDIR/tmp*/deploy/images/qemux86-64/$(IMAGE)-qemux86-64.rootfs.wic) nographic slirp'
+
+# The runtime acceptance suite. Everything this repository claims about its
+# behaviour at runtime was verified by hand until this existed - and five of the
+# six defects found while implementing the A/B update path failed no build at
+# all, so building is not the place those regressions will be caught.
+check: $(TOOL)
+	python3 scripts/med-check.py
 
 image-info:
 	@cat $(KAS_BUILD_DIR)/buildhistory/images/qemux86_64/glibc/$(IMAGE)/image-info.txt 2>/dev/null \
