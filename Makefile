@@ -87,7 +87,11 @@ $(KAS_CONTAINER):
 	@chmod +x $@.tmp && mv $@.tmp $@
 	@echo "kas-container $(KAS_VERSION) ready at $@"
 
+# The echo is not decoration: with only a prerequisite and no recipe, a phony
+# target whose file already exists prints "Nothing to be done for 'tool'",
+# which reads like a failure when it means the opposite.
 tool: $(KAS_CONTAINER)
+	@echo "kas-container $(KAS_VERSION) present and checksummed at $(KAS_CONTAINER)"
 
 checkout: $(TOOL)
 	$(KAS) checkout $(QEMU_CFG)
