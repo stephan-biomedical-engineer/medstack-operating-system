@@ -17,9 +17,15 @@ IMAGE_FEATURES:remove = "debug-tweaks tools-debug tools-profile dbg-pkgs \
                          empty-root-password allow-empty-password \
                          allow-root-login post-install-logging"
 
-# The full disk image: ESP + med-root-a + med-root-b + med-data.
-# WKS_FILE comes from med-os.conf ("?=") so a BSP can override it.
-IMAGE_FSTYPES += "wic wic.bmap"
+# The full disk image (ESP + med-root-a + med-root-b + med-data) now comes from
+# med-image-base.bb, because the A/B layout is a MedOS property rather than a
+# production-only one - a development image that cannot exercise the update
+# path is not much use. WKS_FILE comes from MED_WKS_FILE in med-os.conf.
+#
+# Note that this recipe requires only the base, never med-image-dev.inc. That
+# is what keeps a writable rootfs, ssh, debug-tweaks and the introspection
+# tooling out of it: production differs from development by not opting in, not
+# by remembering to opt out.
 
 # Nothing gets installed here that is not already in the base: a production
 # image differs from the base by what it *removes*, which keeps the two in

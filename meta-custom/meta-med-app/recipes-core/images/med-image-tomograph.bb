@@ -9,12 +9,13 @@ LICENSE = "MIT"
 
 require recipes-core/images/med-image-base.bb
 
-MED_ROOTFS_FEATURES = ""
-
-IMAGE_FEATURES += " \
-    ssh-server-openssh \
-    debug-tweaks \
-"
+# The same development profile med-image-eeg uses, from the same file. This is
+# load-bearing for the measurement this recipe exists to make: if the two
+# profiles configure their rootfs, tooling or boot differently, the reuse
+# metric counts that difference as if it were a device-class difference. The
+# control case has to differ from the EEG in exactly one place - the install
+# list below.
+require recipes-core/images/med-image-dev.inc
 
 # Note what is reused verbatim from the EEG profile (packagegroup-med-core,
 # packagegroup-med-gui) and what is absent (packagegroup-med-amp). No

@@ -67,6 +67,27 @@ MED_VERIFICATION_TOOLS ?= ""
 
 IMAGE_INSTALL:append = " ${MED_VERIFICATION_TOOLS}"
 
+# The A/B disk. This belongs to MedOS, not to any device class: it is the same
+# layout that makes rauc, med-data-volume and the crypttab above mean anything,
+# and without it /dev/disk/by-partlabel/med-root-{a,b} does not exist and RAUC
+# resolves no slots. WKS_FILE comes from MED_WKS_FILE in med-os.conf.
+IMAGE_FSTYPES += "wic wic.bmap"
+
+# How that disk boots under QEMU. Also device-class agnostic - "an EEG boots
+# differently from a tomograph" would be a bug, not a feature.
+#
+# runqemu's default is to treat a .wic as a self-booting VM image, which for
+# the EFI/GRUB layout in med-partitions.wks would mean supplying OVMF.
+# "no-kernel-in-fs" makes it treat the disk as a rootfs and load the kernel
+# directly instead, so QEMU gets a real partitioned disk without a bootloader
+# being involved at all.
+#
+# QB_KERNEL_ROOT is coupled to med-partitions.wks, which puts the ESP first and
+# med-root-a second. A BSP that supplies its own WKS_FILE also supplies its own
+# boot path and does not use these; they are inert on a non-QEMU machine.
+QB_FSINFO = "wic:no-kernel-in-fs"
+QB_KERNEL_ROOT = "/dev/vda2"
+
 # Enough headroom for the journal, a downloaded bundle and a session of
 # acquisition data before /data is mounted.
 IMAGE_ROOTFS_EXTRA_SPACE ?= "131072"

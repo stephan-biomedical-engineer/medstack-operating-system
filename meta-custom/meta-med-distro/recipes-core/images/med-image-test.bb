@@ -8,18 +8,14 @@ LICENSE = "MIT"
 
 require recipes-core/images/med-image-base.bb
 
-# The one deliberate deviation from the production policy, and the reason this
-# is a separate recipe instead of a flag on med-image-prod.
-MED_ROOTFS_FEATURES = ""
+# Writable rootfs, ssh, debug-tweaks and the verification toolset - the same
+# development profile the device images use, so this image and they cannot
+# disagree about what "development" means.
+require recipes-core/images/med-image-dev.inc
 
-# Platform-policy introspection (see med-image-base.bb). Distinct from the
-# general debugging tools below: this set is what the verification procedure
-# needs, the list below is what a developer wants at a prompt.
-MED_VERIFICATION_TOOLS = "${MED_VERIFICATION_TOOLSET}"
-
+# What this image adds on top of that profile: a developer at a prompt, rather
+# than the verification procedure.
 IMAGE_FEATURES += " \
-    ssh-server-openssh \
-    debug-tweaks \
     tools-debug \
     empty-root-password \
 "
