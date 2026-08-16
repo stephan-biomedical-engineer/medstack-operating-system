@@ -61,8 +61,6 @@ local_conf_header:
     # applies to a native build. See docs/BUILD_CONTAINER.md.
     DL_DIR ?= "${TOPDIR}/../downloads"
     SSTATE_DIR ?= "${TOPDIR}/../sstate-cache"
-    BB_NUMBER_THREADS = "6"
-    PARALLEL_MAKE = "-j 6"
 
   # Note the absence of EXTRA_IMAGE_FEATURES += "debug-tweaks" here. It used to
   # be global, which silently weakened med-image-prod too. Development images
@@ -73,3 +71,18 @@ local_conf_header:
     # and footprint metrics, and med-os.conf additionally enables buildhistory
     # and SPDX SBOM generation.
     USER_CLASSES = "buildstats"
+
+env:
+  # The kas-container script sets this to the path of the kas config file
+  # inside the container. It is used by the med-os buildstats postbuild hook to
+  # name the metrics output file after the kas config, so that multiple builds
+  # can be run in parallel without overwriting each other's metrics.
+  # KAS_CONFIG_PATH: "/kas/kas-base.yml"
+  #
+  # Declared here rather than in local_conf_header so the host can override the
+  # parallelism per machine (kas treats these as defaults and lets a value
+  # already present in the environment win). YAML mapping syntax, not bitbake
+  # assignment syntax - "KEY = value" here parses as a plain string and kas
+  # rejects the file before it starts.
+  BB_NUMBER_THREADS: "8"
+  PARALLEL_MAKE: "-j 8"
