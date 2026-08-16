@@ -5,9 +5,12 @@
 # through the file search path. Prepending THISDIR/${PN} makes our system.conf
 # win without touching meta-rauc's SRC_URI.
 #
-# NOTE: the append is intentionally "rauc-conf_%" and not "rauc-conf" so it
-# matches the versioned recipe (rauc-conf_1.0.bb). Confirm the recipe exists in
-# the configured meta-rauc branch with:
+# NOTE: the filename must be "rauc-conf.bbappend", NOT "rauc-conf_%.bbappend".
+# meta-rauc/scarthgap ships the recipe unversioned as rauc-conf.bb, and bitbake
+# matches appends against the recipe *filename*: the "_%" form requires an
+# underscore in the .bb name, so it matches nothing here and bitbake fails hard
+# with "No recipes in default available for: .../rauc-conf_%.bbappend".
+# Re-check after any meta-rauc bump with:
 #   kas shell kas/kas-base.yml -c "bitbake-layers show-recipes rauc-conf"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
