@@ -8,7 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Yocto release: **Scarthgap (5.0 LTS)**. Build orchestration: Siemens **KAS**.
 
-`docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. `docs/implementation_plan*.md` are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
+The PoC's analogue front-end is the **TI ADS1299** (8-channel, 24-bit biopotential AFE, SPI + `DRDY`), wired to the Cortex-M4 — Linux never touches the converter, it receives sample frames over `rpmsg`. `docs/implementation_plan_ads1299.md` is the current plan for that integration and lists the changes it still requires.
+
+`docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. The other `docs/implementation_plan*.md` are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
 
 **Current state**: the three `meta-med-*` layers are implemented (distro policy, kernel fragment, RAUC/LUKS config, the MedFramework C++ library, both EEG applications, packagegroups and images). What has **not** happened yet is a real Yocto build: no `kas build` has ever run in this repo, so nothing here has been validated by bitbake. What *has* been validated, on the host toolchain:
 

@@ -14,6 +14,7 @@
 * **Build Orchestration**: Siemens **KAS** (`kas/*.yml`)
 * **Academic Context**: Undergraduate Engineering Thesis (TCC - Trabalho de Conclusão de Curso)
 * **Proof of Concept (PoC)**: Electroencephalogram (EEG) with Asymmetric Multiprocessing (AMP: Cortex-A35 + Cortex-M4) and HMI Display on **STM32MP257** and **QEMU x86-64**.
+* **PoC Analogue Front-End**: Texas Instruments **ADS1299** (8-channel, 24-bit biopotential AFE, SPI + `DRDY`), attached to the Cortex-M4 and reached from Linux over OpenAMP `rpmsg`. Linux never talks to the converter directly. See `docs/implementation_plan_ads1299.md` for the integration plan and the changes it requires — that document is current, unlike the other `implementation_plan*.md` files.
 
 ---
 
