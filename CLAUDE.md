@@ -14,17 +14,23 @@ The PoC's analogue front-end is the **TI ADS1299** (8-channel, 24-bit biopotenti
 
 `docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. The remaining `docs/implementation_plan*.md` (`implementation_plan.md`, `implementation_plan_EEG.md`, `implementation_plan_improvements.md`) are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
 
-**Current state**: the three `meta-med-*` layers are implemented (distro policy, kernel fragment, RAUC/LUKS config, the MedFramework C++ library, both EEG applications, packagegroups and images). What has **not** happened yet is a real Yocto build: no `kas build` has ever run in this repo, so nothing here has been validated by bitbake. What *has* been validated, on the host toolchain:
+**Current state**: the three `meta-med-*` layers are implemented (distro policy, kernel fragment, RAUC/LUKS config, the MedFramework C++ library, both EEG applications, packagegroups and images), and **the QEMU profile builds green** — `make qemu` completed all 4954 tasks on 2026-08-16, producing `med-image-eeg-qemux86-64.rootfs.ext4` (199 packages) in `build/tmp-glibc/deploy/images/qemux86-64/`. The bitbake metadata is therefore no longer unverified: recipe syntax, layer resolution and the package split all hold for `qemux86-64`. The image manifest carries `eeg-acquisition-service`, `eeg-hmi-gui`, `libmedframework1` and all four `packagegroup-med-*`.
+
+Validated on the host toolchain (independently of bitbake):
 
 - all 7 MedFramework translation units compile clean under `-Wall -Wextra -Wpedantic -Wshadow -Wconversion`;
 - a functional test of `MedicalConfiguration`, `MedicalStorage`, `MedicalDevice` and `MedicalLogger` (55 checks) passes;
 - `eeg-acquisition-service` builds, runs, publishes CRC-valid frames to an IPC client, writes session records, and refuses to start on a tampered config or an out-of-range safety parameter.
 
-Treat the bitbake metadata (recipe syntax, layer resolution, package split) as unverified until a build runs. Three known risks to check first:
+The three risks this file used to flag are all resolved, and the resolutions are worth keeping:
 
-1. `rauc-conf_%.bbappend` assumes meta-rauc provides a `rauc-conf` recipe (`bitbake-layers show-recipes rauc-conf`) — a dangling bbappend is a hard error.
-2. `kas-base.yml` pins `meta-qt6` to branch `6.8`.
-3. `packagegroup-med-gui` names `qtbase-plugins` and `qtdeclarative-qmlplugins`; confirm meta-qt6's package split actually produces them.
+1. meta-rauc ships `rauc-conf.bb` **unversioned**, so `rauc-conf_%.bbappend` was dangling — a hard parse error. The bbappend is now `rauc-conf.bbappend` (no `_%`).
+2. The `meta-qt6` branch `6.8` pin in `kas-base.yml` is good; it builds Qt 6.8.4.
+3. `qtbase-plugins` and `qtdeclarative-qmlplugins` do exist — `qt6.inc` declares them via `PACKAGE_BEFORE_PN` with `ALLOW_EMPTY`. Both are installed in the image.
+
+Also learned from that first build: **a QML application recipe needs `qtdeclarative-native` in `DEPENDS`**. `qt6-cmake.bbclass` only prepends `qtbase-native` and aims `QT_HOST_PATH` at it, so without that dep the target `Qt6QmlConfig.cmake` finds no `Qt6QmlTools`/`Qt6QuickTools` (`qmlcachegen`, `qmltyperegistrar`, `qmlimportscanner`) and `find_package(Qt6 ... Qml)` fails at `do_configure`. It is a build-time host-tool dep, so it does not count against rule 6 below. Having target `qtdeclarative` in `DEPENDS` does not substitute for it.
+
+What is still unbuilt: the STM32MP257 profile (`make stm32mp2`), the Tomograph profile (`make tomograph`), `med-image-prod`, and booting the QEMU image under `runqemu`.
 
 ## Build Commands
 
