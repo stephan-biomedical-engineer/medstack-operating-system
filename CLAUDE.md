@@ -10,7 +10,9 @@ Yocto release: **Scarthgap (5.0 LTS)**. Build orchestration: Siemens **KAS**.
 
 The PoC's analogue front-end is the **TI ADS1299** (8-channel, 24-bit biopotential AFE, SPI + `DRDY`), wired to the Cortex-M4 — Linux never touches the converter, it receives sample frames over `rpmsg`. `docs/implementation_plan_ads1299.md` is the current plan for that integration and lists the changes it still requires.
 
-`docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. The other `docs/implementation_plan*.md` are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
+`docs/implementation_plan_mac.md` is the other current plan: it records the AppArmor-vs-SELinux decision for `MedOS` (outcome: **AppArmor**, via `meta-security`), the file-by-file changes it needs, and — importantly — that it is sequenced *after* the first green `kas build`, not before. Nothing in it is implemented yet.
+
+`docs/PROJECT_CONTEXT.md` is the authoritative, up-to-date architectural reference for this repo — read it before making non-trivial changes. The remaining `docs/implementation_plan*.md` (`implementation_plan.md`, `implementation_plan_EEG.md`, `implementation_plan_improvements.md`) are earlier design iterations (Portuguese; some use an older `produto`/`meta-produto-*` naming scheme that was superseded by the current `med`/`meta-med-*` naming with a 3-layer, not 2-layer, custom stack) — treat them as historical design rationale, not current spec.
 
 **Current state**: the three `meta-med-*` layers are implemented (distro policy, kernel fragment, RAUC/LUKS config, the MedFramework C++ library, both EEG applications, packagegroups and images). What has **not** happened yet is a real Yocto build: no `kas build` has ever run in this repo, so nothing here has been validated by bitbake. What *has* been validated, on the host toolchain:
 
