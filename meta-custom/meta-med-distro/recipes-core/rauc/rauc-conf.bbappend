@@ -15,6 +15,20 @@
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
+# The verification keyring. meta-rauc defaults RAUC_KEYRING_FILE to its own
+# ca.cert.pem, which is not a certificate at all - it is 358 bytes of comments
+# telling the integrator to replace it, and the recipe only bbwarns about it.
+# Shipping that means a device with no usable keyring, which does not fail at
+# build time and does not fail at boot: it fails the first time someone tries
+# to update a device in the field.
+#
+# med-keyring.pem holds the MedPlatform root CA *and* a CRL in one PEM file
+# (OpenSSL's X509_load_cert_crl_file reads both), because system.conf sets
+# check-crl=true and OpenSSL then demands a CRL for every certificate in the
+# chain. Regenerate both with scripts/med-pki.sh - the private keys it produces
+# stay outside this repository.
+RAUC_KEYRING_FILE = "med-keyring.pem"
+
 # system.conf is a plain configuration file, so bitbake does not expand
 # variables inside it. The compatible string has to match the machine the
 # bundle was built for, otherwise RAUC refuses to install - substitute it here

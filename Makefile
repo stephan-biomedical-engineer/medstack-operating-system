@@ -55,13 +55,14 @@ else
   endif
 endif
 
-.PHONY: help tool checkout layers risks parse framework service qemu stm32 \
+.PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
         tomograph shell runqemu image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
 	@echo
 	@echo "  tool        fetch + checksum the pinned kas-container $(KAS_VERSION)"
+	@echo "  pki         generate the update-signing CA (keys stay out of git)"
 	@echo "  checkout    clone the external layers, write build/conf, do not build"
 	@echo "  layers      bitbake-layers show-layers (parse only)"
 	@echo "  risks       the three known metadata risks, all parse only"
@@ -92,6 +93,12 @@ $(KAS_CONTAINER):
 # which reads like a failure when it means the opposite.
 tool: $(KAS_CONTAINER)
 	@echo "kas-container $(KAS_VERSION) present and checksummed at $(KAS_CONTAINER)"
+
+# Runs on the host, not in the container: the private keys must never end up
+# in a layer directory that gets bind-mounted into a build, and openssl is the
+# one host tool this repository does depend on.
+pki:
+	./scripts/med-pki.sh
 
 checkout: $(TOOL)
 	$(KAS) checkout $(QEMU_CFG)

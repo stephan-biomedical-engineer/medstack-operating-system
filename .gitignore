@@ -15,3 +15,9 @@ sstate-cache/
 
 # Editor / vault local state
 .obsidian/
+
+# Update-signing private keys. Only the public keyring (CA certificate + CRL)
+# is committed, and it lives in the meta-med-distro layer next to the recipe
+# that installs it. Regenerate with scripts/med-pki.sh; the ability to sign a
+# bundle devices will accept is deliberately not repository content.
+pki/
