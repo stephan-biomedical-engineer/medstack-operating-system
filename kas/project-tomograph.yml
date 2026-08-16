@@ -7,3 +7,11 @@ machine: qemux86-64
 
 target:
   - med-image-tomograph
+
+local_conf_header:
+  tomograph: |
+    # Same simulation target, same constraint as the EEG profile: no TPM, so
+    # the development key source. Declared rather than inherited - the default
+    # is "tpm2" and would fail to provision here, which is the correct outcome
+    # for a target that forgot, but a surprise is not a decision.
+    MED_DATA_KEY_SOURCE = "development"

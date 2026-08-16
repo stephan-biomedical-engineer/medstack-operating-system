@@ -16,11 +16,20 @@ local_conf_header:
     # profile - see kas/project-eeg-stm32mp2.yml.
     MED_EEG_DRIVER = "simulated"
 
-    # No LUKS volume on the simulation image, so the service is told to accept
-    # an unencrypted record store. It audits the fact that it was told to
-    # (AuditEvent::SecurityEvent), which is why this is safe to allow here and
-    # impossible to do accidentally in the field.
-    MED_EEG_REQUIRE_ENCRYPTION = "false"
+    # There IS a LUKS volume now: med-data-provision.service converts the
+    # med-data partition on first boot. Requiring encryption here is the
+    # end-to-end test of that, and it costs nothing to run - MedicalStorage
+    # resolves the device behind /data and refuses to open the store unless its
+    # dm/uuid starts with CRYPT-, so a broken provisioning step stops the
+    # service by itself instead of needing to be noticed.
+    MED_EEG_REQUIRE_ENCRYPTION = "true"
+
+    # No TPM on the simulation target. "development" is a real LUKS volume with
+    # a device-unique random key, not an absence of encryption - what it lacks
+    # is the key being sealed in hardware, so the key has to rest somewhere on
+    # the device. It protects against removal of the media, not against root on
+    # a running device, and the thesis should say exactly that.
+    MED_DATA_KEY_SOURCE = "development"
 
     # "noop", not "grub", and the choice is deliberate - see
     # docs/implementation_plan_rauc.md §3. With noop, RAUC starts, enumerates

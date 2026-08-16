@@ -1,16 +1,23 @@
 [Unit]
 Description=MedPlatform persistent data volume (/data)
-Documentation=man:crypttab(5)
+Documentation=file:/usr/libexec/medplatform/med-data-provision.sh
 DefaultDependencies=no
 Conflicts=umount.target
 Before=umount.target
-After=systemd-cryptsetup@med\x2ddata.service
-Requires=systemd-cryptsetup@med\x2ddata.service
 
-# Targets without the partition - QEMU simulation being the obvious one - skip
-# this unit instead of failing it, so a development image boots clean and
-# MedicalStorage simply reports the volume as unavailable.
-ConditionPathExists=/dev/mapper/med-data
+# med-data-provision.service provisions the LUKS volume on first boot and opens
+# it on every boot, so /dev/mapper/med-data is its product.
+Requires=med-data-provision.service
+After=med-data-provision.service
+
+# NOTE: there is deliberately no ConditionPathExists=/dev/mapper/med-data here.
+# It used to sit alongside a hard Requires= on the cryptsetup unit, and the two
+# cancelled each other out: systemd fails a unit by dependency *before* it
+# evaluates the unit's conditions, so the condition never protected anything -
+# it only made the console message confusing. With provisioning in place the
+# mapping always exists on a healthy device, and a device that cannot open
+# /data must fail visibly rather than boot and quietly write patient records to
+# the rootfs instead.
 
 [Mount]
 What=/dev/mapper/med-data

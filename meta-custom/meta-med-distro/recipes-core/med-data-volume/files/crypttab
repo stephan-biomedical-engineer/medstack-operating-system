@@ -1,9 +1,25 @@
 # MedOS encrypted data volume.
 #
-# name       source device                          key file  options
+# Intentionally empty. The med-data volume is owned by
+# med-data-provision.service, not by systemd-cryptsetup, for two reasons that
+# only became visible once the A/B disk layout was real:
 #
-# "none" as the key file means the key comes from the TPM/OP-TEE backed
-# provisioning step rather than from the rootfs - a key stored in a read-only
-# image would be identical on every unit shipped and therefore worthless.
-# "nofail" keeps a unit without the partition (QEMU) booting normally.
-med-data   /dev/disk/by-partlabel/med-data   none   luks,nofail,discard
+#  1. wic cannot write a LUKS header, so med-data arrives as plain ext4 and has
+#     to be converted on first boot. A crypttab entry makes systemd try to open
+#     it before anything has had the chance to create it, and the unit fails on
+#     every boot of an unprovisioned device.
+#
+#  2. The development key lives on the ESP, because the rootfs is an A/B slot
+#     and a key stored there would be destroyed by the first successful update.
+#     systemd-cryptsetup runs before local-fs.target, so it cannot read a key
+#     from a filesystem that is not mounted yet, and ordering the ESP mount
+#     earlier would be a dependency cycle. The provisioning unit mounts the ESP
+#     privately instead.
+#
+# The tpm2 key source will not have either problem - the key is unsealed by the
+# TPM rather than read from a filesystem - so it is expected to come back here
+# as a real entry:
+#
+#   med-data  /dev/disk/by-partlabel/med-data  none  luks,discard,tpm2-device=auto
+#
+# See docs/implementation_plan_luks.md.

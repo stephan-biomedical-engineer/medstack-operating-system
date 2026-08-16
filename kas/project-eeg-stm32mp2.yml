@@ -31,6 +31,17 @@ local_conf_header:
     # be a distro-wide constant.
     MED_BOOTLOADER = "uboot"
 
+    # The only target with hardware to seal a key in. systemd-cryptenroll needs
+    # systemd built with TPM2 support, which pulls tpm2-tss - weight that makes
+    # no sense on the simulation profile, hence here and not in med-os.conf.
+    #
+    # NOT YET EXERCISED: med-data-provision.sh fails loudly on this key source
+    # rather than falling back. See docs/implementation_plan_luks.md - and read
+    # its §7.3 first, because sealing to PCRs that cover the rootfs means a
+    # *successful* A/B update stops the device decrypting /data.
+    MED_DATA_KEY_SOURCE = "tpm2"
+    PACKAGECONFIG:append:pn-systemd = " tpm2"
+
     # Co-processor firmware is a BSP artefact. Point this at the recipe that
     # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
     # without meta-med-app ever naming a machine.

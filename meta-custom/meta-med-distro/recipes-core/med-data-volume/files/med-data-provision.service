@@ -1,0 +1,26 @@
+[Unit]
+Description=MedPlatform /data volume provisioning
+Documentation=file:/usr/libexec/medplatform/med-data-provision.sh
+DefaultDependencies=no
+
+# The partition has to exist before anything can be decided about it.
+Requires=dev-disk-by\x2dpartlabel-med\x2ddata.device
+After=dev-disk-by\x2dpartlabel-med\x2ddata.device systemd-udevd.service
+
+# This unit owns the volume: it provisions on first boot and opens it on every
+# boot, so it has to complete before anything tries to mount /data.
+Before=data.mount local-fs.target
+
+# On a machine whose layout has no med-data partition the unit is skipped
+# rather than failed. That is not a way to hide a broken volume - if the
+# partition exists and cannot be provisioned, the script fails loudly and
+# data.mount fails with it.
+ConditionPathExists=/dev/disk/by-partlabel/med-data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/medplatform/med-data-provision.sh
+
+[Install]
+WantedBy=local-fs.target
