@@ -442,7 +442,7 @@ diff &lt;(cut -d' ' -f1 $BH/med-image-eeg/installed-package-names.txt) \
   <div class="callout">
     <p>
       E isso deixou de ser inferência sobre listas de pacotes:
-      <strong><code>make check-tomograph</code> boota a imagem do tomógrafo e passa 11/11</strong>
+      <strong><code>python3 scripts/med-check.py tomograph</code> boota a imagem do tomógrafo e passa 11/11</strong>
       nas asserções de plataforma — journal persistente e selado, slots A/B resolvidos, as quatro
       partições GPT, e o volume <code>/data</code> provisionado, montado e criptografado. Um sistema
       completo, em execução, com zero aplicações instaladas.
@@ -686,10 +686,10 @@ make tomograph
 make bundle &amp;&amp; make verify-bundle
 make bundle-disk
 make check            # 21 asserções: plataforma + perfil EEG
-make check-tomograph  # 11 asserções: só as de plataforma</code></pre>
+python3 scripts/med-check.py tomograph   # 11 asserções: só as de plataforma</code></pre>
   <p>
     <code>make check</code> boota a imagem, executa 21 asserções e sai com código não-zero se
-    alguma falhar; <code>make check-tomograph</code> roda as 11 de plataforma contra o caso de
+    alguma falhar; <code>python3 scripts/med-check.py tomograph</code> roda as 11 de plataforma contra o caso de
     controle. A divisão espelha a arquitetura: as asserções de plataforma são exatamente o que um
     novo perfil de dispositivo herda sem escrever uma linha. É o que transforma “verificado uma vez” em “verificável” — o que a IEC 62304
     pede de uma atividade de verificação.

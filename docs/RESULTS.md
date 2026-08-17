@@ -76,8 +76,8 @@ runtime do MedFramework, pilha gráfica, stack de atualização, volume de dados
 de lógica de dispositivo. Uma nova classe de dispositivo parte de 206 pacotes funcionando e
 acrescenta apenas a própria aplicação.
 
-E isso deixou de ser inferência sobre listas de pacotes: **`make check-tomograph` boota a imagem do
-tomógrafo e passa 11/11** nas asserções de plataforma — journal persistente e selado, slots A/B
+E isso deixou de ser inferência sobre listas de pacotes: **`python3 scripts/med-check.py tomograph`
+boota a imagem do tomógrafo e passa 11/11** nas asserções de plataforma — journal persistente e selado, slots A/B
 resolvidos, as quatro partições GPT, e o volume `/data` provisionado, montado e criptografado. Um
 sistema completo, em execução, com zero aplicações instaladas.
 
@@ -480,7 +480,7 @@ make tomograph
 make bundle && make verify-bundle
 make bundle-disk
 make check            # 21 asserções: plataforma + perfil EEG
-make check-tomograph  # 11 asserções: só as de plataforma
+python3 scripts/med-check.py tomograph   # 11 asserções: só as de plataforma
 make stm32            # §8: o alvo físico; o artefato é inspecionado, não executado
 ```
 

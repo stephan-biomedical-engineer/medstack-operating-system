@@ -25,8 +25,11 @@ make that reliable rather than flaky:
     marker of its own, so nothing depends on matching a shell prompt that the
     guest is free to change.
 
-Usage:  make check              the EEG device profile (all assertions)
-        make check-tomograph    the tomograph profile (platform assertions only)
+Usage:  make check                            the EEG device profile (all assertions)
+        python3 scripts/med-check.py tomograph  the tomograph profile (platform
+                                                assertions only; no make target,
+                                                it is a control case and not part
+                                                of the routine loop)
 """
 
 import os
