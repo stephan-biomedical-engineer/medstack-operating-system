@@ -13,6 +13,12 @@ sstate-cache/
 *.swp
 *~
 
+# Machine-local build paths (see the "-include local.mk" hook in the Makefile).
+# Where this build host keeps downloads/, sstate-cache/ and the build directory
+# is a property of the machine, not of the project - the same reason no layer
+# names a machine.
+local.mk
+
 # Editor / vault local state
 .obsidian/
 
