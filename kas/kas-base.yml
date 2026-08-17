@@ -83,6 +83,48 @@ local_conf_header:
     # and SPDX SBOM generation.
     USER_CLASSES = "buildstats"
 
+  # Disk. Measured, not guessed: a build tree that had produced three images
+  # reached 175 GB, of which 152 GB was tmp-glibc/work - the per-recipe working
+  # directories (unpacked sources and build trees), which nothing was deleting.
+  # It filled a 468 GB disk to 99%.
+  disk: |
+    # rm_work deletes ${WORKDIR} once a recipe finishes. ${WORKDIR}/temp is kept
+    # by the class itself (RM_WORK_EXCLUDE_ITEMS = "temp"), so a failed task's
+    # logs survive; the class also flips BB_SCHEDULER to "completion", which
+    # finishes recipes rather than spreading them, so peak usage drops too.
+    INHERIT += "rm_work"
+
+    # What rm_work costs is the ability to look at what a recipe actually
+    # produced, and in this repository that is not a debugging convenience - it
+    # is how claims get checked. Two kinds of work directory are therefore kept:
+    #
+    #   images  - work/<machine>/med-image-*/1.0/rootfs is where the installed
+    #             /etc, /boot and unit files are read from. Every "verified by
+    #             inspection" statement in RESULTS.md came from there.
+    #   kernels - rule 3 says kernel policy goes in a wildcard linux-%.bbappend,
+    #             and the only way to confirm a fragment won is to read the
+    #             .config the recipe built. That check is currently open: the
+    #             fragment asks for CONFIG_TCG_TIS=y and the built config says
+    #             "m" (see the TPM note in project-eeg-stm32mp2.yml).
+    #
+    # Drop entries here if space gets tight again - the kernel ones are the
+    # expensive half.
+    RM_WORK_EXCLUDE = " \
+        med-image-eeg \
+        med-image-tomograph \
+        med-image-prod \
+        med-image-test \
+        linux-yocto \
+        linux-stm32mp \
+    "
+
+    # And a floor, because the failure mode without one is not a failed build:
+    # it is a full disk, which takes the desktop session down with it.
+    # STOPTASKS stops queueing new tasks and lets the running ones finish;
+    # HALT stops immediately. "HALT" is the current name - bitbake still accepts
+    # "ABORT" but warns that it was renamed (monitordisk.py:79).
+    BB_DISKMON_DIRS = "STOPTASKS,${TMPDIR},10G HALT,${TMPDIR},3G"
+
 env:
   # The kas-container script sets this to the path of the kas config file
   # inside the container. It is used by the med-os buildstats postbuild hook to
