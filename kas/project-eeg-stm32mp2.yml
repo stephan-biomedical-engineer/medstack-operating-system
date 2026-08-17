@@ -67,6 +67,29 @@ local_conf_header:
     MED_DATA_KEY_SOURCE = "tpm2"
     PACKAGECONFIG:append:pn-systemd = " tpm2"
 
+    # meta-tpm expects the feature it is named after, and warns once per build
+    # when it is absent ("You have included the meta-tpm layer, but 'tpm or
+    # tpm2' has not been enabled in your DISTRO_FEATURES"). What it actually
+    # gates in the scarthgap branch is two bbappends - linux-yocto_%.bbappend
+    # and linux-yocto-rt_%.bbappend, each of which is a single conditional
+    # "require linux-yocto_tpm.inc" - and no PREFERRED_VERSION at all, despite
+    # what the message says. Neither applies here: this machine's kernel is
+    # linux-stm32mp, and the TPM config it needs comes from
+    # med-kernel-features.cfg through the wildcard linux-%.bbappend, which is
+    # the portable mechanism the linux-yocto-only bbappend is not.
+    #
+    # So this line declares intent rather than fixing a defect, and that is the
+    # reason to prefer it over SKIP_META_TPM_SANITY_CHECK = "1", which would
+    # silence the message without saying anything true. Blast radius checked
+    # rather than assumed: in the layers this project pulls, only ovmf and
+    # strongswan read this feature, and neither is built.
+    #
+    # It belongs here and not in med-os.conf for the same reason
+    # MED_DATA_KEY_SOURCE does: qemux86-64 has no TPM, and a machine override
+    # in the distro layer is precisely the layer bleeding meta-med-bsp exists
+    # to prevent.
+    DISTRO_FEATURES:append = " tpm2"
+
     # Co-processor firmware is a BSP artefact. Point this at the recipe that
     # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
     # without meta-med-app ever naming a machine.
