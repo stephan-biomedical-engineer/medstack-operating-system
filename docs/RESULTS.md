@@ -4,9 +4,10 @@
 > pretende fazer; este arquivo diz o que foi **observado**, com o método ao lado de cada número.
 > `PROJECT_CONTEXT.md` continua sendo a referência arquitetural.
 >
-> **Quando**: 2026-08-16. **Onde**: `qemux86-64`, perfis `med-image-eeg` e `med-image-tomograph`.
-> A medição de reuso (§2) é sobre o commit `f0e4427`; as demais foram tomadas no mesmo dia, sobre
-> os commits que as introduziram.
+> **Quando**: 2026-08-16, exceto a §8 (portabilidade para o STM32MP257), de 2026-08-17.
+> **Onde**: `qemux86-64`, perfis `med-image-eeg` e `med-image-tomograph`; a §8 em
+> `stm32mp25-disco`. A medição de reuso (§2) é sobre o commit `f0e4427`; as demais foram tomadas
+> no mesmo dia, sobre os commits que as introduziram.
 >
 > **Regra deste arquivo**: cada número traz o comando que o produziu e o que ele **não** significa.
 > Um número sem limite declarado é mais perigoso que nenhum número.
@@ -293,23 +294,182 @@ decifrar os próprios prontuários. Isso já era um risco conhecido do caminho T
 
 ---
 
-## 8. O que **não** foi medido
+## 8. Portabilidade para o alvo físico (STM32MP257)
+
+`make stm32` constrói **o mesmo** `med-image-eeg` para `MACHINE=stm32mp25-disco` (Cortex-A35,
+aarch64). É o teste da afirmação central da §2 vista pelo outro eixo: a §2 mede reuso entre classes
+de dispositivo na mesma máquina; esta mede reuso da mesma classe entre máquinas. Se alguma camada
+acima do BSP soubesse em que placa está, é aqui que apareceria.
+
+### Método
+
+```bash
+make stm32
+W=build/tmp-glibc/deploy/images/stm32mp25-disco/med-image-eeg-stm32mp25-disco.rootfs.wic
+sfdisk -l $W                                          # tabela de partições
+dd if=$W bs=512 skip=34    count=1 | head -c8 | xxd   # magic do TF-A, em 17 KiB
+dd if=$W bs=512 skip=2082  count=1 | head -c8 | xxd   # magic do FIP
+dd if=$W bs=512 skip=19490 count=131072 > bootfs.ext4
+debugfs -R "ls -l /" bootfs.ext4                      # o que o U-Boot vai encontrar
+# nomes e PARTUUID lidos direto das entradas do GPT (as do sfdisk não trazem o nome)
+BH=build/buildhistory/images
+diff <(grep -v ^kernel-module- $BH/qemux86_64/glibc/med-image-eeg/installed-package-names.txt) \
+     <(grep -v ^kernel-module- $BH/stm32mp25_disco/glibc/med-image-eeg/installed-package-names.txt)
+grep -rnE ':(qemux86-64|stm32mp[0-9]+|stm32mp25-disco)\b' meta-custom/meta-med-{distro,framework,app}
+```
+
+Nenhum número abaixo vem de "o build terminou". Todos vêm de ler o `.wic` produzido ou o
+buildhistory — pela regra da §1.
+
+### Resultado — o metadado atravessa a fronteira
+
+`5364` tasks, todas com sucesso. `TARGET_SYS = aarch64-med-linux`,
+`TUNE_FEATURES = "aarch64 crc cortexa35"`. Artefato: `med-image-eeg-stm32mp25-disco.rootfs.wic`,
+`2.761.966.592` bytes.
+
+**Nenhum arquivo** de `meta-med-app`, `meta-med-framework` ou `meta-med-distro` difere entre os dois
+alvos, e o `grep` de overrides de máquina nas três camadas retorna **zero ocorrências**.
+
+Contado com precisão, o que difere entre construir para QEMU e para o STM32MP257 é:
+
+* **quatro variáveis** com valores distintos — `MED_EEG_DRIVER` (`simulated`/`rpmsg`),
+  `MED_BOOTLOADER` (`noop`/`uboot`), `MED_DATA_KEY_SOURCE` (`development`/`tpm2`) e `MED_WKS_FILE`;
+* **um arquivo de conteúdo de camada**: o `.wks` que a quarta variável seleciona, em `meta-med-bsp`;
+* mais o repositório do BSP no arquivo kas do alvo (`meta-st-stm32mp`), que é a definição de um BSP.
+
+A tabela em `PROJECT_CONTEXT.md` §4.1 lista seis variáveis de adaptação, não quatro: as outras duas
+não entram nesta contagem porque não diferem — `MED_EEG_REQUIRE_ENCRYPTION` vale `"true"` nos dois
+alvos e `MED_AMP_FIRMWARE` está sem valor em ambos (é um gancho declarado, não um valor). É esse
+número — quatro variáveis e um arquivo — que a tese pode afirmar, não "portabilidade" no abstrato.
+
+### Resultado — composição da imagem
+
+Excluindo `kernel-module-*`, pela ressalva logo abaixo:
+
+| | Pacotes | Exclusivos deste alvo |
+|---|---|---|
+| Comuns aos dois alvos | **201** | — |
+| `qemux86-64` | 207 | 6 |
+| `stm32mp25-disco` | 216 | 15 |
+
+Os 15 exclusivos do STM32MP257 rastreiam, um por um, para o kernel ou para uma variável de adaptação
+declarada — nenhum é vazamento de plataforma:
+
+| Pacotes | Origem |
+|---|---|
+| `kernel-6.6.129`, `kernel-image-image.gz-*`, `kernel-devicetree`, `kernel-modules` | BSP (`MACHINE_ESSENTIAL_EXTRA_RDEPENDS` da ST) |
+| `stm32mp-extlinux`, `u-boot-stm32mp-splash` | BSP: caminho de boot da placa |
+| `libubootenv0`, `libubootenv-bin`, `u-boot-fw-config-stm32mp`, `libyaml-0-2` | `MED_BOOTLOADER = "uboot"`, via RAUC |
+| `tpm2-tss`, `libtss2`, `libtss2-mu0`, `libtss2-tcti-device0` | `MED_DATA_KEY_SOURCE = "tpm2"`, via `PACKAGECONFIG` do systemd |
+| `rpmsg-tools` | BSP (`st-machine-common-stm32mp.inc:583`), **não** o `packagegroup-med-amp` |
+
+Os 6 exclusivos do QEMU são simétricos: `kernel-6.6.144-yocto-standard` e dois pacotes de imagem de
+kernel, mais `libdrm-intel1`, `libpciaccess0` e `v86d` — gráficos x86 do BSP do QEMU.
+
+**Ressalva que impede a comparação ingênua**: contando tudo, são `209` pacotes no QEMU contra
+`1270` no STM32MP257, e `IMAGESIZE` vai de `275.544 KB` para `338.572 KB` (+22,9%). Isso **não** é
+a plataforma crescendo: são `1054` pacotes `kernel-module-*` do kernel da ST contra `2` do
+`linux-yocto`. Não relate "a imagem cresceu 23% ao portar" sem dizer que o crescimento é o BSP
+empacotando módulos.
+
+### Resultado — o disco, por inspeção
+
+| # | Partição | Setores | Tamanho | Conteúdo verificado |
+|---|---|---|---|---|
+| 1–2 | `fsbla1`, `fsbla2` | 512 | 256K | magic `STM2` (`5354 4d32`) no setor 34 = 17 KiB, onde o ROM code procura o FSBL |
+| 3–4 | `metadata1`, `metadata2` | 512 | 256K | metadata de firmware-update do TF-A |
+| 5–6 | `fip-a`, `fip-b` | 8192 | 4M | magic do FIP `0xaa640001` no setor 2082 |
+| 7 | `u-boot-env` | 1024 | 512K | vazia, por projeto |
+| 8 | `bootfs` | 131072 | 64M | `Image.gz` (11.219.612 B), `extlinux/extlinux.conf`, 3 devicetrees |
+| 9 | `med-root-a` | **2097152** | 1G | `ext4`, label `med-root-a` |
+| 10 | `med-root-b` | **2097152** | 1G | `ext4`, label `med-root-b`, vazia |
+| 11 | `med-data` | 1048576 | 512M | `ext4`, label `med-data` |
+
+Três verificações são o motivo de a inspeção existir:
+
+* **Slots simétricos**: `2097152` setores exatos cada, não "1G" arredondado. É a propriedade que a
+  §6 exige e que já saiu errada uma vez, quando `--size` virou `1,33 GB` num slot e `1,0 GB` no
+  outro sem falhar build nenhum.
+* **`PARTUUID` de `med-root-a` = `e91c4e10-16e6-4c0e-bd0e-77becf4a3582`**, igual ao
+  `root=PARTUUID=` do `extlinux.conf` que o BSP gera a partir de `DEVICE_PARTUUID_ROOTFS:mmc0`.
+  Qualquer outro valor produz um kernel em panic sem raiz — e nada no build reportaria.
+* **`med-data` em `ext4` com label `med-data`**: exatamente o par que o safeguard da §7 exige para
+  distinguir "nunca provisionado" de "cabeçalho LUKS corrompido".
+
+### O que isso **não** significa
+
+1. **Não significa que o dispositivo boota.** Nada foi gravado em cartão nem energizado. Isto é
+   "constrói, e o disco está correto por inspeção" — que pela §1 é precisamente o tipo de
+   afirmação que não substitui execução.
+2. **Não significa A/B funcional no hardware.** `bootfs` é compartilhada pelos dois slots e o
+   `extlinux.conf` fixa o PARTUUID do slot A: um dispositivo que o RAUC marcou "boot B" ainda boota
+   A. Falta um script de U-Boot lendo `BOOT_ORDER`/`BOOT_<slot>_LEFT`; a partição `u-boot-env`
+   existe no disco para isso. A frase da §6 continua valendo sem alteração — *a política A/B é
+   validada no QEMU, a integração com o bootloader não foi validada em lugar nenhum*.
+3. **Não significa `/data` criptografado no alvo.** `MED_DATA_KEY_SOURCE = "tpm2"` recusa
+   provisionar em vez de existir pela metade, e com `MED_EEG_REQUIRE_ENCRYPTION = "true"` o serviço
+   de aquisição não sobe. É o comportamento projetado — falhar alto em vez de parecer criptografado
+   — mas a consequência medível é que **no STM32MP257 a aplicação hoje não roda**.
+4. **Não significa que o RAUC consegue marcar um slot.** O backend `uboot` chama `fw_setenv`, que lê
+   `/etc/fw_env.config`; `u-boot-fw-config-stm32mp` instala `fw_env.config.mmc`, `.nand` e `.nor` e
+   **nunca** esse nome. Achado por inspeção do manifest, não observado em execução.
+5. **Os `.tsv` de flashlayout gerados não descrevem este disco.** O BSP os produz a partir do layout
+   da ST (`rootfs`/`vendorfs`/`userfs`, um único rootfs, sem `med-root-*` e sem `med-data`).
+   Gravar por eles produz um disco que o MedOS não usa: grave o `.wic`.
+
+### O sétimo defeito da família da §1
+
+O caminho até este resultado acrescentou um defeito ao conjunto de seis da §1, da mesma espécie e
+com a mesma causa: **uma suposição documentada que nenhum build verifica**. O
+`med-partitions.wks` afirmava, no próprio cabeçalho, que BSPs com TF-A em offsets fixos "trazem seu
+próprio `WKS_FILE` a partir da configuração de máquina". O `meta-st-stm32mp` não traz — define
+`WKS_FILE_DEPENDS` e deixa `#WKS_FILE += "${OPTEE_WIC_FILE}"` comentado. O default da distro venceu
+por ausência de adversário e o `do_image_wic` tentou montar uma ESP EFI/GRUB numa placa sem ESP,
+falhando em `install: cannot stat '.../Image.gz'` — a ST publica o kernel em
+`${DEPLOY_DIR_IMAGE}/kernel/`, então o nome procurado não existe em lugar nenhum. **O sintoma
+nomeava o kernel; o defeito era o layout inteiro.**
+
+A correção estrutural foi criar `meta-med-bsp` (prioridade 7) e mover para lá os dois `.wks` e os
+`QB_*`, porque a auditoria que seguiu mostrou que a fronteira já havia sido cruzada duas vezes sem
+falhar build nenhum: `med-partitions.wks` fixava `loader=grub-efi` atrás de um nome de arquivo
+genérico, e `med-image-base.bb` carregava `QB_KERNEL_ROOT = "/dev/vda2"` duas linhas abaixo de um
+comentário afirmando ser agnóstico a dispositivo. **Nomes genéricos sobre conteúdo específico de
+máquina** são o mecanismo comum aos dois casos, e é o que a regra 1 do `CLAUDE.md` passou a nomear.
+
+Revalidação após a mudança: `make qemu` verde, `make check` `21/21`, `make stm32` verde, GPT do
+QEMU idêntico ao de antes do rename, `bitbake -p` sem warnings, e `MED_WKS_FILE` resolvendo por
+máquina a partir da camada nova. A precedência da indireção `_DEFAULT` foi verificada por injeção de
+falha, não por raciocínio: `MED_WKS_FILE = ""` num fragmento kas **sobrepõe** a camada e dispara o
+guard de build — o que um `MED_WKS_FILE:<machine> =` direto não permitiria, pois venceria
+silenciosamente o arquivo de projeto.
+
+---
+
+## 9. O que **não** foi medido
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
 
 - **Caminho AMP / `rpmsg` / Cortex-M4** — o QEMU não tem co-processador. O driver medido é o
-  `simulated`.
+  `simulated`. O alvo que tem co-processador (§8) nunca foi energizado, então o driver `rpmsg` não
+  foi exercitado em nenhum dos dois.
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
-- **Integração com bootloader e fallback A/B em boot falho** — §6.
-- **TPM, secure boot, OP-TEE** — nenhum presente.
+- **Integração com bootloader e fallback A/B em boot falho** — §6. A §8 não muda isso: no
+  STM32MP257 a seleção de slot **não está implementada** (`bootfs` compartilhada, `extlinux.conf`
+  fixando o slot A), e no QEMU o mecanismo é outro.
+- **Qualquer execução no STM32MP257** — a §8 mede o artefato construído e o disco por inspeção.
+  Nada foi gravado em cartão nem energizado: não há boot, não há `/data` provisionado (a fonte de
+  chave `tpm2` recusa), não há aplicação rodando e o RAUC não conseguiria marcar um slot
+  (`/etc/fw_env.config` não existe na imagem).
+- **TPM, secure boot, OP-TEE** — nenhum exercitado. O OP-TEE está no FIP do disco da §8, mas nunca
+  executou.
 - **A HMI Qt em execução** — exige `NATIVE=1` com runqemu gráfico; sob `nographic` o
   `weston.service` falha por projeto.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.
-- **Alvo STM32MP257** — nunca construído.
+- **Perfil tomógrafo no STM32MP257** — nunca construído; a §2 é inteira sobre `qemux86-64`.
 
 ---
 
-## 9. Reprodutibilidade
+## 10. Reprodutibilidade
 
 Todos os números acima saem de:
 
@@ -321,9 +481,10 @@ make bundle && make verify-bundle
 make bundle-disk
 make check            # 21 asserções: plataforma + perfil EEG
 make check-tomograph  # 11 asserções: só as de plataforma
+make stm32            # §8: o alvo físico; o artefato é inspecionado, não executado
 ```
 
-**A verificação de runtime é automatizada.** `make check` boota a imagem, executa 20 asserções e
+**A verificação de runtime é automatizada.** `make check` boota a imagem, executa 21 asserções e
 sai com código não-zero se alguma falhar — o que transforma "verificado uma vez" em "verificável",
 que é o que a IEC 62304 pede de uma atividade de verificação.
 
