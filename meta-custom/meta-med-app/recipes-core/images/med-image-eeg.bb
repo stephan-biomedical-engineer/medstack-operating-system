@@ -39,6 +39,7 @@ IMAGE_INSTALL:append = " ${MED_EEG_INSTALL}"
 IMAGE_ROOTFS_EXTRA_SPACE = "262144"
 
 # Sizing note kept with the profile that has to live inside it: this rootfs
-# measures ~609 MiB against the 1024 MiB each slot gets in med-partitions.wks,
+# measures ~609 MiB against the 1024 MiB each slot gets in every med-partitions
+# layout (meta-med-bsp/wic/),
 # i.e. about 60% used. The wic and QEMU boot settings themselves are in
 # med-image-base.bb - they are platform properties, not EEG ones.

@@ -37,6 +37,17 @@ repos:
     branch: "6.8"
     path: "layers/meta-qt6"
 
+  # Order here is cosmetic - bitbake resolves precedence from
+  # BBFILE_PRIORITY - but it is written bottom-up to match the MedStack
+  # diagram: board adaptation (7), OS policy (8), framework (9), apps (10).
+  #
+  # meta-med-bsp holds everything that is true of a board rather than of the
+  # platform: the .wks layouts and the QEMU boot path. It is the only custom
+  # layer permitted to name a machine, a bootloader or a device node, which is
+  # what lets the three above it be counted as reused unchanged per board.
+  meta-med-bsp:
+    path: "meta-custom/meta-med-bsp"
+
   meta-med-distro:
     path: "meta-custom/meta-med-distro"
 

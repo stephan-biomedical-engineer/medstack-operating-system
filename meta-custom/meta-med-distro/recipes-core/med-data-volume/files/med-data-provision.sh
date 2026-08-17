@@ -2,7 +2,8 @@
 #
 # MedOS: first-boot provisioning of the encrypted /data volume.
 #
-# wic cannot write a LUKS header, so med-partitions.wks creates med-data as a
+# wic cannot write a LUKS header, so every med-partitions layout creates
+# med-data as a
 # plain ext4 filesystem and this script converts it on first boot. It runs on
 # every boot, provisions once, and opens the volume every time.
 #
@@ -14,7 +15,7 @@ DEV=/dev/disk/by-partlabel/med-data
 MAPPER=med-data
 KEY_SOURCE="@MED_DATA_KEY_SOURCE@"
 
-# The pristine filesystem that med-partitions.wks writes. This pair is the
+# The pristine filesystem the med-partitions layouts write. This pair is the
 # whole basis for deciding that a device has never been provisioned - see "the
 # safeguard" below.
 PRISTINE_TYPE=ext4

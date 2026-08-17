@@ -67,26 +67,36 @@ MED_VERIFICATION_TOOLS ?= ""
 
 IMAGE_INSTALL:append = " ${MED_VERIFICATION_TOOLS}"
 
-# The A/B disk. This belongs to MedOS, not to any device class: it is the same
-# layout that makes rauc, med-data-volume and the crypttab above mean anything,
-# and without it /dev/disk/by-partlabel/med-root-{a,b} does not exist and RAUC
-# resolves no slots. WKS_FILE comes from MED_WKS_FILE in med-os.conf.
+# That every MedOS device has an A/B disk belongs to MedOS: it is what makes
+# rauc, med-data-volume and the crypttab above mean anything, and without it
+# /dev/disk/by-partlabel/med-root-{a,b} does not exist and RAUC resolves no
+# slots. *Which* disk is a board fact, and this recipe must not know it -
+# WKS_FILE comes from MED_WKS_FILE, whose per-machine value lives in
+# meta-med-bsp.
 IMAGE_FSTYPES += "wic wic.bmap"
 
-# How that disk boots under QEMU. Also device-class agnostic - "an EEG boots
-# differently from a tomograph" would be a bug, not a feature.
-#
-# runqemu's default is to treat a .wic as a self-booting VM image, which for
-# the EFI/GRUB layout in med-partitions.wks would mean supplying OVMF.
-# "no-kernel-in-fs" makes it treat the disk as a rootfs and load the kernel
-# directly instead, so QEMU gets a real partitioned disk without a bootloader
-# being involved at all.
-#
-# QB_KERNEL_ROOT is coupled to med-partitions.wks, which puts the ESP first and
-# med-root-a second. A BSP that supplies its own WKS_FILE also supplies its own
-# boot path and does not use these; they are inert on a non-QEMU machine.
-QB_FSINFO = "wic:no-kernel-in-fs"
-QB_KERNEL_ROOT = "/dev/vda2"
+# How the disk boots used to be here too, as QB_FSINFO and
+# QB_KERNEL_ROOT = "/dev/vda2" - a virtio device path and a partition index from
+# one particular .wks, two lines under a comment asserting that this recipe is
+# device-class agnostic. Both statements were true and they belonged in
+# different layers; the QB_* pair is now in meta-med-bsp next to the layout it
+# is coupled to.
+
+# A machine with no disk layout produces a wic failure with no useful cause, so
+# say the cause here. The check is scoped to images that actually build a wic,
+# but it does fire at parse time for any build of such an image - deliberately:
+# an unadapted machine is a misconfiguration, and this repository's rule is that
+# a misconfiguration fails at build time rather than on a device.
+python () {
+    if 'wic' in (d.getVar('IMAGE_FSTYPES') or '').split() and not d.getVar('MED_WKS_FILE'):
+        bb.fatal("MED_WKS_FILE is empty for MACHINE=%s: no A/B disk layout is "
+                 "declared for this machine. Add a MED_WKS_FILE_DEFAULT:%s to "
+                 "meta-med-bsp/conf/layer.conf pointing at a .wks in that "
+                 "layer's wic/ directory (see med-partitions-efi.wks for the "
+                 "policy every layout must keep), or set MED_WKS_FILE in the "
+                 "KAS project file."
+                 % (d.getVar('MACHINE'), d.getVar('MACHINE')))
+}
 
 # Enough headroom for the journal, a downloaded bundle and a session of
 # acquisition data before /data is mounted.

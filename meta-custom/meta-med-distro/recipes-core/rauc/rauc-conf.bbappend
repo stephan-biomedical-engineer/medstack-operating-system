@@ -30,7 +30,8 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 RAUC_KEYRING_FILE = "med-keyring.pem"
 
 # The bootloader is a property of the machine, not of the distro. qemux86-64
-# boots through GRUB/EFI (see med-partitions.wks) and the STM32MP257 through
+# boots through GRUB/EFI (see meta-med-bsp/wic/med-partitions-efi.wks) and the
+# STM32MP257 through
 # U-Boot; naming either one in this layer would make the OS policy layer carry
 # BSP knowledge, which is the coupling MED_EEG_DRIVER exists to avoid for the
 # acquisition front-end. Same treatment, same reason.

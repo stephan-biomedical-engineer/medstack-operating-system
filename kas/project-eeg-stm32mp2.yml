@@ -3,13 +3,31 @@ header:
   includes:
     - kas/kas-base.yml
 
-machine: stm32mp257f-dk
+# meta-st-stm32mp names machines after the *board family*, not the part: the
+# STM32MP257F-DK is built with MACHINE=stm32mp25-disco, which sets
+# STM32MP_DT_FILES_SDCARD = "stm32mp257f-dk" and picks that device tree.
+# "stm32mp257f-dk" is a device-tree name, not a machine, and bitbake's sanity
+# checker rejects it outright.
+machine: stm32mp25-disco
 
 repos:
   meta-st-stm32mp:
     url: "https://github.com/STMicroelectronics/meta-st-stm32mp.git"
     branch: "scarthgap"
     path: "layers/meta-st-stm32mp"
+
+  # tpm2-tss is not in poky or meta-openembedded - it lives in meta-security's
+  # meta-tpm sublayer, and without it the PACKAGECONFIG below makes systemd
+  # (and therefore dbus, rauc and the whole image) unbuildable. Only meta-tpm
+  # is selected here; meta-security proper is what implementation_plan_mac.md
+  # will add for AppArmor, from this same repo. meta-tpm's LAYERDEPENDS are
+  # core, openembedded-layer and meta-python, all already present.
+  meta-security:
+    url: "https://git.yoctoproject.org/meta-security"
+    branch: "scarthgap"
+    path: "layers/meta-security"
+    layers:
+      meta-tpm:
 
 target:
   - med-image-eeg
@@ -30,6 +48,13 @@ local_conf_header:
     # (TF-A/U-Boot live at fixed offsets), which is why the bootloader cannot
     # be a distro-wide constant.
     MED_BOOTLOADER = "uboot"
+
+    # No MED_WKS_FILE here on purpose. The disk this board needs - TF-A, FIP and
+    # u-boot-env at the offsets the ROM code searches, then the same A/B slots
+    # as every other MedOS machine - is declared by meta-med-bsp, keyed on
+    # MACHINE. Naming the file here would work and would put a board fact in two
+    # places; this file's job is to name the machine and let the adaptation layer
+    # answer. Override it here only to build this machine with a different disk.
 
     # The only target with hardware to seal a key in. systemd-cryptenroll needs
     # systemd built with TPM2 support, which pulls tpm2-tss - weight that makes

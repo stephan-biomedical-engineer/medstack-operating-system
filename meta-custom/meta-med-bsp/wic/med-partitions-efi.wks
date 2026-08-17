@@ -1,7 +1,8 @@
-# short-description: MedPlatform GPT A/B layout with a separate encrypted /data
+# short-description: MedPlatform A/B layout for EFI/GRUB machines
 # long-description:
-# Reference disk layout for MedOS. Two identical rootfs slots (RAUC A/B) plus a
-# persistent data partition that no update ever touches.
+# The A/B disk for machines that boot through GRUB/EFI: qemux86-64 and generic
+# x86 hardware. Two identical rootfs slots (RAUC A/B) plus a persistent data
+# partition that no update ever touches.
 #
 #   +------+-------------+-------------+------------------+
 #   | ESP  | med-root-a  | med-root-b  |     med-data     |
@@ -13,12 +14,20 @@
 # stable across machines, which is why nothing above the BSP has to know the
 # actual block device names.
 #
-# Scope: this layout targets EFI/GRUB machines (qemux86-64 and generic x86
-# hardware). Vendor BSPs that need TF-A/U-Boot at fixed offsets - the
-# STM32MP257 among them - ship their own WKS_FILE from the machine
-# configuration, and med-os.conf sets WKS_FILE with "?=" so the BSP wins.
-# Bootloader placement is a BSP concern by definition; the A/B *policy* above
-# is the part that stays portable.
+# Naming and location, both of which changed for a reason. This file was
+# meta-med-distro/wic/med-partitions.wks: a generic name, in the OS policy
+# layer, hardcoding "loader=grub-efi" and "console=ttyS0,115200". It also
+# claimed that vendor BSPs needing TF-A/U-Boot at fixed offsets "ship their own
+# WKS_FILE from the machine configuration" - false for meta-st-stm32mp, which
+# sets only WKS_FILE_DEPENDS - so this layout won by forfeit on the STM32MP257
+# and built an EFI/GRUB ESP for a board with no ESP. Two lessons, both encoded
+# in where you are reading this: a disk layout names a bootloader, so it lives
+# in meta-med-bsp and not one layer up; and do not assume a vendor BSP declares
+# its own disk - check.
+#
+# The A/B *policy* here - two slots, identically sized, med-data outside them -
+# is meta-med-distro's, and is what stays portable. See
+# med-partitions-stm32mp2.wks.in for the same policy over a TF-A boot chain.
 #
 # The bootloader RAUC talks to is declared separately, by MED_BOOTLOADER in the
 # KAS project file (see rauc-conf.bbappend). Keep the two in agreement: this

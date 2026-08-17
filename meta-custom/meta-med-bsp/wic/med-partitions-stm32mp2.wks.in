@@ -1,0 +1,120 @@
+# short-description: MedPlatform A/B layout for STM32MP2 (TF-A/FIP boot chain)
+# long-description:
+# The STM32MP257 counterpart of med-partitions.wks. Same A/B *policy* - two
+# identical rootfs slots plus a /data volume no update touches - carried by the
+# boot chain this SoC's ROM code actually requires.
+#
+#  +--------+--------+-----------+-----------+-------+-------+--------+------------+------------+----------+
+#  | fsbla1 | fsbla2 | metadata1 | metadata2 | fip-a | fip-b | u-boot | bootfs     | med-root-a | med-root-b | med-data |
+#  | TF-A   | TF-A   |           |           |       |       |  -env  | kernel+dtb | (active)   | (inactive) | LUKS     |
+#  +--------+--------+-----------+-----------+-------+-------+--------+------------+------------+------------+----------+
+#
+# Why this file exists
+# --------------------
+# med-partitions-efi.wks - then called med-partitions.wks, and then living in
+# meta-med-distro - said that vendor BSPs needing TF-A/U-Boot at fixed offsets
+# "ship their own WKS_FILE from the machine configuration, and med-os.conf sets
+# WKS_FILE with '?=' so the BSP wins". For meta-st-stm32mp that is false, and
+# the assumption cost a build: stm32mp25-disco.conf sets WKS_FILE_DEPENDS but
+# leaves WKS_FILE itself commented out ("#WKS_FILE += ${OPTEE_WIC_FILE}"),
+# offering sdcard-stm32mp257f-dk-optee-example.wks.in only as an example to
+# copy. So the distro default won by forfeit, and do_image_wic tried to build
+# an EFI/GRUB ESP on a board that has no ESP - failing on the one artefact that
+# happens not to exist under that name, the kernel:
+#
+#   install: cannot stat '.../stm32mp25-disco/Image.gz': No such file or directory
+#
+# (meta-st deploys the kernel to ${DEPLOY_DIR_IMAGE}/kernel/, not to its root.
+# That missing file was the symptom; the wrong layout was the defect.)
+#
+# This file names a board in almost every line, which is exactly why
+# meta-med-bsp exists: nothing in meta-med-distro, meta-med-framework or
+# meta-med-app may do that. Selection is by machine override on
+# MED_WKS_FILE_DEFAULT in this layer's conf/layer.conf - the board fact and the
+# board file are declared in the same layer, and the KAS project file only has
+# to name the machine.
+#
+# What is NOT solved here
+# -----------------------
+# The disk is A/B-shaped and slot A boots. Slot *selection* is not implemented:
+# bootfs is shared by both slots, and the extlinux.conf the BSP generates
+# hardcodes root=PARTUUID=${DEVICE_PARTUUID_ROOTFS:SDCARD} - slot A - so a
+# device that RAUC has marked "boot B" still boots A. Closing that means a
+# U-Boot boot script that reads BOOT_ORDER/BOOT_<slot>_LEFT, which is what the
+# u-boot-env partition below is for and what MED_BOOTLOADER = "uboot" promises.
+# Until then, "the A/B policy is validated on QEMU, the bootloader integration
+# on hardware" remains a statement about work still to do.
+
+# ---------------------------------------------------------------------------
+# Boot chain. Offsets and part-types are the SoC's contract, not a preference:
+# the ROM code searches GPT for these partition *names*, in this order, and
+# fsbla1 must start at 17 KiB. Everything in this block is copied from
+# meta-st-stm32mp/wic/sdcard-stm32mp257f-dk-optee-example.wks.in, deliberately
+# verbatim - a "cleanup" here is a brick.
+#
+# The stm32mp257f-dk (internal-devicetree) variant of TF-A/FIP is the one ST's
+# own example names, and it is what fixes which U-Boot devicetree is in the
+# FIP, hence which /boot/*.dtb U-Boot then loads. The external-DT variants
+# (-ca35tdcid-ostl, -m33-examples) are also deployed; the m33 one is what the
+# ADS1299 firmware work will need, and switching is these six lines.
+# ---------------------------------------------------------------------------
+
+# FSBL, aka TF-A BL2. Two copies: the ROM falls back to the second.
+part fsbla1 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla1 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K --align 17
+part fsbla2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla2 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K
+
+# TF-A firmware-update metadata: which FIP the ROM tries, and its try counter.
+# This is the SoC's own A/B mechanism for the *bootloader*, one layer below the
+# rootfs A/B this file's slots implement.
+part metadata1 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=metadata1 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/metadata.bin" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K
+part metadata2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=metadata2 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/metadata.bin" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K
+
+# FIP: OP-TEE + U-Boot. Two copies, same reason. The --uuid values are fixed
+# because the metadata above refers to the FIP slots by UUID.
+part fip-a --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-a --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 4fd84c93-54ef-463f-a7ef-ae25ff887087
+part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 09c54952-d5bf-45af-acee-335303766fb3
+
+# U-Boot environment. Created empty, and it is where RAUC's uboot backend will
+# read and write BOOT_ORDER: the image already installs libubootenv-bin and
+# u-boot-fw-config-stm32mp, whose fw_env.config.mmc addresses this partition as
+# /dev/disk/by-partlabel/u-boot-env - so the partition *name* is the interface,
+# exactly like med-root-a/b below.
+part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K
+
+# ---------------------------------------------------------------------------
+# Boot filesystem: kernel, devicetrees and extlinux.conf, all of which the BSP
+# has already installed into ${IMAGE_ROOTFS}/boot (kernel-image-image.gz,
+# kernel-devicetree and stm32mp-extlinux). U-Boot's distro boot finds
+# /extlinux/extlinux.conf on the active partition.
+#
+# Shared between both rootfs slots, which is the limitation named at the top of
+# this file: an update writes med-root-b but the kernel it boots with comes
+# from here. Sizing follows ST's example at 64 MiB against a ~12 MiB payload.
+# ---------------------------------------------------------------------------
+part /boot --source rootfs --rootfs-dir=${IMAGE_ROOTFS}/boot --part-name=bootfs --label bootfs --ondisk mmcblk --fstype=ext4 --active --fixed-size 64M --extra-space 0
+
+# ---------------------------------------------------------------------------
+# The A/B slots. Everything below is the same policy as med-partitions.wks,
+# and for the same reasons - see that file for why --fixed-size rather than
+# --size (wic multiplies --size by 1.3 only on a partition that has a
+# --source, which silently produced asymmetric slots) and why the GPT
+# partition names are the only thing rauc-conf and crypttab ever refer to.
+#
+# --uuid is the one addition. The BSP generates extlinux.conf with
+# root=PARTUUID=${DEVICE_PARTUUID_ROOTFS:SDCARD}, which for mmc0 is the
+# constant below; a slot A with any other PARTUUID produces a kernel that
+# panics with no root filesystem. Slot B has no such constraint yet precisely
+# because nothing boots it yet.
+part / --source rootfs --part-name med-root-a --label med-root-a --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024 --uuid e91c4e10-16e6-4c0e-bd0e-77becf4a3582
+
+# Written by RAUC, never by the build. Identical in size to slot A is a hard
+# requirement: a bundle built from a larger slot A does not fit.
+part --part-name med-root-b --label med-root-b --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024
+
+# LUKS container for patient data. Created as plain ext4 and converted on first
+# boot by med-data-provision.service - on this machine with
+# MED_DATA_KEY_SOURCE = "tpm2", which refuses to provision rather than falling
+# back to a key that is not one.
+part --part-name med-data --label med-data --ondisk mmcblk --fstype=ext4 --align 1024 --size 512
+
+bootloader --ptable gpt
