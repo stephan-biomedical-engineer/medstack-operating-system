@@ -236,8 +236,14 @@ roots, and without the partition table RAUC resolves no slots at all.
 
 * `docs/RESULTS.md` — measured evidence. Every number carries the command that produced it and what
   it does **not** mean. Read before claiming anything about runtime behaviour.
+* `docs/BRINGUP_STM32MP2.md` — engineering record of the port to the physical target: what broke,
+  what the real cause was (rarely the symptom), and what proved each fix. Also the host-side work the
+  port forced — disk exhaustion, `rm_work`, the external cache disk — and the `tpm2` finding. Read it
+  before repeating any of it.
 * `docs/implementation_plan_rauc.md`, `docs/implementation_plan_luks.md` — current, **implemented**;
-  their §8 sections record measured results.
+  their §8 sections record measured results. The LUKS plan's §9 records a second execution: key
+  custody became a per-machine fact, and `tpm2` turned out to be unreachable in the current layer
+  set, so custody stays development-grade on **both** targets.
 * `docs/implementation_plan_mac.md`, `docs/implementation_plan_ads1299.md` — current, **not yet
   implemented**.
 * `docs/implementation_plan.md`, `_EEG.md`, `_improvements.md` — earlier design iterations, kept as

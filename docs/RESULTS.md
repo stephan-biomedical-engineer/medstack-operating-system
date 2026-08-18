@@ -282,10 +282,32 @@ to format over what may be patient data. This needs deliberate intervention.
 on the unencrypted backing of /data` e saiu; `/data` ficou **vazio**, zero registros. O dispositivo
 degradou para *não gravar*, não para *gravar em claro*.
 
-**Limite**: a fonte de chave medida é `development` — LUKS real com chave aleatória por unidade,
-mas a chave repousa na ESP porque não há TPM no alvo de simulação. **Protege contra remoção física
-da mídia, não contra root no dispositivo ligado.** O caminho `tpm2` recusa provisionar em vez de
-existir pela metade, e fica para o STM32MP257.
+**Limite** (corrigido em 2026-08-17; a redação anterior estava invertida): a fonte de chave medida
+é `development` — LUKS2 real, com chave aleatória de 256 bits única por dispositivo. Mas a chave
+mora numa partição **do mesmo disco** onde está o volume cifrado (a ESP aqui, a `bootfs` no
+STM32MP257). Quem leva a mídia leva as duas coisas.
+
+Este arquivo afirmava "protege contra remoção física da mídia, não contra root no dispositivo
+ligado", e isso está trocado. O que a chave de desenvolvimento dá é:
+
+* contra **exfiltração parcial** — cópia apenas da partição `med-data`, ou um backup de `/data` — o
+  texto cifrado sozinho é inútil;
+* contra **root no dispositivo ligado**, alguma coisa, via a recusa do `MedicalStorage` em gravar em
+  backing não criptografado (§7, injeção de falha);
+* contra **remoção da mídia**, quase nada.
+
+O que está validado aqui é o **mecanismo** — que a plataforma cifra de verdade, que o provisionamento
+é idempotente e tem salvaguarda, que a aplicação se recusa a gravar em claro. Não é um controle de
+segurança enquanto a custódia não sair da mídia.
+
+**E `tpm2` não é alcançável nas camadas atuais**, o que muda o planejamento e não só o cronograma. O
+TPM não criptografa nada — quem cifra é o `dm-crypt` com AES-XTS; o TPM decide onde a chave mora e
+sob que condições é liberada. Verificado: `meta-security/meta-tpm` oferece `swtpm` e `ibmswtpm2`, que
+são **emuladores em software** guardando estado no mesmo sistema de arquivos (trocariam um arquivo de
+chave por outro, sem raiz de confiança), e **não existe receita de fTPM** — TPM como Trusted
+Application do OP-TEE — nem no `meta-security` nem no `meta-st-stm32mp`. As saídas reais são um chip
+TPM discreto no SPI/I2C da placa, ou portar um fTPM para o OP-TEE que já está no FIP. Ver
+`docs/BRINGUP_STM32MP2.md` §7 e `implementation_plan_luks.md` §9.
 
 **Achado que vale para além do TPM**: a chave tem de sobreviver a uma troca de slot A/B. Uma chave
 no rootfs seria destruída pela primeira atualização **bem-sucedida**, deixando o dispositivo sem
@@ -396,6 +418,23 @@ Três verificações são o motivo de a inspeção existir:
 * **`med-data` em `ext4` com label `med-data`**: exatamente o par que o safeguard da §7 exige para
   distinguir "nunca provisionado" de "cabeçalho LUKS corrompido".
 
+### Resultado — o fragmento de kernel chega, mas não vence
+
+Conferido no `.config` que a receita da ST construiu, e não no fragmento que enviamos:
+
+| símbolo | fragmento pede | `.config` construído |
+|---|---|---|
+| `CONFIG_BLK_DEV_DM`, `DM_CRYPT`, `CRYPTO_XTS` | `y` | **`m`** |
+| `CONFIG_RPMSG_CHAR`, `RPMSG_CTRL` | `y` | **`m`** |
+| `CONFIG_TCG_TIS_CORE`, `TCG_TIS` | `y` | **`m`** |
+| `CONFIG_CRYPTO_AES`, `SHA256`, `KEYS`, `REMOTEPROC`, `TCG_TPM` | `y` | `y` |
+
+Não bloqueia: os módulos estão na imagem (1054 pacotes `kernel-module-*`) e carregam sob demanda.
+Mas qualifica a regra 3 do `CLAUDE.md` de forma que vale enunciar: o `linux-%.bbappend` curinga
+garante que o fragmento **chegue** a qualquer kernel de vendor — verificado, o
+`med-kernel-features.cfg` está no `WORKDIR` do `linux-stm32mp` — e **não** garante que ele **vença**.
+A ordem em que a receita da ST aplica os próprios fragmentos não foi investigada.
+
 ### O que isso **não** significa
 
 1. **Não significa que o dispositivo boota.** Nada foi gravado em cartão nem energizado. Isto é
@@ -406,10 +445,13 @@ Três verificações são o motivo de a inspeção existir:
    A. Falta um script de U-Boot lendo `BOOT_ORDER`/`BOOT_<slot>_LEFT`; a partição `u-boot-env`
    existe no disco para isso. A frase da §6 continua valendo sem alteração — *a política A/B é
    validada no QEMU, a integração com o bootloader não foi validada em lugar nenhum*.
-3. **Não significa `/data` criptografado no alvo.** `MED_DATA_KEY_SOURCE = "tpm2"` recusa
-   provisionar em vez de existir pela metade, e com `MED_EEG_REQUIRE_ENCRYPTION = "true"` o serviço
-   de aquisição não sobe. É o comportamento projetado — falhar alto em vez de parecer criptografado
-   — mas a consequência medível é que **no STM32MP257 a aplicação hoje não roda**.
+3. **Não significa `/data` criptografado no alvo.** O perfil `project-eeg-stm32mp2.yml` declara
+   `MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar em vez de existir pela metade — e com
+   `MED_EEG_REQUIRE_ENCRYPTION = "true"` o serviço de aquisição não sobe. É o comportamento
+   projetado. O overlay `kas/bringup-stm32mp2.yml` (`make stm32-bringup`) resolve a custódia para o
+   primeiro boot, pondo a chave na `bootfs` — fora dos dois slots A/B, portanto sobrevivente a uma
+   atualização bem-sucedida, e em ext4, onde o `chmod 0400` que o script tenta finalmente tem efeito.
+   Nenhuma das duas configurações foi executada em hardware.
 4. **Não significa que o RAUC consegue marcar um slot.** O backend `uboot` chama `fw_setenv`, que lê
    `/etc/fw_env.config`; `u-boot-fw-config-stm32mp` instala `fw_env.config.mmc`, `.nand` e `.nor` e
    **nunca** esse nome. Achado por inspeção do manifest, não observado em execução.
@@ -461,7 +503,9 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   chave `tpm2` recusa), não há aplicação rodando e o RAUC não conseguiria marcar um slot
   (`/etc/fw_env.config` não existe na imagem).
 - **TPM, secure boot, OP-TEE** — nenhum exercitado. O OP-TEE está no FIP do disco da §8, mas nunca
-  executou.
+  executou. E o TPM não é apenas "não medido": não há implementação alcançável nas camadas atuais —
+  só emuladores em software, sem fTPM para o OP-TEE — de modo que a custódia de chave permanece de
+  desenvolvimento **nos dois alvos**, e não apenas no de simulação (§7).
 - **A HMI Qt em execução** — exige `NATIVE=1` com runqemu gráfico; sob `nographic` o
   `weston.service` falha por projeto.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.

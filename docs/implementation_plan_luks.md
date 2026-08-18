@@ -366,3 +366,101 @@ uma verificação.** Só a injeção de falha distinguiu as duas.
   faz uma atualização A/B bem-sucedida impedir o dispositivo de decifrar `/data`. A descoberta do
   §8.3.1 mostra que o problema não é exclusivo do TPM — é a persistência da chave através de uma
   troca de slot, e vale para qualquer fonte.
+
+---
+
+## 9. Segunda execução (2026-08-17): custódia por máquina, e o `tpm2` que não existe
+
+O §8.5 deixou dois itens em aberto e datou o primeiro como "com o build do STM32MP257". O build
+aconteceu, e mudou o que se sabe sobre os dois.
+
+### 9.1. O defeito escondido atrás da recusa
+
+O `med-data-provision.sh` fixava `ESP=/dev/disk/by-partlabel/esp` e `mount -t vfat` — partição e
+sistema de arquivos que existem **apenas** no layout EFI. Na STM32MP2 não há partição `esp` nenhuma.
+
+O plano nunca notou porque `MED_DATA_KEY_SOURCE = "tpm2"` recusa antes de alcançar aquele código: um
+script incapaz de funcionar naquela placa, mascarado por uma recusa que parecia ser sobre outra
+coisa. **Uma recusa correta não é evidência de que o resto do caminho está correto.**
+
+### 9.2. Custódia é propriedade da placa, não da distro
+
+A restrição que decide onde a chave mora não vem do disco, vem do caminho de atualização — é o
+achado do §8.3.1 restated: o rootfs é um slot A/B, então a chave tem de morar numa partição que
+nenhum update escreve. *Qual* partição é isso é uma tabela de partições, ou seja um fato de placa.
+
+Duas variáveis novas, substituídas em tempo de build pela receita e respondidas por `meta-med-bsp`
+(a camada de adaptação criada neste mesmo dia — ver `docs/BRINGUP_STM32MP2.md` §3):
+
+| máquina | `MED_KEY_STORE_DEV` | `MED_KEY_STORE_FSTYPE` |
+|---|---|---|
+| `qemux86-64` | `by-partlabel/esp` | `vfat` |
+| `stm32mp25-disco` | `by-partlabel/bootfs` | `ext4` |
+
+`bootfs` satisfaz o critério e ganha algo sobre a ESP: sendo ext4, o `chmod 0400` que o script tenta
+tem efeito — no vfat nunca teve, porque vfat não carrega modos POSIX. A receita falha o build se um
+alvo pedir chave `development` sem declarar onde ela mora.
+
+Verificado extraindo o `.ipk` e lendo o script instalado nas duas máquinas; `make check` no QEMU
+seguiu **21/21**, que é o que prova que a refatoração não regrediu o alvo que tem evidência.
+
+### 9.3. Dois defeitos que a mudança expôs
+
+**A receita era `allarch`** — declarando que o pacote é idêntico para toda máquina — enquanto seu
+conteúdo já dependia de `MED_DATA_KEY_SOURCE`. Duas máquinas no mesmo `TMPDIR` escreveriam o mesmo
+nome de pacote no mesmo `deploy/ipk/all/`, e a segunda sobrescreveria a primeira: um dispositivo
+provisionando `/data` contra a tabela de partições de outra placa, sem nada falhar em build. Agora
+`PACKAGE_ARCH = "${MACHINE_ARCH}"`.
+
+**O overlay do kas perdia em silêncio.** O kas emite blocos de `local_conf_header` ordenados
+alfabeticamente pela chave: `bringup` na linha 1 do `local.conf`, `eeg-stm32mp2` na 75, e o `tpm2`
+do perfil sobrescrevia o `development` do overlay 86 linhas depois. O build passava e o pacote saía
+com o valor errado. Corrigido com `MED_DATA_KEY_SOURCE:forcevariable`, último item do `OVERRIDES`.
+Achado ao extrair o `.ipk` — `bitbake -e` sozinho **não** teria pego, porque o valor no datastore
+estava certo e o `local.conf` o sobrescrevia depois.
+
+### 9.4. `tpm2`: reavaliação do §5 passo 5 e do §7.3
+
+O plano assume que `tpm2` "chega com o STM32MP257". Verificado nas camadas que o projeto usa hoje,
+isso **não tem como acontecer**:
+
+- `meta-security/meta-tpm` oferece `swtpm` e `ibmswtpm2`, que são **emuladores em software**: guardam
+  o estado num arquivo do mesmo sistema de arquivos. Trocariam um arquivo de chave por outro, com
+  mais passos e nenhuma raiz de confiança — exatamente o tipo de metadado de segurança não
+  exercitado que este repositório parou de enviar;
+- **não existe receita de fTPM** (TPM como Trusted Application dentro do OP-TEE) nem no
+  `meta-security` nem no `meta-st-stm32mp` (`grep -rl ftpm` no meta-st retorna vazio).
+
+As duas saídas reais:
+
+1. **chip TPM discreto** no SPI ou I2C da placa — os drivers `TCG_TIS_SPI`/`TCG_TIS_I2C` já estão no
+   kernel construído, como módulos. Exige confirmar se a DK traz um, e provavelmente hardware
+   adicional;
+2. **portar um fTPM para o OP-TEE**, que já está no FIP gravado no cartão. É a saída elegante no MP2
+   e é trabalho de porte, não uma variável de configuração.
+
+Enquanto nenhuma das duas existir, **a custódia permanece de desenvolvimento nos dois alvos**, e não
+apenas no de simulação como este plano supunha.
+
+E o §7.3 continua não avaliado, com uma qualificação: ter TPM não o resolve. Selar a chave a PCRs que
+medem o rootfs faz uma atualização A/B **bem-sucedida** mudar as medições, o TPM recusar liberar a
+chave, e o dispositivo perder os próprios prontuários — o mesmo desastre do §8.3.1, por outro
+caminho.
+
+### 9.5. Correção de uma alegação de segurança
+
+O `RESULTS.md` §7 afirmava que a chave de desenvolvimento "protege contra remoção física da mídia,
+não contra root no dispositivo ligado". Está invertido, e foi corrigido: a chave mora numa partição
+do **mesmo disco** que o volume cifrado, então quem leva a mídia leva as duas coisas. O que a
+configuração atual protege é contra exfiltração *parcial* (cópia só da `med-data`) e, via a recusa
+do `MedicalStorage`, contra gravar em claro num dispositivo comprometido.
+
+O que está validado é o **mecanismo** de volume criptografado. A custódia, não.
+
+### 9.6. O que continua em aberto depois desta execução
+
+- Custódia real de chave, nos dois alvos (§9.4). É agora um item de porte ou de hardware, não de
+  configuração.
+- O §7.3, não avaliado, e agora sabidamente não resolvido pela mera presença de um TPM.
+- Nada de tudo isto foi executado na placa: o `/data` provisionando de verdade no STM32MP257 é
+  previsão baseada em inspeção de pacote, não medição.
