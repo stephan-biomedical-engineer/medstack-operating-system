@@ -1,8 +1,16 @@
 [Unit]
 Description=MedPlatform EEG operator display
-# The compositor has to exist before a Wayland client can attach to it.
-Requires=weston.service
-After=weston.service eeg-acquisition.service
+# The compositor has to exist before a Wayland client can attach to it - but
+# "the compositor process is up" is not the condition this client actually
+# needs. weston.service is Type=notify and weston-init publishes the socket
+# through a *separate* unit, weston.socket, so ordering only on the service
+# leaves a window in which the HMI starts, finds no /run/wayland-0, and aborts.
+# Measured: the first attempt failed and NRestarts settled at 1 on some boots
+# and 0 on others, which is the signature of a race rather than a fault.
+# Ordering on the socket unit is what actually guarantees the socket is
+# listening.
+Requires=weston.service weston.socket
+After=weston.service weston.socket eeg-acquisition.service
 # The HMI is a viewer: it starts whether or not acquisition is up, and shows
 # "waiting for the acquisition service" until frames arrive. Coupling the two
 # would mean a display fault could stop acquisition.
@@ -11,7 +19,18 @@ Wants=eeg-acquisition.service
 [Service]
 Type=simple
 Environment=QT_QPA_PLATFORM=wayland
-Environment=XDG_RUNTIME_DIR=/run/user/0
+# /run, not /run/user/0. weston-init runs the compositor as User=weston and
+# publishes a *system* socket at /run/wayland-0 through weston.socket - there is
+# no /run/user/0/wayland-0 and there never was, so Qt resolved
+# $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY to a path that does not exist and aborted
+# with "Could not load the Qt platform plugin wayland ... even though it was
+# found". Measured on QEMU: status=6/ABRT, then a restart every ~7s.
+#
+# Nothing reported it. Restart=on-failure means a Type=simple unit is briefly
+# "active" on every retry, so systemctl is-active and list-units --state=failed
+# both call a crash loop healthy - the same trap that acq-active was written to
+# escape, met a second time in the unit next door.
+Environment=XDG_RUNTIME_DIR=/run
 Environment=WAYLAND_DISPLAY=wayland-0
 Environment=MED_EEG_SOCKET=/run/medplatform/eeg.sock
 ExecStart=/usr/bin/eeg-hmi-gui

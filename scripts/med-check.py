@@ -142,7 +142,14 @@ PLATFORM_CHECKS = [
     ("journal-persistent", "/var/log/journal é diretório real, não tmpfs",
      "test -d /var/log/journal && test ! -L /var/log && echo OK", rx(r"OK")),
 
+    # O --rotate é o que torna esta asserção determinística. Sem ele o resultado
+    # depende de o journal ter rotacionado sozinho durante o boot: numas rodadas
+    # havia arquivados para verificar, noutras só o arquivo ativo - cuja
+    # verificação falha ou passa conforme o systemd esteja escrevendo nele
+    # naquele instante. Rotacionar fecha o arquivo corrente e garante que existe
+    # pelo menos um journal completo para verificar de verdade.
     ("journal-integro", "todo journal arquivado verifica íntegro",
+     "journalctl --rotate >/dev/null 2>&1; sleep 2; "
      "journalctl --verify 2>&1 | grep -E '^(PASS|FAIL):' || true",
      check_journal_integrity),
 
@@ -199,6 +206,25 @@ EEG_CHECKS = [
 
     ("acq-active", "o serviço de aquisição está rodando, sem reinícios",
      "systemctl show eeg-acquisition.service -p ActiveState -p NRestarts",
+     rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
+
+    # The display half of the device, asserted the same way the acquisition half
+    # is and for the same reason: this unit has Restart=on-failure, so
+    # ActiveState alone reports a crash loop as healthy. It was in one -
+    # XDG_RUNTIME_DIR named /run/user/0 while weston publishes /run/wayland-0 -
+    # for as long as this suite has existed, and the suite had no assertion that
+    # could see it. An EEG monitor whose display never starts is not a partial
+    # device; it is a different device.
+    # A espera é limitada e não é complacência: o Qt leva ~6 s para inicializar
+    # (carregar o plugin wayland, varrer fontes), e medir logo após o boot pega
+    # ActiveState=activating de um serviço perfeitamente saudável. O que a
+    # espera *não* mascara é o caso que importa: um crash loop continua tendo
+    # NRestarts > 0 depois dela, e 30 s é mais que os ~7 s de um ciclo de
+    # reinício desta unidade.
+    ("hmi-active", "a HMI de operador está rodando, sem reinícios",
+     "for i in $(seq 1 30); do "
+     "  systemctl is-active -q eeg-hmi.service && break; sleep 1; done; "
+     "systemctl show eeg-hmi.service -p ActiveState -p NRestarts",
      rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
 
     ("acq-socket", "o socket de amostras foi publicado",
