@@ -5,7 +5,7 @@
 # boot chain this SoC's ROM code actually requires.
 #
 #  +--------+--------+-----------+-----------+-------+-------+--------+------------+------------+----------+
-#  | fsbla1 | fsbla2 | metadata1 | metadata2 | fip-a | fip-b | u-boot | bootfs     | med-root-a | med-root-b | med-data |
+#  | fsbla1 | fsbla2 | metadata1 | metadata2 | fip-a | fip-b | u-boot | med-boot   | med-root-a | med-root-b | med-data |
 #  | TF-A   | TF-A   |           |           |       |       |  -env  | kernel+dtb | (active)   | (inactive) | LUKS     |
 #  +--------+--------+-----------+-----------+-------+-------+--------+------------+------------+------------+----------+
 #
@@ -37,7 +37,7 @@
 # What is NOT solved here
 # -----------------------
 # The disk is A/B-shaped and slot A boots. Slot *selection* is not implemented:
-# bootfs is shared by both slots, and the extlinux.conf the BSP generates
+# med-boot is shared by both slots, and the extlinux.conf the BSP generates
 # hardcodes root=PARTUUID=${DEVICE_PARTUUID_ROOTFS:SDCARD} - slot A - so a
 # device that RAUC has marked "boot B" still boots A. Closing that means a
 # U-Boot boot script that reads BOOT_ORDER/BOOT_<slot>_LEFT, which is what the
@@ -52,16 +52,29 @@
 # meta-st-stm32mp/wic/sdcard-stm32mp257f-dk-optee-example.wks.in, deliberately
 # verbatim - a "cleanup" here is a brick.
 #
-# The stm32mp257f-dk (internal-devicetree) variant of TF-A/FIP is the one ST's
-# own example names, and it is what fixes which U-Boot devicetree is in the
-# FIP, hence which /boot/*.dtb U-Boot then loads. The external-DT variants
-# (-ca35tdcid-ostl, -m33-examples) are also deployed; the m33 one is what the
-# ADS1299 firmware work will need, and switching is these six lines.
+# The -ca35tdcid-ostl variant is used, and that choice is now backed by a boot
+# on hardware rather than by ST's example .wks, which names the plain
+# stm32mp257f-dk files. Three reasons, in order of weight:
+#
+#  1. it is what this machine declares: stm32mp25-disco.conf sets
+#     EXTERNAL_DT_ENABLED = "1" and EXTERNAL_DEVICETREE_SDCARD =
+#     "stm32mp257f-dk-ca35tdcid-ostl". ST's example .wks is the legacy path;
+#  2. it booted. Observed: "Board: stm32mp2 (st,stm32mp257f-dk-ca35tdcid-ostl)"
+#     and U-Boot loading /stm32mp257f-dk-ca35tdcid-ostl.dtb by itself, because
+#     it derives fdtfile from the devicetree built into the FIP - so changing
+#     these four lines is enough, the kernel DTB follows;
+#  3. M33_BOARDS_START_AT_STARTUP only includes the Cortex-M33 in this variant,
+#     and the M33 is the whole AMP path the EEG needs next.
+#
+# What it did NOT fix, and this is worth recording so nobody re-runs the
+# experiment: the OP-TEE panic in clk_stm32_pll_init survived the switch
+# unchanged. The cause was the GPU (see MACHINE_FEATURES nogpu in layer.conf),
+# not the devicetree variant.
 # ---------------------------------------------------------------------------
 
 # FSBL, aka TF-A BL2. Two copies: the ROM falls back to the second.
-part fsbla1 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla1 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K --align 17
-part fsbla2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla2 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K
+part fsbla1 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla1 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K --align 17
+part fsbla2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fsbla2 --sourceparams="file=${DEPLOY_DIR_IMAGE}/arm-trusted-firmware/tf-a-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.stm32" --ondisk mmcblk --part-type 0x8301 --fixed-size 256K
 
 # TF-A firmware-update metadata: which FIP the ROM tries, and its try counter.
 # This is the SoC's own A/B mechanism for the *bootloader*, one layer below the
@@ -71,15 +84,22 @@ part metadata2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=m
 
 # FIP: OP-TEE + U-Boot. Two copies, same reason. The --uuid values are fixed
 # because the metadata above refers to the FIP slots by UUID.
-part fip-a --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-a --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 4fd84c93-54ef-463f-a7ef-ae25ff887087
-part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 09c54952-d5bf-45af-acee-335303766fb3
+part fip-a --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-a --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 4fd84c93-54ef-463f-a7ef-ae25ff887087
+part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 09c54952-d5bf-45af-acee-335303766fb3
 
 # U-Boot environment. Created empty, and it is where RAUC's uboot backend will
 # read and write BOOT_ORDER: the image already installs libubootenv-bin and
 # u-boot-fw-config-stm32mp, whose fw_env.config.mmc addresses this partition as
 # /dev/disk/by-partlabel/u-boot-env - so the partition *name* is the interface,
 # exactly like med-root-a/b below.
-part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K
+# The --uuid is not decoration. On a board with eMMC - this one - the factory
+# OpenSTLinux image on mmcblk0 carries partitions with these same GPT names, and
+# udev gives /dev/disk/by-partlabel/u-boot-env to whichever enumerates first,
+# which is the eMMC. Observed on the device: by-partlabel/u-boot-env resolved to
+# mmcblk0p5 while ours is mmcblk1p7. A PARTUUID is unique by construction, so
+# the /etc/fw_env.config that RAUC's uboot backend needs must address this
+# partition through by-partuuid and never through by-partlabel.
+part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K --uuid d7ba3548-04a4-4269-aab6-913b1bc68d06
 
 # ---------------------------------------------------------------------------
 # Boot filesystem: kernel, devicetrees and extlinux.conf, all of which the BSP
@@ -91,7 +111,24 @@ part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-typ
 # this file: an update writes med-root-b but the kernel it boots with comes
 # from here. Sizing follows ST's example at 64 MiB against a ~12 MiB payload.
 # ---------------------------------------------------------------------------
-part /boot --source rootfs --rootfs-dir=${IMAGE_ROOTFS}/boot --part-name=bootfs --label bootfs --ondisk mmcblk --fstype=ext4 --active --fixed-size 64M --extra-space 0
+# Named med-boot, not bootfs, and the rename is load-bearing. This board has an
+# eMMC carrying a factory OpenSTLinux image whose partitions are named bootfs,
+# rootfs, vendorfs, u-boot-env, fip-a, fip-b, metadata1 and metadata2 - the same
+# names this layout uses. /dev/disk/by-partlabel/ is a flat namespace across all
+# block devices, so the eMMC won every colliding name: observed on the device,
+# by-partlabel/bootfs resolved to mmcblk0p6 while ours was mmcblk1p8.
+#
+# That mattered because this partition is the key store: med-data-provision.sh
+# would have written the /data volume key onto the factory eMMC instead of the
+# card. It would even have appeared to work, until the card was moved to another
+# board and /data could no longer be decrypted - the exact failure the key
+# custody design exists to prevent, reached by a route nobody had imagined.
+#
+# The names that cannot be renamed are fsbla1, fsbla2, metadata1, metadata2,
+# fip-a and fip-b: the SoC ROM code and TF-A look those up by name. Nothing
+# looks this one up by name - U-Boot finds it by number ("Scanning mmc 0:8" in
+# the boot log) - so it is free to be unique.
+part /boot --source rootfs --rootfs-dir=${IMAGE_ROOTFS}/boot --part-name=med-boot --label med-boot --ondisk mmcblk --fstype=ext4 --active --fixed-size 64M --extra-space 0
 
 # ---------------------------------------------------------------------------
 # The A/B slots. Everything below is the same policy as med-partitions.wks,

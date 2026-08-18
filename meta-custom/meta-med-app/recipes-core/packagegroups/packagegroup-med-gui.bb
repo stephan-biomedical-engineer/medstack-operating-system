@@ -12,6 +12,14 @@ inherit packagegroup features_check
 
 REQUIRED_DISTRO_FEATURES = "wayland opengl"
 
+# Set by the BSP for a machine whose GPU this product actually uses; empty
+# everywhere else, including on this same board with the ST EULA not accepted.
+# Same hook as MED_AMP_FIRMWARE in packagegroup-med-amp: the driver and the
+# vendor EGL userland are board facts, so meta-med-bsp names them and this layer
+# does not learn a machine name. Software rendering is what an empty value
+# means, and it is a supported state, not a degraded one.
+MED_GPU_PACKAGES ?= ""
+
 RDEPENDS:${PN} = " \
     weston \
     weston-init \
@@ -21,4 +29,5 @@ RDEPENDS:${PN} = " \
     qtdeclarative-qmlplugins \
     qtwayland \
     ttf-dejavu-sans \
+    ${MED_GPU_PACKAGES} \
 "

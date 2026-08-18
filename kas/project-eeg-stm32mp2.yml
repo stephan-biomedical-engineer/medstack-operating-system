@@ -94,3 +94,39 @@ local_conf_header:
     # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
     # without meta-med-app ever naming a machine.
     # MED_AMP_FIRMWARE = "<bsp-firmware-recipe>"
+
+    # ---------------------------------------------------------------------
+    # A GPU deste alvo, e o que aceitar a EULA significa
+    # ---------------------------------------------------------------------
+    # Isto é um ato jurídico, não uma flag de build: declara que quem constrói
+    # leu e aceitou a ST SLA0048 em
+    # layers/meta-st-stm32mp/conf/eula/stm32mp25-disco (symlink para
+    # ST_EULA_SLA), mais os termos Vivante em
+    # Vivante_GPU_drivers-End_User_Software_License_Terms.txt. Sem esta linha o
+    # gcnano-userland-binary.inc:50 aborta o build com bb.fatal, de propósito -
+    # a ST não deixa a aceitação ser implícita, e nós também não.
+    #
+    # O que ela liga, em meta-st-stm32mp/conf/machine/stm32mp25-disco.conf:50-53:
+    # MACHINE_FEATURES ganha gpu, openvx, opencl e vulkan, e gpu_vivante.inc
+    # troca PREFERRED_PROVIDER virtual/egl (e libgles1/2/3, libgbm, virtual/mesa)
+    # de mesa para gcnano-userland-multi-binary-stm32mp. Não é um pacote a mais:
+    # é a pilha EGL/GLES inteira da imagem trocando de implementação, e Qt e
+    # weston recompilam contra ela.
+    #
+    # E desliga, sozinho, o 'nogpu' que meta-med-bsp/conf/layer.conf acrescenta -
+    # aquela linha é condicional a esta. O blacklist.conf da ST passa a conter só
+    # "blacklist etnaviv"; o galcore proprietário fica livre para carregar.
+    #
+    # AINDA NÃO EXERCITADO NA PLACA, e o risco é nomeável: o pânico do mundo
+    # seguro em clk_stm32_pll_init que motivou o 'nogpu' aconteceu quando um
+    # driver de GPU fez bind em 48280000.gpu. Com esta linha, um driver de GPU
+    # volta a fazer bind - o galcore no lugar do etnaviv. A hipótese é que o
+    # stack proprietário da ST use os clocks que o firmware da ST prepara, mas
+    # isso é hipótese até a placa bootar. Se voltar a reiniciar em loop, é este
+    # caminho, e não o etnaviv, que precisa de investigação.
+    #
+    # Consequência para o SBOM (IEC 62304): entra SOUP binário de
+    # redistribuição restrita na imagem. O create-spdx de med-os.conf continua
+    # gerando o SBOM, mas "Proprietary" ali passa a ser um item a justificar na
+    # documentação regulatória, não um detalhe de build.
+    ACCEPT_EULA_stm32mp25-disco = "1"
