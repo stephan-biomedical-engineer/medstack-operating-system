@@ -28,8 +28,9 @@
 | 10 | — (nenhum) | `/dev/disk/by-partlabel/` é **um namespace plano entre todos os discos**, e o eMMC de fábrica traz os mesmos nomes do layout da ST | `bootfs` → `med-boot`; o que não pôde ser renomeado passa a ser endereçado por PARTUUID | `med-boot` resolveu para `mmcblk0p8` — o cartão — e a chave foi escrita lá (§9) |
 | 11 | `rauc status`: `fw_printenv failed with exit code: 1`, ambos os slots `boot status: bad` | `/etc/fw_env.config` não existe; a ST instala `.mmc`/`.nand`/`.nor` e nunca esse nome | não implementado | previsto por inspeção do manifest (`RESULTS.md` §8), agora **observado em execução** (§9) |
 | 12 | `weston.service` falha com `status=1` e derruba a HMI por dependência | desconhecida; o DRM da placa subiu e o galcore carregou | em aberto | única unidade falha do sistema (§9) |
+| 13 | — (nenhum) | O bbappend curinga só acrescentava à `SRC_URI`; o `linux-stm32mp` herda `kernel` puro e só funde o que está em `KERNEL_CONFIG_FRAGMENTS` | acrescentar às duas | os 9 símbolos passaram de `m`/coincidência para `y` no `.config` produzido (§5) |
 
-Note o padrão: **cinco dos doze itens não tinham sintoma nenhum**. Não falharam build, não falharam
+Note o padrão: **seis dos treze itens não tinham sintoma nenhum**. Não falharam build, não falharam
 boot, não emitiram warning. Apareceram porque alguém foi olhar o artefato produzido. E note o
 complemento que o primeiro boot acrescentou: os itens 9 a 12 são o oposto — nenhum deles poderia ter
 sido encontrado sem energizar a placa, e três deles nenhuma inspeção de artefato teria revelado.
@@ -232,7 +233,7 @@ resolvida, `/data` é LUKS2 de verdade na placa, o `MedicalStorage` encontra um 
 
 ---
 
-## 5. O fragmento de kernel perde para a ST
+## 5. O fragmento de kernel nunca era aplicado (e o diagnóstico anterior era gentil demais)
 
 Ao conferir se os símbolos de que o LUKS depende chegaram ao kernel da ST — checagem que a lição do
 TPM tornou obrigatória — apareceu um padrão:
@@ -268,9 +269,54 @@ saindo `y`. Um `bool`/`tristate` filho vindo `m` sob um pai `y` é uma escolha a
 uma consequência de dependência, e continua sem causa identificada.
 
 Funcionalmente segue sem bloquear nada: não há TPM nesta placa (§7), então o símbolo não teria o que
-controlar de qualquer forma. O que ele bloqueia é a **frase**: nenhuma afirmação deste repositório
-pode dizer que o fragmento de kernel se aplica igualmente aos dois alvos. Ele chega aos dois; vence
-em um.
+controlar de qualquer forma. O que ele bloqueia é a **frase** — e ao ir atrás de por que um `bool`
+filho sairia `m` sob um pai `y`, a frase acabou sendo pior do que se supunha.
+
+### A causa, e por que "perde" era o diagnóstico errado
+
+O `linux-%.bbappend` fazia uma coisa só: acrescentar o fragmento à `SRC_URI`. Isso basta para o
+`linux-yocto`, que herda `kernel-yocto` e varre a `SRC_URI` atrás de `.cfg` sozinho — e é
+exatamente por isso que o mecanismo funcionava no QEMU e *parecia* portátil. O `linux-stm32mp` herda
+`kernel` puro: o `do_configure` dele (`linux-stm32mp.inc:76-95`) funde exatamente os arquivos
+listados em `KERNEL_CONFIG_FRAGMENTS` com o `merge_config.sh`, verifica que cada um existe, e ignora
+todo o resto da `SRC_URI`.
+
+Medido, não deduzido:
+
+```
+$ bitbake -e virtual/kernel | grep ^KERNEL_CONFIG_FRAGMENTS=
+KERNEL_CONFIG_FRAGMENTS=" .../fragment-01-defconfig-cleanup.config
+                          .../fragment-02-defconfig-addons.config
+                          .../fragment-03-systemd.config
+                          .../fragment-04-modules.config "
+$ bitbake -e virtual/kernel | grep -c med-kernel-features
+12          # está na SRC_URI, e em lugar nenhum que importe
+```
+
+Então o fragmento não *perdia* uma disputa de precedência. **Ele nunca entrava na disputa.** No alvo
+físico, toda a política de kernel do MedOS — cgroups, OverlayFS, dm-crypt, rpmsg, TPM — era baixada,
+descompactada e ignorada, e cada símbolo valia o que o defconfig da ST dissesse. Os quatro que saíam
+`y` saíam `y` porque a ST já os queria assim.
+
+Vale encarar a consequência: **o `/data` LUKS funcionou na placa por coincidência.** `DM_CRYPT=m` é
+escolha da ST. Se a ST tivesse desligado o símbolo, o resultado da §9.4 não existiria, e nada no
+repositório teria avisado.
+
+### A correção, e o que ela mede
+
+Uma linha, no mesmo bbappend curinga: acrescentar o fragmento também a `KERNEL_CONFIG_FRAGMENTS`,
+que o `linux-yocto` ignora. Os dois mecanismos ficam cobertos sem o bbappend saber qual kernel está
+em uso, que é a propriedade que a regra 3 do `CLAUDE.md` promete.
+
+Depois de `bitbake -c configure -f virtual/kernel`, lendo o `${B}/.config` produzido, a coluna de
+`m` da tabela acima desapareceu inteira: `TCG_TPM`, `TCG_TIS_CORE`, `TCG_TIS`, `BLK_DEV_DM`,
+`DM_CRYPT`, `CRYPTO_XTS`, `RPMSG_CHAR`, `RPMSG_CTRL` e `OVERLAY_FS` saem todos `y`. O log do
+`merge_config.sh` mostra o nosso fragmento como o **último** da lista — é isso que o faz vencer — e
+as únicas mensagens sobre ele são `redundant`, ou seja, nenhum símbolo nosso conflitava em silêncio
+com os da ST.
+
+Não validado em hardware: o kernel novo não foi construído nem bootado. O que está medido é o
+`.config` produzido, que é precisamente o degrau que faltava antes.
 
 ---
 
@@ -749,7 +795,10 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
    um alvo é melhor como *parâmetro* que como arquivo. `:forcevariable` corrige a instância e deixa
    a armadilha de pé para o próximo overlay; a variável de ambiente declarada em `env:` (§4) não
    tem ordenação para perder. Onde um overlay for mesmo necessário, `:forcevariable`.
-6. **Fragmento de kernel chegar não é fragmento de kernel vencer.** Leia o `.config` produzido.
+6. **Fragmento de kernel chegar não é fragmento de kernel vencer — e "não vencer" ainda era
+   otimista.** Ele não estava sequer sendo fundido: `kernel-yocto` varre a `SRC_URI` sozinho,
+   `kernel.bbclass` puro não varre nada. Leia o `.config` produzido, e antes disso confira se o
+   arquivo aparece na lista que a receita do vendor realmente consome.
 7. **Extraia o pacote e leia o arquivo instalado.** Foi o que pegou o overlay que perdia em silêncio —
    e nem `bitbake -e` teria pego, porque a variável estava certa no datastore e errada no `local.conf`
    que a sobrescrevia depois.

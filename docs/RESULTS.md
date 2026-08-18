@@ -418,9 +418,12 @@ Três verificações são o motivo de a inspeção existir:
 * **`med-data` em `ext4` com label `med-data`**: exatamente o par que o safeguard da §7 exige para
   distinguir "nunca provisionado" de "cabeçalho LUKS corrompido".
 
-### Resultado — o fragmento de kernel chega, mas não vence
+### Resultado — o fragmento de kernel não chegava a ser aplicado (corrigido)
 
-Conferido no `.config` que a receita da ST construiu, e não no fragmento que enviamos:
+Este resultado mudou de diagnóstico depois do primeiro boot, e a diferença entre os dois
+diagnósticos importa mais que a tabela.
+
+**O que se media antes.** Conferido no `.config` que a receita da ST construiu:
 
 | símbolo | fragmento pede | `.config` construído |
 |---|---|---|
@@ -429,11 +432,49 @@ Conferido no `.config` que a receita da ST construiu, e não no fragmento que en
 | `CONFIG_TCG_TIS_CORE`, `TCG_TIS` | `y` | **`m`** |
 | `CONFIG_CRYPTO_AES`, `SHA256`, `KEYS`, `REMOTEPROC`, `TCG_TPM` | `y` | `y` |
 
-Não bloqueia: os módulos estão na imagem (1054 pacotes `kernel-module-*`) e carregam sob demanda.
-Mas qualifica a regra 3 do `CLAUDE.md` de forma que vale enunciar: o `linux-%.bbappend` curinga
-garante que o fragmento **chegue** a qualquer kernel de vendor — verificado, o
-`med-kernel-features.cfg` está no `WORKDIR` do `linux-stm32mp` — e **não** garante que ele **vença**.
-A ordem em que a receita da ST aplica os próprios fragmentos não foi investigada.
+A leitura era "o fragmento chega mas não vence", e ela estava errada — cortês demais com o defeito.
+Confirmado no kernel em execução na placa (`zcat /proc/config.gz`, 2026-08-18), e depois investigado
+até a causa.
+
+**O que era.** O `linux-%.bbappend` só acrescentava o fragmento à `SRC_URI`. Isso basta para o
+`linux-yocto`, que herda `kernel-yocto` e varre a `SRC_URI` atrás de `.cfg` por conta própria — e é
+por isso que o mecanismo funcionava no QEMU e *parecia* portátil. O `linux-stm32mp` herda `kernel`
+puro: seu `do_configure` funde exatamente os arquivos listados em `KERNEL_CONFIG_FRAGMENTS` com o
+`merge_config.sh` e ignora todo o resto da `SRC_URI`.
+
+Medido, não deduzido:
+
+```bash
+kas shell kas/project-eeg-stm32mp2.yml -c "bitbake -e virtual/kernel | grep ^KERNEL_CONFIG_FRAGMENTS="
+# lista os quatro fragmentos da ST e não o nosso
+kas shell kas/project-eeg-stm32mp2.yml -c "bitbake -e virtual/kernel | grep -c med-kernel-features"
+# não-zero: está na SRC_URI
+```
+
+Ou seja: no alvo físico, **a política de kernel do MedOS era descompactada e nunca aplicada**. Os
+quatro símbolos que saíam `y` saíam `y` porque o defconfig da ST já os tinha — por coincidência, que
+é a pior forma de um requisito de segurança ser satisfeito. Foi assim que o `/data` LUKS funcionou
+na placa: `DM_CRYPT=m` é escolha da ST, não nossa.
+
+**A correção** é uma linha no mesmo bbappend curinga — acrescentar também a
+`KERNEL_CONFIG_FRAGMENTS`, que o `linux-yocto` ignora, de modo que os dois mecanismos passam a ser
+cobertos sem o bbappend saber qual kernel está em uso.
+
+**Resultado depois** (`bitbake -c configure -f virtual/kernel`, lendo o `${B}/.config` produzido):
+
+| símbolo | pede | saiu |
+|---|---|---|
+| `TCG_TPM`, `TCG_TIS_CORE`, `TCG_TIS` | `y` | `y` ✓ |
+| `BLK_DEV_DM`, `DM_CRYPT`, `CRYPTO_XTS` | `y` | `y` ✓ |
+| `RPMSG_CHAR`, `RPMSG_CTRL` | `y` | `y` ✓ |
+| `OVERLAY_FS` | `y` | `y` ✓ |
+
+A coluna inteira de `m` desapareceu. O log do `merge_config.sh` confirma que o nosso fragmento é o
+**último** da lista — que é o que o faz vencer — e que as únicas mensagens sobre ele são
+`redundant`, isto é, nenhum símbolo nosso conflitava em silêncio com os da ST.
+
+Isto **não** foi validado em hardware: o kernel novo não foi construído nem bootado. O que está
+medido é o `.config` produzido.
 
 ### Resultado — execução na placa (primeiro boot, 2026-08-18)
 
