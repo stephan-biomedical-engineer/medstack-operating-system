@@ -435,26 +435,109 @@ garante que o fragmento **chegue** a qualquer kernel de vendor — verificado, o
 `med-kernel-features.cfg` está no `WORKDIR` do `linux-stm32mp` — e **não** garante que ele **vença**.
 A ordem em que a receita da ST aplica os próprios fragmentos não foi investigada.
 
+### Resultado — execução na placa (primeiro boot, 2026-08-18)
+
+Até aqui a §8 media o artefato construído e o disco por inspeção. Esta subseção é a primeira em que
+o alvo físico **executou**. Método: `make stm32 KEY=development`, cartão SD gravado com o `.wic`,
+console serial pelo ST-LINK V3. O registro narrativo, com os defeitos e suas causas, está em
+`BRINGUP_STM32MP2.md` §9; aqui ficam as medidas.
+
+| # | O que se mediu | Comando na placa | Resultado |
+|---|---|---|---|
+| 1 | Boot completo | console serial | multi-user alcançado; sistema de pé > 8 min |
+| 2 | Slot do qual bootou | `rauc status` | `Booted from: rootfs.0 (/dev/mmcblk0p9)` |
+| 3 | O PARTUUID é o que o `.wks` fixa | `cat /proc/cmdline` | `root=PARTUUID=e91c4e10-16e6-4c0e-bd0e-77becf4a3582` |
+| 4 | Provisionamento do `/data` | `systemctl status med-data-provision` | `active (exited)`, `status=0`, **13 s** (16,8 s CPU) |
+| 5 | `/data` é LUKS2 real | `cryptsetup status med-data` | LUKS2, `aes-xts-plain64`, 512 bits, sobre `/dev/mmcblk0p11` |
+| 6 | A asserção do `MedicalStorage` | `cat /sys/block/dm-0/dm/uuid` | `CRYPT-LUKS2-c1480c70…-med-data` |
+| 7 | `/data` montado do mapeamento | `awk '$2=="/data"' /proc/mounts` | `/dev/mapper/med-data ext4` |
+| 8 | Custódia da chave | `stat -c '%U:%G %a'` em `med-boot` | `root:root 400` |
+| 9 | Trilha de auditoria | `journalctl --verify` | `PASS` |
+| 10 | Unidades falhas | `systemctl list-units --state=failed` | apenas `weston.service` |
+| 11 | Fragmento de kernel | `zcat /proc/config.gz \| grep TCG_TIS` | `CONFIG_TCG_TIS=m` (o fragmento pede `y`) |
+
+**As linhas 4 a 8 são o resultado mais importante deste documento desde a §7.** Elas transportam o
+volume `/data` criptografado do QEMU para hardware real: mesmo `med-data-provision.service`, mesmo
+`MedicalStorage`, mesma exigência `MED_EEG_REQUIRE_ENCRYPTION = "true"` — e o serviço de aquisição
+subiu, o que sob essa exigência *é* a afirmação de que a criptografia é real.
+
+Duas delas merecem leitura cuidadosa:
+
+- **A linha 8 mede uma decisão de arquitetura, não um detalhe.** O `400` só é possível porque a
+  chave está em ext4; na ESP em vfat de `qemux86-64` o `chmod` do script é silenciosamente
+  ignorado. A separação `MED_KEY_STORE_DEV`/`MED_KEY_STORE_FSTYPE` por máquina existia por esse
+  argumento, escrito como raciocínio. Agora é uma permissão lida do sistema de arquivos.
+- **A linha 4 explica um atraso que parece defeito e não é.** O `data.mount` esperou 13 s pelo
+  `/dev/mapper/med-data`; o custo é o PBKDF do LUKS2 num Cortex-A35. Vale como ordem de grandeza
+  para qualquer orçamento de tempo de boot.
+
+**Dimensionamento**: `size: 1015808` setores × 512 B = **496 MiB** de `/data` — a partição de
+512 MiB do `.wks` menos 16 MiB de cabeçalho LUKS2 — num cartão de 14,8 GiB. O restante está
+inacessível porque o GPT de reserva ficou no fim da *imagem* e não do cartão
+(`GPT:5394465 != 31116287`), o que o kernel reporta a cada boot.
+
+#### O que o RAUC faz e o que não faz, medido
+
+```
+Compatible:  med-os-stm32mp25-disco
+Booted from: rootfs.0 (/dev/mmcblk0p9)
+Activated: none
+o [rootfs.1] (med-root-b, ext4, inactive)  bootname: B  boot status: bad
+o [rootfs.0] (med-root-a, ext4, booted)    bootname: A  boot status: bad
+
+rauc-WARNING: Failed getting primary slot: uboot backend: fw_printenv failed with exit code: 1
+ls: /etc/fw_env.config: No such file or directory
+```
+
+Funciona: os dois slots resolvem por rótulo GPT, o slot bootado é identificado, e o `Compatible`
+casa com o dos bundles. Não funciona: **o item 4 da lista abaixo deixou de ser "achado por inspeção
+do manifest" e passou a ser observado em execução**, com a mensagem de erro. E a consequência é
+maior que o aviso: sem ler o ambiente do U-Boot o RAUC reporta **ambos os slots como `bad`,
+inclusive o que está rodando**, e `Activated: none` — um `rauc install` escreveria o slot inativo e
+nunca conseguiria ativá-lo.
+
+#### Um defeito novo que nenhuma inspeção de artefato encontraria
+
+`stm32_rtc: Date/Time must be initialized` e `System time before build time, advancing clock`: a
+placa não tem relógio inicializado, e toda a sessão correu datada de **2025-05-29** para uma imagem
+construída em 2026-08. Sem RTC com bateria e sem sincronização de rede antes de `/data` montar,
+**todo registro escrito pelo `MedicalLogger` e pelo `MedicalStorage` carrega carimbo de tempo
+errado**. Para o argumento de rastreabilidade da §5 isso é material: um registro de paciente com
+data errada é pior que um registro ausente. Nada no repositório trata disso, e a §9 passa a listá-lo.
+
+#### O que ficou aberto neste boot
+
+- **`weston.service` falha** (`status=1`, 73 ms) e derruba a HMI por dependência. Não é o caso
+  previsto do QEMU: aqui o DRM da placa subiu e o `galcore` carregou. Causa não determinada.
+- **O serviço de aquisição pode estar reiniciando**: `Started …` aparece duas vezes no log de boot.
+  `NRestarts` não foi consultado. Pela ressalva da §10, este é exatamente o sintoma que
+  `systemctl is-active` esconde — a suíte tem a asserção certa, ela só não foi executada aqui.
+- **`u-boot-env`, `fip-a/b`, `metadata1/2` colidem por nome com o eMMC de fábrica** e não se
+  determinou qual disco venceu (saída truncada no terminal). É disso que depende a forma do
+  `/etc/fw_env.config` a ser escrito.
+
 ### O que isso **não** significa
 
-1. **Não significa que o dispositivo boota.** Nada foi gravado em cartão nem energizado. Isto é
-   "constrói, e o disco está correto por inspeção" — que pela §1 é precisamente o tipo de
-   afirmação que não substitui execução.
+1. ~~**Não significa que o dispositivo boota.**~~ **Superado em 2026-08-18**: boota, e a subseção
+   anterior mede o quê. Mantido riscado em vez de apagado porque a afirmação original estava certa
+   quando foi escrita, e o que a derrubou não foi um argumento melhor — foi energizar a placa.
 2. **Não significa A/B funcional no hardware.** `bootfs` é compartilhada pelos dois slots e o
    `extlinux.conf` fixa o PARTUUID do slot A: um dispositivo que o RAUC marcou "boot B" ainda boota
    A. Falta um script de U-Boot lendo `BOOT_ORDER`/`BOOT_<slot>_LEFT`; a partição `u-boot-env`
    existe no disco para isso. A frase da §6 continua valendo sem alteração — *a política A/B é
    validada no QEMU, a integração com o bootloader não foi validada em lugar nenhum*.
-3. **Não significa `/data` criptografado no alvo.** O perfil `project-eeg-stm32mp2.yml` declara
-   `MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar em vez de existir pela metade — e com
-   `MED_EEG_REQUIRE_ENCRYPTION = "true"` o serviço de aquisição não sobe. É o comportamento
-   projetado. O overlay `kas/bringup-stm32mp2.yml` (`make stm32-bringup`) resolve a custódia para o
-   primeiro boot, pondo a chave na `bootfs` — fora dos dois slots A/B, portanto sobrevivente a uma
-   atualização bem-sucedida, e em ext4, onde o `chmod 0400` que o script tenta finalmente tem efeito.
-   Nenhuma das duas configurações foi executada em hardware.
+3. **Continua não significando `/data` criptografado no alvo *com a configuração de produto*.** O
+   que foi executado é `make stm32 KEY=development`: a chave vive em `med-boot`, fora dos dois slots
+   A/B e em ext4, e quem consegue ler o cartão consegue ler a chave. A configuração que o perfil
+   declara, `MED_DATA_KEY_SOURCE ?= "tpm2"`, **recusa provisionar** em vez de existir pela metade, e
+   com `MED_EEG_REQUIRE_ENCRYPTION = "true"` o serviço de aquisição não subiria. Essa configuração
+   nunca foi executada em hardware, e não pode ser: não há TPM alcançável (§7 do
+   `BRINGUP_STM32MP2.md`). O que a subseção anterior mede é o **mecanismo** — LUKS2, provisionamento
+   de primeiro boot, a asserção do `MedicalStorage` — não a custódia de produto.
 4. **Não significa que o RAUC consegue marcar um slot.** O backend `uboot` chama `fw_setenv`, que lê
    `/etc/fw_env.config`; `u-boot-fw-config-stm32mp` instala `fw_env.config.mmc`, `.nand` e `.nor` e
-   **nunca** esse nome. Achado por inspeção do manifest, não observado em execução.
+   **nunca** esse nome. Previsto por inspeção do manifest e **confirmado em execução em 2026-08-18**
+   (`fw_printenv failed with exit code: 1`, ambos os slots reportados `bad`, `Activated: none`).
 5. **Os `.tsv` de flashlayout gerados não descrevem este disco.** O BSP os produz a partir do layout
    da ST (`rootfs`/`vendorfs`/`userfs`, um único rootfs, sem `med-root-*` e sem `med-data`).
    Gravar por eles produz um disco que o MedOS não usa: grave o `.wic`.
@@ -491,17 +574,25 @@ silenciosamente o arquivo de projeto.
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
 
-- **Caminho AMP / `rpmsg` / Cortex-M4** — o QEMU não tem co-processador. O driver medido é o
-  `simulated`. O alvo que tem co-processador (§8) nunca foi energizado, então o driver `rpmsg` não
-  foi exercitado em nenhum dos dois.
+- **Caminho AMP / `rpmsg` / Cortex-M33** — o QEMU não tem co-processador. O driver medido é o
+  `simulated`. O alvo que tem co-processador foi energizado em 2026-08-18 e o kernel reporta
+  `remoteproc remoteproc1: m33 is available`, mas nenhum firmware foi carregado nele: o driver
+  `rpmsg` continua não exercitado em alvo nenhum. O boot acrescentou uma restrição ao plano —
+  `stm32-rproc 0.m33: Support of signed firmware only`.
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
 - **Integração com bootloader e fallback A/B em boot falho** — §6. A §8 não muda isso: no
   STM32MP257 a seleção de slot **não está implementada** (`bootfs` compartilhada, `extlinux.conf`
   fixando o slot A), e no QEMU o mecanismo é outro.
-- **Qualquer execução no STM32MP257** — a §8 mede o artefato construído e o disco por inspeção.
-  Nada foi gravado em cartão nem energizado: não há boot, não há `/data` provisionado (a fonte de
-  chave `tpm2` recusa), não há aplicação rodando e o RAUC não conseguiria marcar um slot
-  (`/etc/fw_env.config` não existe na imagem).
+- **A imagem de produto no STM32MP257** — o que executou em 2026-08-18 foi
+  `make stm32 KEY=development`. Não foi executado: o perfil como o arquivo de projeto o declara
+  (`MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar), nem instalação de bundle na placa (o
+  RAUC não consegue ativar slot), nem seleção de slot A/B (o `extlinux.conf` fixa o slot A), nem a
+  HMI (o `weston` falha).
+- **Estabilidade do serviço de aquisição na placa** — subiu, mas o log de boot traz dois
+  `Started …` e o `NRestarts` não foi consultado. Não se pode afirmar que roda sem reiniciar.
+- **Carimbo de tempo confiável no alvo físico** — a placa correu sem RTC inicializado, com data de
+  2025-05-29. Nenhuma medida deste documento tomada na placa depende de tempo absoluto, mas
+  qualquer registro que o dispositivo escreva depende, e isso não está tratado.
 - **TPM, secure boot, OP-TEE** — nenhum exercitado. O OP-TEE está no FIP do disco da §8, mas nunca
   executou. E o TPM não é apenas "não medido": não há implementação alcançável nas camadas atuais —
   só emuladores em software, sem fTPM para o OP-TEE — de modo que a custódia de chave permanece de
@@ -525,8 +616,16 @@ make bundle && make verify-bundle
 make bundle-disk
 make check            # 21 asserções: plataforma + perfil EEG
 python3 scripts/med-check.py tomograph   # 11 asserções: só as de plataforma
-make stm32            # §8: o alvo físico; o artefato é inspecionado, não executado
+make stm32                      # §8: o alvo físico, configuração de produto
+make stm32 KEY=development      # §8: a configuração que foi executada na placa
 ```
+
+As medidas de execução na placa (§8, "Resultado — execução na placa") não são reproduzidas por
+`make`: exigem gravar o `.wic` num cartão, alimentar a STM32MP257F-DK e um console serial. Cada uma
+traz o comando que a produziu na própria tabela. **A suíte `med-check.py` não alcança a placa** —
+ela conversa por pty com o `runqemu` — de modo que as asserções ali foram executadas à mão, que é
+precisamente a condição que a suíte existe para eliminar. Automatizá-las contra um alvo serial é
+trabalho pendente, e até lá o alvo físico está no regime "verificado uma vez", não "verificável".
 
 **A verificação de runtime é automatizada.** `make check` boota a imagem, executa 21 asserções e
 sai com código não-zero se alguma falhar — o que transforma "verificado uma vez" em "verificável",

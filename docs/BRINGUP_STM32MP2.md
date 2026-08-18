@@ -4,7 +4,8 @@
 > (`implementation_plan_*.md`) nem medição consolidada (`RESULTS.md`) — é a narrativa que
 > conecta os dois, incluindo os erros de percurso, que num TCC valem tanto quanto os acertos.
 >
-> **Quando**: 2026-08-17. **Onde**: `stm32mp25-disco` e `qemux86-64`.
+> **Quando**: 2026-08-17 (porte e construção), 2026-08-18 (primeiro boot em hardware, §9).
+> **Onde**: `stm32mp25-disco` (placa física STM32MP257F-DK) e `qemux86-64`.
 >
 > **Como ler**: cada item traz o sintoma, a causa real (que quase nunca é o sintoma), a correção
 > e o que provou que a correção funcionou. Onde nada provou, está escrito que nada provou.
@@ -23,9 +24,15 @@
 | 6 | — (nenhum) | Receita `allarch` com conteúdo dependente de máquina | `PACKAGE_ARCH = "${MACHINE_ARCH}"` | pacotes saem em `qemux86_64/` e `stm32mp25_disco/` |
 | 7 | Overlay do kas "aplicado", pacote com o valor antigo | kas emite `local_conf_header` **em ordem alfabética da chave** | `MED_DATA_KEY_SOURCE:forcevariable` | `bitbake -e` + `.ipk` reextraído |
 | 8 | — | `tpm2` não é alcançável nas camadas atuais | documentado, não implementado | ver §7 |
+| 9 | Placa reinicia em loop ~7 s após o kernel; pânico do mundo seguro em `clk_stm32_pll_init` | Sem `ACCEPT_EULA` **e** sem `nogpu`, a ST não escreve `blacklist.conf` nenhum — a única combinação em que o `etnaviv` carrega e faz bind em `48280000.gpu` | `MACHINE_FEATURES:append` condicional em `meta-med-bsp`; depois, EULA aceita e stack Vivante | Boot completo até multi-user, `Galcore version 6.4.21.1.1058597`, sem pânico (§9) |
+| 10 | — (nenhum) | `/dev/disk/by-partlabel/` é **um namespace plano entre todos os discos**, e o eMMC de fábrica traz os mesmos nomes do layout da ST | `bootfs` → `med-boot`; o que não pôde ser renomeado passa a ser endereçado por PARTUUID | `med-boot` resolveu para `mmcblk0p8` — o cartão — e a chave foi escrita lá (§9) |
+| 11 | `rauc status`: `fw_printenv failed with exit code: 1`, ambos os slots `boot status: bad` | `/etc/fw_env.config` não existe; a ST instala `.mmc`/`.nand`/`.nor` e nunca esse nome | não implementado | previsto por inspeção do manifest (`RESULTS.md` §8), agora **observado em execução** (§9) |
+| 12 | `weston.service` falha com `status=1` e derruba a HMI por dependência | desconhecida; o DRM da placa subiu e o galcore carregou | em aberto | única unidade falha do sistema (§9) |
 
-Note o padrão: **quatro dos oito itens não tinham sintoma nenhum**. Não falharam build, não falharam
-boot, não emitiram warning. Apareceram porque alguém foi olhar o artefato produzido.
+Note o padrão: **cinco dos doze itens não tinham sintoma nenhum**. Não falharam build, não falharam
+boot, não emitiram warning. Apareceram porque alguém foi olhar o artefato produzido. E note o
+complemento que o primeiro boot acrescentou: os itens 9 a 12 são o oposto — nenhum deles poderia ter
+sido encontrado sem energizar a placa, e três deles nenhuma inspeção de artefato teria revelado.
 
 ---
 
@@ -177,16 +184,47 @@ alfabeticamente pela chave**. O bloco `bringup` saiu na linha 1 do `local.conf`,
 overlay. O build passava, o overlay *parecia* aplicado, e o pacote produzido continuava dizendo
 `tpm2`. Só apareceu ao extrair o `.ipk` e ler o script substituído.
 
-A correção é `MED_DATA_KEY_SOURCE:forcevariable`, último item do `OVERRIDES` do bitbake, que vence
-independentemente de onde o kas decida escrever o bloco. Renomear a chave para ordenar por último
-também funcionaria e quebraria no dia em que alguém acrescentasse um bloco com letra posterior.
+A correção imediata foi `MED_DATA_KEY_SOURCE:forcevariable`, último item do `OVERRIDES` do bitbake,
+que vence independentemente de onde o kas decida escrever o bloco. Renomear a chave para ordenar por
+último também funcionaria e quebraria no dia em que alguém acrescentasse um bloco com letra
+posterior. Mas nenhuma das duas remove a armadilha de ordenação para o próximo overlay, e é por isso
+que o overlay deixou de existir (abaixo).
 
-### O overlay de bring-up
+### O bring-up como parâmetro, não como segundo comando
 
-`kas/bringup-stm32mp2.yml`, composto com `make stm32-bringup`. O delta é **uma variável**. O perfil
-`project-eeg-stm32mp2.yml` continua declarando `tpm2`, que é o que o produto deveria ser; sobrescrever
-a configuração do alvo para fazer um primeiro boot passar deixaria o repositório descrevendo um
-dispositivo que nunca foi pretendido, sem registrar que a diferença era temporária.
+O delta sempre foi **uma variável**, e por um tempo isso custou um arquivo `kas/bringup-stm32mp2.yml`
+e um alvo `make stm32-bringup`. Hoje é um parâmetro:
+
+```bash
+make stm32                    # MED_DATA_KEY_SOURCE = "tpm2", o que o produto deve ser
+make stm32 KEY=development    # a custódia do primeiro boot
+```
+
+`kas-base.yml` declara `MED_DATA_KEY_SOURCE` sob `env:` com valor **nulo** — no kas isso significa
+"acrescente o nome ao `BB_ENV_PASSTHROUGH_ADDITIONS`, mas só defina se o ambiente já tiver"
+(`libkas.py` filtra os `None` antes de entregar o ambiente ao bitbake). Um default em string ali
+seria pior que inútil: entraria no datastore de toda máquina e responderia calado uma pergunta que
+cada alvo deve responder por si.
+
+Duas consequências que não são estilo:
+
+- os perfis passaram a declarar `MED_DATA_KEY_SOURCE ?=`, não `=`. O bitbake põe uma variável de
+  passthrough no datastore **antes** de parsear o `local.conf`, então um `=` no perfil venceria o
+  parâmetro — de novo em silêncio, com build verde e a string errada substituída no script embarcado.
+  É literalmente o mesmo modo de falha do overlay, um nível acima;
+- o `kas-container` encaminha só uma whitelist fixa de variáveis para dentro do contêiner
+  (`kas-container:731`), e ela é do upstream, não nossa. Por isso o `Makefile` exporta a variável no
+  modo `NATIVE=1` e a entrega ao `docker run` via `--runtime-args "-e ..."` no modo contêiner.
+
+O perfil `project-eeg-stm32mp2.yml` continua declarando `tpm2`, que é o que o produto deveria ser;
+sobrescrever a configuração do alvo para fazer um primeiro boot passar deixaria o repositório
+descrevendo um dispositivo que nunca foi pretendido, sem registrar que a diferença era temporária.
+Um parâmetro na linha de comando registra isso melhor que um arquivo: não há configuração paralela
+para alguém confundir com a do produto.
+
+Um valor desconhecido em `KEY` agora falha no build, não na placa: o `Makefile` recusa qualquer coisa
+fora de `tpm2`/`development`, e `med-data-volume_1.0.bb` repete a checagem em `bb.fatal` para pegar
+também quem chame `kas build` direto.
 
 E note o que **não** foi dispensado: `MED_EEG_REQUIRE_ENCRYPTION` continua `"true"`. Com a custódia
 resolvida, `/data` é LUKS2 de verdade na placa, o `MedicalStorage` encontra um `dm/uuid` começando em
@@ -214,6 +252,25 @@ Isso qualifica a regra 3 do `CLAUDE.md`: o `linux-%.bbappend` curinga garante qu
 *chegue* a qualquer kernel de vendor — verificado, o `med-kernel-features.cfg` está no `WORKDIR` do
 `linux-stm32mp` — mas **não** garante que ele *vença*. A ordem em que a receita da ST aplica os
 próprios fragmentos não foi investigada. Está em aberto.
+
+**Confirmado no kernel em execução** (2026-08-18, `zcat /proc/config.gz` na placa):
+
+```
+CONFIG_TCG_TIS_CORE=m
+CONFIG_TCG_TIS=m
+CONFIG_TCG_TIS_SPI=m
+```
+
+O que a tabela acima lia do `.config` construído, o kernel que bootou confirma. Vale registrar uma
+hipótese **descartada**, porque ela é a explicação intuitiva e está errada: não é o caso de o núcleo
+`TCG_TPM` ter saído módulo e arrastar os filhos — a própria tabela acima mostra `CONFIG_TCG_TPM`
+saindo `y`. Um `bool`/`tristate` filho vindo `m` sob um pai `y` é uma escolha ativa de alguém, não
+uma consequência de dependência, e continua sem causa identificada.
+
+Funcionalmente segue sem bloquear nada: não há TPM nesta placa (§7), então o símbolo não teria o que
+controlar de qualquer forma. O que ele bloqueia é a **frase**: nenhuma afirmação deste repositório
+pode dizer que o fragmento de kernel se aplica igualmente aos dois alvos. Ele chega aos dois; vence
+em um.
 
 ---
 
@@ -348,30 +405,336 @@ de manter infraestrutura para um TCC não se paga.
 
 ---
 
-## 9. Estado ao fim deste registro
+## 9. O primeiro boot na placa
+
+**2026-08-18.** Imagem construída com `make stm32 KEY=development`, gravada em cartão SD, console
+serial pelo ST-LINK V3 (`/dev/serial/by-id/usb-STMicroelectronics_STLINK-V3_*`, minicom).
+
+É a primeira vez que qualquer coisa deste repositório executou em hardware. Tudo abaixo é log de
+console e saída de comando, transcritos; onde houve inferência, está marcado como inferência.
+
+### 9.1 A cadeia de boot fecha, e o PARTUUID prova que não foi coincidência
+
+```
+Boot over mmc0!
+Scanning mmc 0:8...
+Found /extlinux/extlinux.conf
+Retrieving file: /Image.gz
+append: root=PARTUUID=e91c4e10-16e6-4c0e-bd0e-77becf4a3582 rootwait rw ...
+Retrieving file: /stm32mp257f-dk-ca35tdcid-ostl.dtb
+...
+Machine model: STMicroelectronics STM32MP257F-DK CA35TDCID OSTL
+Linux version 6.6.129 (oe-user@oe-host) (aarch64-med-linux-gcc ...)
+EXT4-fs (mmcblk0p9): mounted filesystem d60966ff-... 
+VFS: Mounted root (ext4 filesystem)
+```
+
+O `mmc 0:8` é a `med-boot`, oitava partição do layout. O `e91c4e10-16e6-4c0e-bd0e-77becf4a3582` é,
+literalmente, o `--uuid` que `med-partitions-stm32mp2.wks.in` fixa em `med-root-a` — o `.wks` o fixa
+justamente porque o `extlinux.conf` que o BSP gera referencia `${DEVICE_PARTUUID_ROOTFS:SDCARD}`, e
+a §2 registrava isso como uma restrição a respeitar. Ela foi respeitada, e o boot é a prova.
+
+A variante `-ca35tdcid-ostl` do TF-A/FIP também se confirma pelo `Machine model` e pelo `.dtb` que o
+U-Boot escolheu sozinho, derivado do devicetree embutido no FIP.
+
+O rootfs monta `rw` (`grep ' / ' /proc/mounts` → `/dev/root / ext4 rw,relatime`). **Isso não é
+defeito**: `med-image-eeg` requer `med-image-dev.inc`, que zera `MED_ROOTFS_FEATURES` de propósito.
+Rootfs imutável é política do `med-image-prod`, que segue nunca construído.
+
+### 9.2 A GPU: a hipótese estava certa
+
+O item 9 da §1 é o defeito que impediu qualquer boot antes deste. O sintoma era pânico do mundo
+seguro em `clk_stm32_pll_init` (`clk-stm32mp25.c:2002`) cerca de sete segundos após o kernel,
+imediatamente depois de `etnaviv etnaviv: bound 48280000.gpu`, seguido de reboot em loop —
+reproduzido duas vezes, e sobreviveu à troca completa da variante TF-A/OP-TEE/U-Boot, o que
+descartou incompatibilidade de devicetree.
+
+A causa é um buraco de configuração: `linux-stm32mp.inc` só escreve
+`/etc/modprobe.d/blacklist.conf` se `MACHINE_FEATURES` contiver `gpu` **ou** `nogpu`. Sem nenhum dos
+dois — sem `ACCEPT_EULA`, sem `nogpu` — nenhum arquivo é escrito, que é a única combinação em que o
+`etnaviv` efetivamente carrega, faz bind na GPU e pede ao mundo seguro, via SCMI, uma PLL que aquela
+configuração de firmware não tem preparada.
+
+A correção imediata foi `nogpu` condicional em `meta-med-bsp`. A configuração que bootou vai além:
+com `ACCEPT_EULA_stm32mp25-disco = "1"` no arquivo de projeto, o `nogpu` se desliga sozinho, entra o
+stack proprietário Vivante, e o `MED_GPU_PACKAGES` do `packagegroup-med-gui` traz os pacotes que o
+`GPU_IMAGE_INSTALL` da ST não entregaria por conta própria (a imagem não instala
+`packagegroup-base`, então nada no grafo alcançava `MACHINE_EXTRA_RRECOMMENDS`).
+
+Resultado:
+
+```
+[    7.284737] galcore: loading out-of-tree module taints kernel.
+[    7.446393] Galcore version 6.4.21.1.1058597
+```
+
+Sem pânico. O boot chegou a multi-user e a placa ficou de pé por mais de oito minutos. **A hipótese
+registrada no `layer.conf` — "o stack proprietário da ST usa os clocks que o firmware da ST prepara"
+— era hipótese até este boot, e agora é observação.**
+
+### 9.3 A colisão de `by-partlabel`, e a descoberta de que a enumeração é uma corrida
+
+O registro anterior media que `/dev/disk/by-partlabel/bootfs` apontava para `mmcblk0p6` — o eMMC de
+fábrica — enquanto a nossa partição era `mmcblk1p8`, e concluía que "o eMMC ganha por enumerar
+primeiro". Este boot mostra que a conclusão estava certa pelo motivo errado:
+
+```
+mmc2: new HS200 MMC card at address 0001
+mmcblk2: mmc2:0001 008GB1 7.28 GiB
+ mmcblk2: p1 p2 p3 p4 p5 p6 p7 p8            <- eMMC de fábrica (OpenSTLinux)
+
+mmc0: new ultra high speed SDR104 SDHC card at address aaaa
+mmcblk0: mmc0:aaaa WC16G 14.8 GiB
+ mmcblk0: p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 <- nosso cartão
+```
+
+Os papéis **inverteram**: o cartão virou `mmcblk0` e o eMMC virou `mmcblk2`, o oposto da medição
+anterior, no mesmo hardware e sem nenhuma mudança de configuração relacionada. A numeração
+`mmcblkN` não é uma propriedade da placa: é o resultado de uma corrida entre controladores MMC.
+
+Isso é mais forte do que o argumento que o `layer.conf` registra hoje. Não é que "o eMMC ganha" —
+é que **não existe ordem em que se apoiar**, e portanto nenhum caminho `/dev/mmcblkNpM` pode ser
+escrito em lugar nenhum deste repositório, nem sequer como comentário de referência.
+
+O placar dos nomes, com o que é medição e o que é inferência separados:
+
+| nome | resolve para | como se sabe |
+|---|---|---|
+| `med-data` | `/dev/mmcblk0p11` (cartão) | `cryptsetup status med-data` imprime o device |
+| `med-boot` | `/dev/mmcblk0p8` (cartão) | montar por `by-partlabel` imprimiu `EXT4-fs (mmcblk0p8)` |
+| `med-root-a` | `/dev/mmcblk0p9` (cartão) | `rauc status`: `Booted from: rootfs.0 (/dev/mmcblk0p9)` |
+| `bootfs`, `rootfs`, `vendorfs` | eMMC | inferência sólida: estes nomes **não existem** no nosso layout |
+| `u-boot-env`, `fip-a`, `fip-b`, `metadata1`, `metadata2` | **não determinado** | os nomes existem nos dois layouts; a saída do `ls -l` foi truncada pela largura do terminal |
+
+Os quatro nomes `med-*` são únicos por construção e todos foram para o cartão — que é exatamente o
+que a renomeação `bootfs` → `med-boot` existia para garantir, e o motivo pelo qual a chave do
+`/data` foi parar no disco certo.
+
+A última linha da tabela é uma pendência, não um detalhe: **é dela que depende o
+`/etc/fw_env.config`** (§9.5). Para fechar sem truncamento:
+
+```sh
+for l in /dev/disk/by-partlabel/*; do echo "$l -> $(readlink -f $l)"; done
+```
+
+### 9.4 `/data` criptografado, em hardware
+
+O resultado principal deste boot, e o que faz o §7 do `RESULTS.md` deixar de ser exclusivo do QEMU.
+
+```
+$ systemctl status med-data-provision.service
+     Active: active (exited) since Thu 2025-05-29 18:48:39 UTC
+    Process: 188 ExecStart=/usr/libexec/medplatform/med-data-provision.sh (code=exited, status=0/SUCCESS)
+        CPU: 16.778s
+
+$ cryptsetup status med-data
+/dev/mapper/med-data is active and is in use.
+  type:    LUKS2
+  cipher:  aes-xts-plain64
+  keysize: 512 bits
+  device:  /dev/mmcblk0p11
+  offset:  32768 sectors
+  size:    1015808 sectors
+
+$ cat /sys/block/dm-0/dm/uuid
+CRYPT-LUKS2-c1480c70814d49579d3baf01a04a64be-med-data
+
+$ awk '$2=="/data"{print $1,$3}' /proc/mounts
+/dev/mapper/med-data ext4
+
+$ mount -o ro /dev/disk/by-partlabel/med-boot /mnt && stat -c '%n %U:%G %a' /mnt/medplatform/data.key
+[  539.738686] EXT4-fs (mmcblk0p8): mounted filesystem ff539d9e-... ro
+/mnt/medplatform/data.key root:root 400
+```
+
+Quatro coisas que isto fecha:
+
+1. **O provisionamento de primeiro boot funciona no alvo físico**, não apenas no QEMU: 13 s de
+   relógio (18:48:26 → 18:48:39), 16,8 s de CPU. O custo é o PBKDF do LUKS2 num Cortex-A35, e é a
+   razão pela qual o `data.mount` esperou 13 s por `/dev/mapper/med-data` sem que isso seja defeito.
+2. **A asserção do `MedicalStorage` vale aqui**: o `dm/uuid` começa com `CRYPT-`. Com
+   `MED_EEG_REQUIRE_ENCRYPTION = "true"`, o serviço de aquisição ter subido é, por si, a afirmação
+   de que a criptografia é real.
+3. **O `400` é a medição que justifica a mudança `bootfs` → `med-boot`.** O argumento registrado em
+   `meta-med-bsp/conf/layer.conf` era que ext4 honra o `chmod 0400` que o vfat da ESP ignora. Estava
+   escrito como raciocínio; agora é uma permissão lida do sistema de arquivos.
+4. **A chave está no disco certo.** `med-boot` resolveu para `mmcblk0p8`, o cartão — se tivesse
+   resolvido para o eMMC, a chave do volume de dados de paciente teria sido escrita num disco que
+   não acompanha o dispositivo, e o sintoma só apareceria ao mover o cartão para outra placa.
+
+Duas observações menores, registradas para não se perderem:
+
+- **`/data` tem 496 MiB.** `1015808` setores × 512 B, que é a partição de 512 MiB do `.wks` menos o
+  cabeçalho LUKS2 de 16 MiB. Num cartão de 14,8 GiB. Para o PoC serve; para a frase "o único meio
+  persistente e sobrevivente a atualização do dispositivo", é pequeno, e a §9.7 explica por que os
+  ~12 GiB restantes estão inacessíveis.
+- **`EXT4-fs (mmcblk0p8): orphan cleanup on readonly fs`** ao montar a `med-boot`. Indica inodes
+  órfãos pendentes, isto é, um desmonte não limpo em algum ponto anterior. Como esta é a partição
+  onde a chave mora, o caminho de `umount` do `med-data-provision.sh` merece revisão.
+
+### 9.5 RAUC: metade funciona, e a metade que falta falha exatamente onde estava previsto
+
+```
+$ rauc status
+(rauc:1827): rauc-WARNING: Failed getting primary slot: uboot backend: fw_printenv failed with exit code: 1
+
+=== System Info ===
+Compatible:  med-os-stm32mp25-disco
+Booted from: rootfs.0 (/dev/mmcblk0p9)
+
+=== Bootloader ===
+Activated: none
+
+=== Slot States ===
+o [rootfs.1] (/dev/disk/by-partlabel/med-root-b, ext4, inactive)
+      bootname: B
+      boot status: bad
+o [rootfs.0] (/dev/disk/by-partlabel/med-root-a, ext4, booted)
+      bootname: A
+      boot status: bad
+
+$ ls -l /etc/fw_env.config; fw_printenv
+ls: /etc/fw_env.config: No such file or directory
+Cannot initialize environment
+```
+
+**O que funciona**: os dois slots resolvem por rótulo GPT, o RAUC identifica corretamente de qual
+bootou, e o `Compatible` bate com o que os bundles declaram — as três asserções `rauc-*` da suíte,
+com a diferença de que `rauc-booted-partition` casa `/dev/mmcblk0p9` no lugar de `/dev/vda2`.
+
+**O que falha**: o item 4 da lista "o que isso não significa" do `RESULTS.md` §8 dizia
+*"achado por inspeção do manifest, não observado em execução"*. Agora está observado, com a
+mensagem de erro.
+
+E a consequência é maior que o aviso sugere. Sem conseguir ler o ambiente do U-Boot, o RAUC não tem
+como saber o estado de boot de slot nenhum, e por segurança reporta **ambos como `bad` — inclusive
+aquele de onde o dispositivo acabou de bootar** — com `Activated: none`. Na prática: um
+`rauc install` escreveria o slot inativo e nunca conseguiria ativá-lo. O caminho A/B está bloqueado
+na interface com o bootloader, precisamente onde os documentos diziam que estava.
+
+A correção é um `/etc/fw_env.config` em `meta-med-bsp`, e a §9.3 já determinou a forma que ele
+**não** pode ter: endereçar `u-boot-env` por `by-partlabel`, porque esse nome colide com o do eMMC
+de fábrica. Tem de ser por PARTUUID.
+
+### 9.6 O que continua falhando, e o que ainda não foi perguntado
+
+**`weston.service` é a única unidade falha do sistema** (`systemctl list-units --state=failed`), com
+`status=1/FAILURE` após 73 ms, derrubando `eeg-hmi.service` por dependência. Aqui isto **não** é o
+caso previsto do QEMU, onde o `weston` está no `EXPECTED_FAILED` da suíte por não haver DRM/KMS sob
+`nographic`: nesta placa o DRM subiu
+(`[drm] Initialized stm 1.0.0 20170330 for 48010000.display-controller`) e o galcore carregou. A
+suspeita de trabalho é incompatibilidade de `libgbm`/EGL entre o que o weston linkou em build e o
+userland Vivante em runtime — exatamente a forma de falha que o comentário do `MED_GPU_PACKAGES`
+antecipa ("uma build que passa e um compositor que falha em runtime"), pelo lado do userland em vez
+do módulo. **Sem causa confirmada**; falta `journalctl -u weston -b -l`.
+
+**O serviço de aquisição pode estar reiniciando.** O log de boot traz
+`Started MedPlatform EEG acquisition service.` **duas vezes**. Pela lição que a injeção de falha
+deixou — `systemctl is-active` dá PASS para um serviço em crash loop — isso é precisamente o
+sintoma que não se pode aceitar sem olhar `NRestarts`. Com `MED_EEG_DRIVER = "rpmsg"` e nenhum
+firmware no Cortex-M33, falha na abertura do canal é a hipótese óbvia. **Não verificado**:
+
+```sh
+systemctl show eeg-acquisition.service -p ActiveState -p NRestarts
+```
+
+### 9.7 Achados colaterais do primeiro boot
+
+**O relógio, que é um problema regulatório e não cosmético.**
+
+```
+stm32_rtc 46000000.rtc: Date/Time must be initialized
+systemd[1]: System time before build time, advancing clock.
+```
+
+A data observada durante toda a sessão foi `Thu 2025-05-29`, com a imagem construída em 2026-08. Sem
+RTC com bateria e sem sincronização de rede antes de `/data` montar, **todo registro que o
+`MedicalLogger` e o `MedicalStorage` escreverem carrega carimbo de tempo errado**. Para um argumento
+de rastreabilidade IEC 62304 isso pesa mais que o weston: um registro de paciente com data errada é
+pior que um registro ausente. Nada no repositório trata disso hoje.
+
+**O Cortex-M33 está disponível, e exige firmware assinado.**
+
+```
+remoteproc remoteproc0: m0 is available
+remoteproc remoteproc1: m33 is available
+stm32-rproc 0.m33: Support of signed firmware only
+stm32-rproc 0.m33: mbox_request_channel_byname() could not locate ...
+remoteproc remoteproc1: cannot get detach mbox
+```
+
+O caminho AMP existe no hardware — é a primeira evidência disso. E a linha
+`Support of signed firmware only` é uma restrição que o `implementation_plan_ads1299.md` **não**
+contempla: o firmware do M33 que publicará os quadros do ADS1299 terá de ser assinado, o que
+acrescenta uma cadeia de chaves ao plano. Os avisos de mailbox sugerem que o `detach` não está
+configurado no devicetree desta variante; consequência não avaliada.
+
+**O GPT de reserva está no lugar errado.**
+
+```
+GPT:Primary header thinks Alt. header is not at the end of the device
+GPT:5394465 != 31116287
+```
+
+O `.wic` de 2,57 GiB foi gravado num cartão de 14,8 GiB, e o GPT secundário ficou no fim da imagem,
+não no fim do cartão. Bootou, mas: o kernel reclama a cada boot, ~12 GiB ficam inacessíveis (é por
+isso que `/data` são 496 MiB), e uma recuperação a partir do GPT primário danificado encontraria um
+backup obsoleto no meio do disco. `sgdisk -e` no host corrige, e depois disso a `med-data` pode
+crescer.
+
+**Ruído do BSP, catalogado para não ser reinvestigado**: `No EFI system partition` e
+`Failed to persist EFI variables` no U-Boot (placa sem ESP, esperado); `FWU metadata read failed`
+(metadados de atualização do TF-A — não bloqueou o boot, mas não foi investigado); firmwares
+ausentes de `brcmfmac`, Bluetooth e `imx335` (WiFi, BT e câmera não estão na imagem por escolha);
+dezenas de `Fixed dependency cycle(s)` do devicetree da ST; `regulatory.db` ausente. Nada disso é
+deste repositório.
+
+**Auditoria do kernel desligada**: `systemd-journald: Collecting audit messages is disabled`. A
+trilha de auditoria do MedOS é o journald com Forward Secure Sealing, que **validou na placa**
+(`journalctl --verify` → `PASS`), então isto não invalida a §5 do `RESULTS.md` — mas convém saber
+que o subsistema `audit` do kernel não está coletando.
+
+---
+
+## 10. Estado ao fim deste registro
 
 **Construído e verificado por inspeção**: `med-image-eeg` para `stm32mp25-disco`, `.wic` de
 2.761.966.592 bytes, GPT conferido, e reproduzido idêntico depois de o cache inteiro migrar para
 disco externo e voltar.
 
-**Validado em execução**: nada, no STM32. O `make check` 21/21 é no QEMU, e continuou 21/21 depois
-da refatoração da custódia de chave — que é o que garante que nada regrediu no alvo que tem
-evidência.
+**Validado em execução no QEMU**: `make check` 21/21, e continuou 21/21 depois da refatoração da
+custódia de chave — que é o que garante que nada regrediu no alvo que já tinha evidência.
 
-**Continua sem evidência de execução na placa** — e cada item tem causa conhecida:
+**Validado em execução na placa** (§9, 2026-08-18) — a coluna que até este registro estava vazia:
+
+| item | evidência |
+|---|---|
+| Boot completo até multi-user | console serial, sistema de pé > 8 min |
+| Cadeia TF-A → OP-TEE → U-Boot → kernel | `Machine model: ... CA35TDCID OSTL`, `Linux 6.6.129` |
+| Slot A boota pelo PARTUUID que o `.wks` fixa | `root=PARTUUID=e91c4e10-…` = `--uuid` de `med-root-a` |
+| GPU não derruba o mundo seguro | `Galcore version 6.4.21.1.1058597`, sem pânico |
+| `/data` LUKS2 provisionado no primeiro boot | `cryptsetup status`, 13 s, `dm/uuid` `CRYPT-…` |
+| Chave em partição fora dos slots A/B, `0400` | `stat` em `med-boot` (`mmcblk0p8`, ext4) |
+| RAUC enumera slots e identifica o bootado | `rauc status`: `Booted from: rootfs.0` |
+| Trilha de auditoria selada | `journalctl --verify` → `PASS` |
+| Cortex-M33 presente e disponível | `remoteproc remoteproc1: m33 is available` |
+
+**Continua sem evidência de execução na placa** — cada item com causa conhecida:
 
 | bloqueio | causa | estado |
 |---|---|---|
-| Seleção de slot A/B | `bootfs` compartilhada; `extlinux.conf` fixa o slot A | não implementado |
-| RAUC marcar slot | `/etc/fw_env.config` não existe (a ST instala `.mmc`/`.nand`/`.nor`) | não implementado |
-| Caminho AMP / `rpmsg` | `MED_AMP_FIRMWARE` vazio; firmware do ADS1299 não existe | não implementado |
-| HMI Qt | `ACCEPT_EULA` não definido → pacotes de GPU excluídos | decisão pendente |
+| Seleção de slot A/B | `med-boot` compartilhada; `extlinux.conf` fixa o slot A | não implementado |
+| RAUC marcar/ativar slot | `/etc/fw_env.config` não existe | **observado falhando** (§9.5); não implementado |
+| HMI Qt | `weston.service` falha com `status=1`, DRM presente | **falha observada, causa desconhecida** (§9.6) |
+| Caminho AMP / `rpmsg` | `MED_AMP_FIRMWARE` vazio; firmware do ADS1299 não existe — e agora sabe-se que terá de ser **assinado** (§9.7) | não implementado |
+| Serviço de aquisição estável | dois `Started` no boot; `NRestarts` não consultado | **não verificado** (§9.6) |
+| Carimbo de tempo confiável | sem RTC inicializado, sem NTP antes de `/data` | **defeito novo, não tratado** (§9.7) |
 | Custódia real de chave | sem TPM alcançável (§7) | investigado, não implementado |
-| Qualquer boot | nada foi gravado em cartão nem energizado | pendente |
+| Instalação de bundle real na placa | depende do `fw_env.config` | pendente |
 
 ---
 
-## 10. As regras que ficam
+## 11. As regras que ficam
 
 1. **Suposição documentada sobre comportamento de terceiros é dívida.** O comentário que afirmava o
    que o BSP da ST faz estava errado e custou um build. Ou se verifica, ou se escreve "não
@@ -382,9 +745,24 @@ evidência.
 3. **Defeito escondido atrás de uma recusa continua sendo defeito.** O `tpm2` recusando provisionar
    mascarava um script que não poderia funcionar naquela placa de forma alguma.
 4. **`allarch` é uma afirmação verificável**, não um atalho de empacotamento.
-5. **Composição de fragmento kas depende da ordem alfabética da chave.** Use `:forcevariable` quando
-   o fragmento *precisa* vencer.
+5. **Composição de fragmento kas depende da ordem alfabética da chave**, e por isso a variação de
+   um alvo é melhor como *parâmetro* que como arquivo. `:forcevariable` corrige a instância e deixa
+   a armadilha de pé para o próximo overlay; a variável de ambiente declarada em `env:` (§4) não
+   tem ordenação para perder. Onde um overlay for mesmo necessário, `:forcevariable`.
 6. **Fragmento de kernel chegar não é fragmento de kernel vencer.** Leia o `.config` produzido.
 7. **Extraia o pacote e leia o arquivo instalado.** Foi o que pegou o overlay que perdia em silêncio —
    e nem `bitbake -e` teria pego, porque a variável estava certa no datastore e errada no `local.conf`
    que a sobrescrevia depois.
+8. **Inspecionar o artefato não substitui energizar a placa.** As regras 1 a 7 vieram de defeitos
+   achados lendo o que o build produziu; os quatro defeitos da §9 não tinham como ser achados assim.
+   Três deles — o pânico da GPU, a colisão de `by-partlabel` com um segundo disco, o relógio sem RTC
+   — dependem de *hardware que a imagem não contém*. É o mesmo salto que o `make check` representou
+   em relação ao build verde, um degrau acima.
+9. **Nome de dispositivo é sempre uma corrida, nunca um fato.** `mmcblk0` e `mmcblk2` trocaram de
+   papel entre dois boots do mesmo hardware sem mudança de configuração. Endereçar por rótulo é
+   melhor que por caminho, mas só é suficiente se o rótulo for único no *conjunto de discos
+   presentes* — e um eMMC de fábrica é um disco presente. Por PARTUUID quando não puder ser único.
+10. **Uma correção que "não foi exercitada" pode já ter sido invalidada.** O plano do ADS1299
+    descreve carregar firmware no Cortex-M33; a placa respondeu `Support of signed firmware only`
+    antes de qualquer linha desse plano ser escrita em código. Boots exploratórios pagam-se em
+    restrições descobertas cedo.
