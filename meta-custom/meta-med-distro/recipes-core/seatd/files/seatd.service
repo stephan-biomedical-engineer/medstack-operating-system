@@ -1,0 +1,20 @@
+[Unit]
+Description=Seat management daemon
+Documentation=man:seatd(1)
+
+# weston runs as User=weston and cannot open DRM or input devices itself. It
+# asks libseat, which tries the seatd backend before logind, so this must be up
+# first or weston falls through to a backend that needs root and dies.
+Before=weston.service
+
+[Service]
+Type=simple
+# -g names the group allowed to connect to /run/seatd.sock. "video" is the
+# group weston's user already belongs to (uid 1000, groups input video render
+# wayland), so this grants exactly the access the compositor needs and no more.
+ExecStart=/usr/bin/seatd -g video
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
