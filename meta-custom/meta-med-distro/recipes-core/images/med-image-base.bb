@@ -67,6 +67,17 @@ MED_VERIFICATION_TOOLS ?= ""
 
 IMAGE_INSTALL:append = " ${MED_VERIFICATION_TOOLS}"
 
+# Packages a *board* needs and the platform does not. Empty here on purpose and
+# filled per machine by meta-med-bsp, exactly like MED_AMP_FIRMWARE and
+# MED_GPU_PACKAGES: this recipe stays unable to name a machine, and the BSP
+# layer stays unable to need a bbappend onto a recipe above it. Today it carries
+# med-uboot-env-config, which gives RAUC's uboot backend the /etc/fw_env.config
+# it fails without - a file that exists only because a particular board keeps
+# its bootloader environment in a particular partition.
+MED_BSP_INSTALL ?= ""
+
+IMAGE_INSTALL:append = " ${MED_BSP_INSTALL}"
+
 # That every MedOS device has an A/B disk belongs to MedOS: it is what makes
 # rauc, med-data-volume and the crypttab above mean anything, and without it
 # /dev/disk/by-partlabel/med-root-{a,b} does not exist and RAUC resolves no

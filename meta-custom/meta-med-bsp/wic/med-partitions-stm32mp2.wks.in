@@ -87,19 +87,34 @@ part metadata2 --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=m
 part fip-a --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-a --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 4fd84c93-54ef-463f-a7ef-ae25ff887087
 part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b --sourceparams="file=${DEPLOY_DIR_IMAGE}/fip/fip-stm32mp257f-dk-ca35tdcid-ostl-optee-sdcard.bin" --ondisk mmcblk --part-type 19d5df83-11b0-457b-be2c-7559c13142a5 --fixed-size 4096K --uuid 09c54952-d5bf-45af-acee-335303766fb3
 
-# U-Boot environment. Created empty, and it is where RAUC's uboot backend will
-# read and write BOOT_ORDER: the image already installs libubootenv-bin and
-# u-boot-fw-config-stm32mp, whose fw_env.config.mmc addresses this partition as
-# /dev/disk/by-partlabel/u-boot-env - so the partition *name* is the interface,
-# exactly like med-root-a/b below.
-# The --uuid is not decoration. On a board with eMMC - this one - the factory
-# OpenSTLinux image on mmcblk0 carries partitions with these same GPT names, and
-# udev gives /dev/disk/by-partlabel/u-boot-env to whichever enumerates first,
-# which is the eMMC. Observed on the device: by-partlabel/u-boot-env resolved to
-# mmcblk0p5 while ours is mmcblk1p7. A PARTUUID is unique by construction, so
-# the /etc/fw_env.config that RAUC's uboot backend needs must address this
-# partition through by-partuuid and never through by-partlabel.
-part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K --uuid d7ba3548-04a4-4269-aab6-913b1bc68d06
+# U-Boot environment. Created empty, and it is where RAUC's uboot backend reads
+# and writes BOOT_ORDER. Two different consumers reach it two different ways,
+# and both are satisfied here:
+#
+#   U-Boot itself, by GPT partition *name*. Its devicetree carries
+#   u-boot,mmc-env-partition = "u-boot-env", and env/mmc.c looks that name up on
+#   the MMC device it booted from - so the name below is an interface, exactly
+#   like med-root-a/b.
+#
+#   fw_printenv/fw_setenv under Linux, by *PARTUUID*, through the
+#   /etc/fw_env.config that meta-med-bsp's med-uboot-env-config writes. The UUID
+#   below is declared once in conf/layer.conf as MED_UBOOT_ENV_PARTUUID and
+#   substituted into both places, so the partition table and the address of the
+#   partition cannot disagree.
+#
+# The --uuid is not decoration, and the reason is stronger than it first looked.
+# The factory OpenSTLinux image on this board's eMMC carries partitions named
+# bootfs, rootfs, vendorfs, u-boot-env, fip-a and fip-b, and
+# /dev/disk/by-partlabel/ is one flat namespace across every block device: udev
+# gives each colliding name to whichever disk enumerated first. Which disk that
+# is was measured on two boots of this same hardware, with no configuration
+# change between them, and came out differently: SD=mmcblk1/eMMC=mmcblk0 once,
+# SD=mmcblk0/eMMC=mmcblk2 the next. Enumeration is a race, so by-partlabel is
+# not merely "usually the eMMC" - it has no defined answer at all. Which disk
+# won the name u-boot-env on the second boot was not determined (the ls output
+# was truncated), and it does not need to be: a PARTUUID is unique by
+# construction.
+part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K --uuid ${MED_UBOOT_ENV_PARTUUID}
 
 # ---------------------------------------------------------------------------
 # Boot filesystem: kernel, devicetrees and extlinux.conf, all of which the BSP
