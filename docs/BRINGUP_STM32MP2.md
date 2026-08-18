@@ -281,6 +281,13 @@ mostrando `/dev/sda1` nos dois mounts, e `Sstate summary: Wanted 2575 Local 2531
 Após uma desconexão a quente, a integridade foi testada de verdade: `zstd -t` em **5021 objetos** de
 sstate, todos íntegros.
 
+**`make eject`** (`scripts/med-eject.sh`) automatiza a retirada segura, e existe por um motivo
+específico de risco: o disco de caches e o cartão SD do alvo aparecem como o mesmo tipo de
+dispositivo, com letras vizinhas. Gravar a imagem em `/dev/sdb` achando que é o cartão destrói o
+cache inteiro, e é um erro de uma tecla. Retirar o disco antes de gravar não reduz esse risco — o
+alvo errado deixa de existir. O script recusa e diz qual PID está segurando, em vez de forçar um
+`umount -l`, cujo modo de falha é perder escrita em voo silenciosamente.
+
 ---
 
 ## 7. `tpm2`: o que se descobriu

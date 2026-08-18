@@ -70,7 +70,7 @@ else
   endif
 endif
 
-.PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
+.PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \
         stm32-bringup tomograph bundle verify-bundle bundle-disk shell runqemu \
         runqemu-tomograph check image-info clean purge
 
@@ -79,6 +79,7 @@ help:
 	@echo
 	@echo "  tool        fetch + checksum the pinned kas-container $(KAS_VERSION)"
 	@echo "  pki         generate the update-signing CA (keys stay out of git)"
+	@echo "  eject       safely unmount + power off the cache disk (before flashing)"
 	@echo "  checkout    clone the external layers, write build/conf, do not build"
 	@echo "  layers      bitbake-layers show-layers (parse only)"
 	@echo "  risks       the three known metadata risks, all parse only"
@@ -120,6 +121,13 @@ tool: $(KAS_CONTAINER)
 # one host tool this repository does depend on.
 pki:
 	./scripts/med-pki.sh
+
+# Runs on the host and touches no build state. Meant to be run immediately
+# before writing an image to an SD card: the cache disk and the card appear as
+# the same kind of device with neighbouring letters, and removing one of them
+# does not reduce the risk of writing to the wrong one - it removes it.
+eject:
+	./scripts/med-eject.sh
 
 checkout: $(TOOL)
 	$(KAS) checkout $(QEMU_CFG)
