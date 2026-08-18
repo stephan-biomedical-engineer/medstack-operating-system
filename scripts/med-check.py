@@ -50,11 +50,14 @@ CMD_TIMEOUT = 90
 # Units allowed to be failed. Every entry needs a reason, and the reason has to
 # be a deliberate limitation rather than an unexplained failure - an allowlist
 # nobody justifies is just a muted alarm.
-EXPECTED_FAILED = {
-    # nographic: there is no DRM/KMS device for a compositor to open. The Qt
-    # HMI needs a graphical runqemu, which is a separate exercise.
-    "weston.service",
-}
+EXPECTED_FAILED = set()
+# weston.service used to be listed here, with the reason "nographic: there is no
+# DRM/KMS device for a compositor to open". That reason stopped being true when
+# meta-med-distro started shipping a seatd.service: weston now reaches
+# ActiveState=active with Result=success and NRestarts=0 under nographic. An
+# allowlist entry whose justification has expired is a muted alarm - it would
+# have swallowed a real compositor failure silently - so it is gone, and
+# weston starting is now something the suite asserts rather than excuses.
 
 
 def check_failed_units(out):
@@ -63,6 +66,42 @@ def check_failed_units(out):
     if unexpected:
         return False, "unidades falhas não previstas: " + ", ".join(sorted(unexpected))
     return True, "nenhuma além das previstas" if got else "nenhuma"
+
+
+def check_journal_integrity(out):
+    """Every *archived* journal file must verify.
+
+    The assertion this replaces ran `journalctl --verify | tail -1` and matched
+    ^PASS. That was sound only while the journal was a single file. As soon as
+    it rotates, --verify emits one line per file in an order it does not
+    promise, and tail -1 asserts on whichever landed last - so the check became
+    a coin flip rather than a verification. It was found by a change that made
+    the system log enough to rotate, which is to say: by accident.
+
+    The active file (system.journal) is excluded deliberately and that is the
+    one judgement call here. systemd is appending to it while --verify reads it,
+    so its tail is legitimately mid-write and it reports "Bad message"; the
+    archived files are complete and are what an auditor would be handed. If the
+    exclusion ever hides a real defect it will hide it in the newest file only,
+    and the next rotation surfaces it.
+
+    Note also what the old name claimed and this one does not. "Forward Secure
+    Sealing valida" was never what ran: verifying seals needs --verify-key=,
+    which the command never passed, so a sealed file reports "Required key not
+    available" rather than validating. What is measured here is structural
+    integrity. Sealing is asserted by RESULTS.md §5 on other evidence.
+    """
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    passed = [l for l in lines if l.startswith("PASS:")]
+    failed = [l for l in lines if l.startswith("FAIL:")]
+    archived_failed = [l for l in failed if not l.split()[1].endswith("/system.journal")]
+
+    if archived_failed:
+        return False, "journal arquivado não verifica: " + "; ".join(archived_failed)
+    if not passed:
+        return False, "nenhum journal verificou (saída: %s)" % (lines or "(vazia)")
+    return True, "%d arquivo(s) verificam, %d ativo(s) ignorado(s)" % (
+        len(passed), len(failed))
 
 
 def check_exposure(out):
@@ -103,8 +142,9 @@ PLATFORM_CHECKS = [
     ("journal-persistent", "/var/log/journal é diretório real, não tmpfs",
      "test -d /var/log/journal && test ! -L /var/log && echo OK", rx(r"OK")),
 
-    ("journal-sealed", "o Forward Secure Sealing do journal valida",
-     "journalctl --verify 2>&1 | tail -1", rx(r"^PASS", re.M)),
+    ("journal-integro", "todo journal arquivado verifica íntegro",
+     "journalctl --verify 2>&1 | grep -E '^(PASS|FAIL):' || true",
+     check_journal_integrity),
 
     # rauc.service is Type=dbus with BusName=de.pengutronix.rauc, so it is
     # activated on demand and being inactive is not a fault - on a platform
