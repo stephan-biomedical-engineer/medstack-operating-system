@@ -71,7 +71,8 @@ else
 endif
 
 .PHONY: help tool pki checkout layers risks parse framework service qemu stm32 \
-        tomograph bundle verify-bundle bundle-disk shell runqemu runqemu-tomograph check image-info clean purge
+        stm32-bringup tomograph bundle verify-bundle bundle-disk shell runqemu \
+        runqemu-tomograph check image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -86,6 +87,7 @@ help:
 	@echo "  service     build eeg-acquisition-service only (fast inner loop)"
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
+	@echo "  stm32-bringup  the same, with the first-boot /data key source"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
@@ -148,6 +150,11 @@ qemu: $(TOOL)
 
 stm32: $(TOOL)
 	$(KAS) build $(STM32_CFG)
+
+# The same image with the first-boot key source, for bringing the board up
+# before a TPM is confirmed on it. One variable differs; see the overlay.
+stm32-bringup: $(TOOL)
+	$(KAS) build $(STM32_CFG):kas/bringup-stm32mp2.yml
 
 tomograph: $(TOOL)
 	$(KAS) build $(TOMO_CFG)

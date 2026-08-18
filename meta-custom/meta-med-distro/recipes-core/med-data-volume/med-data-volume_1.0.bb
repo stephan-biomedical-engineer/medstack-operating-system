@@ -16,7 +16,19 @@ SRC_URI = " \
 
 S = "${WORKDIR}"
 
-inherit systemd allarch
+inherit systemd
+
+# NOT allarch, which this recipe used to be. allarch declares that the produced
+# package is identical for every machine, and this one is not: do_install
+# substitutes MED_KEY_STORE_DEV and MED_KEY_STORE_FSTYPE, whose values come from
+# meta-med-bsp keyed on MACHINE, and MED_DATA_KEY_SOURCE, which differs per
+# target. Two machines built into the same TMPDIR would write the same
+# package name into the same all/ deploy directory with different contents, and
+# the second build would silently overwrite the first - a device provisioning
+# /data against another board's partition table, with nothing failing at build
+# time. The hazard predates the key store work (MED_DATA_KEY_SOURCE already
+# varied); parameterising the partition is what made it obvious.
+PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 # blkid reads the pristine filesystem label the provisioning safeguard keys on;
 # mke2fs creates the filesystem inside the container. Both are already in
@@ -33,6 +45,25 @@ SYSTEMD_AUTO_ENABLE = "enable"
 # same way MED_EEG_DRIVER, MED_BOOTLOADER and MED_WKS_FILE are.
 MED_DATA_KEY_SOURCE ?= "tpm2"
 
+# Where a "development" key is allowed to live, and how to mount it. Empty here
+# on purpose: the answer is a partition table, which is a board fact, so
+# meta-med-bsp declares it per machine and this layer only knows the concept.
+# The requirement the board has to satisfy is that the partition survives an A/B
+# update - see the note in med-data-provision.sh.
+MED_KEY_STORE_DEV ?= ""
+MED_KEY_STORE_FSTYPE ?= ""
+
+python () {
+    # A development key with nowhere to live fails at first boot, on the device,
+    # with /data unprovisioned and the acquisition service refusing to start.
+    # That is exactly the class of failure this repository moves to build time.
+    if d.getVar('MED_DATA_KEY_SOURCE') == 'development' and not d.getVar('MED_KEY_STORE_DEV'):
+        bb.fatal('MED_DATA_KEY_SOURCE is "development" for MACHINE=%s but no key '
+                 'store is declared. Add MED_KEY_STORE_DEV/MED_KEY_STORE_FSTYPE '
+                 'for this machine in meta-med-bsp/conf/layer.conf, naming a '
+                 'partition that no RAUC update writes to.' % d.getVar('MACHINE'))
+}
+
 do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/data.mount ${D}${systemd_system_unitdir}/data.mount
@@ -41,6 +72,8 @@ do_install() {
 
     install -d ${D}${libexecdir}/medplatform
     sed -e "s|@MED_DATA_KEY_SOURCE@|${MED_DATA_KEY_SOURCE}|g" \
+        -e "s|@MED_KEY_STORE_DEV@|${MED_KEY_STORE_DEV}|g" \
+        -e "s|@MED_KEY_STORE_FSTYPE@|${MED_KEY_STORE_FSTYPE}|g" \
         ${WORKDIR}/med-data-provision.sh \
         > ${D}${libexecdir}/medplatform/med-data-provision.sh
     chmod 0750 ${D}${libexecdir}/medplatform/med-data-provision.sh
