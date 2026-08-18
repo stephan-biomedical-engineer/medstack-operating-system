@@ -14,4 +14,6 @@ local_conf_header:
     # the development key source. Declared rather than inherited - the default
     # is "tpm2" and would fail to provision here, which is the correct outcome
     # for a target that forgot, but a surprise is not a decision.
-    MED_DATA_KEY_SOURCE = "development"
+    # "?=" so "make <target> KEY=..." can override it; a plain "=" would
+    # beat the parameter silently (see env: in kas-base.yml).
+    MED_DATA_KEY_SOURCE ?= "development"

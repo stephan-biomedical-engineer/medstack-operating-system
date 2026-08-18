@@ -139,3 +139,31 @@ env:
   # rejects the file before it starts.
   BB_NUMBER_THREADS: "8"
   PARALLEL_MAKE: "-j 8"
+
+  # The /data volume key source, as a build parameter rather than a second
+  # entry point. Declared with a *null* default, which in kas means "add the
+  # name to BB_ENV_PASSTHROUGH_ADDITIONS, but only set it if the host
+  # environment already has it" (kas/libkas.py filters None values out before
+  # handing the environment to bitbake). A string default here would be worse
+  # than useless: it would land in the datastore for every machine and quietly
+  # answer a question each target is supposed to answer for itself.
+  #
+  #   make stm32                    -> the profile's own value ("tpm2")
+  #   make stm32 KEY=development    -> a key on the board's boot partition
+  #
+  # Two things make this work, and both were learned by getting them wrong.
+  #
+  # First, the project files must declare their key source with "?=", not "=".
+  # bitbake imports passthrough variables into the datastore *before* it parses
+  # local.conf, so a plain assignment there beats the parameter - silently, with
+  # a green build and the wrong string substituted into the shipped script.
+  #
+  # Second, the reason this is an environment variable and not a kas overlay
+  # composed onto the profile: kas emits local_conf_header blocks **sorted
+  # alphabetically by key**, so an overlay named "bringup" was written to
+  # local.conf *above* the profile's own "eeg-stm32mp2" block and lost to it.
+  # The build succeeded, the overlay appeared to be applied, and the produced
+  # .ipk still said "tpm2"; it was caught by extracting the package and reading
+  # the substituted script, not by anything failing. ":forcevariable" fixed that
+  # instance and left the ordering trap in place for the next one.
+  MED_DATA_KEY_SOURCE:

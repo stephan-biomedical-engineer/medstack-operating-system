@@ -51,15 +51,39 @@ STM32_CFG := kas/project-eeg-stm32mp2.yml
 TOMO_CFG  := kas/project-tomograph.yml
 IMAGE     := med-image-eeg
 
+# Where the LUKS key for /data comes from, as a parameter on the build targets
+# rather than as a second set of targets:
+#
+#   make stm32                   the profile's own answer ("tpm2")
+#   make stm32 KEY=development   a key on a partition no update writes to
+#
+# Checked here rather than left to the build, because a typo would otherwise
+# reach the recipe, be substituted into the shipped provisioning script, and
+# only fail on the board at first boot.
+KEY ?=
+ifneq ($(KEY),)
+  ifeq ($(filter $(KEY),tpm2 development),)
+    $(error KEY must be "tpm2" or "development", not "$(KEY)")
+  endif
+endif
+
 # runqemu is only worth running with hardware acceleration, which needs the KVM
 # character device and membership of the group that owns it on the *host* - the
 # numeric gid is what the kernel checks, so it is read from the device itself.
 KVM_GID := $(shell stat -c %g /dev/kvm 2>/dev/null)
 
+# kas forwards MED_DATA_KEY_SOURCE into bitbake because kas-base.yml lists it
+# under "env:", but kas-container forwards only a fixed whitelist of variables
+# into the container (kas-container:731), and that list is upstream's, not ours.
+# So the native build exports it and the containerised one hands it to docker
+# run explicitly. Getting this wrong is silent: the build succeeds with the
+# profile's default.
 ifeq ($(NATIVE),1)
   KAS          := kas
   RUNTIME_ARGS :=
   TOOL         :=
+  KEY_ENV      := $(if $(KEY),MED_DATA_KEY_SOURCE=$(KEY),)
+  KEY_ARGS     :=
 else
   KAS  := $(KAS_CONTAINER)
   TOOL := $(KAS_CONTAINER)
@@ -68,10 +92,12 @@ else
   else
     RUNTIME_ARGS := --runtime-args "--device /dev/kvm --group-add $(KVM_GID) -p 2222:2222"
   endif
+  KEY_ENV  :=
+  KEY_ARGS := $(if $(KEY),--runtime-args "-e MED_DATA_KEY_SOURCE=$(KEY)",)
 endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \
-        stm32-bringup tomograph bundle verify-bundle bundle-disk shell runqemu \
+        tomograph bundle verify-bundle bundle-disk shell runqemu \
         runqemu-tomograph check image-info clean purge
 
 help:
@@ -88,7 +114,6 @@ help:
 	@echo "  service     build eeg-acquisition-service only (fast inner loop)"
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
-	@echo "  stm32-bringup  the same, with the first-boot /data key source"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
@@ -154,18 +179,13 @@ service: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake eeg-acquisition-service"
 
 qemu: $(TOOL)
-	$(KAS) build $(QEMU_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(QEMU_CFG)
 
 stm32: $(TOOL)
-	$(KAS) build $(STM32_CFG)
-
-# The same image with the first-boot key source, for bringing the board up
-# before a TPM is confirmed on it. One variable differs; see the overlay.
-stm32-bringup: $(TOOL)
-	$(KAS) build $(STM32_CFG):kas/bringup-stm32mp2.yml
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(STM32_CFG)
 
 tomograph: $(TOOL)
-	$(KAS) build $(TOMO_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(TOMO_CFG)
 
 # Cheapest test of the update path: no image boot, no bootloader, no slots -
 # just the signature, the keyring, the codeSigning purpose and the CRL.

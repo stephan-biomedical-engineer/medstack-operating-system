@@ -63,8 +63,23 @@ local_conf_header:
     # NOT YET EXERCISED: med-data-provision.sh fails loudly on this key source
     # rather than falling back. See docs/implementation_plan_luks.md - and read
     # its §7.3 first, because sealing to PCRs that cover the rootfs means a
-    # *successful* A/B update stops the device decrypting /data.
-    MED_DATA_KEY_SOURCE = "tpm2"
+    # *successful* A/B update stops the device decrypting /data. Until a TPM is
+    # confirmed on the board, bring the board up with
+    #
+    #     make stm32 KEY=development
+    #
+    # which puts the key on med-boot - outside both A/B slots, so a successful
+    # update cannot destroy it, and ext4 rather than vfat, so the chmod 0400
+    # takes effect. Whoever can read the SD card can read that key; that is what
+    # makes it a development key, and why it is a parameter and not this line.
+    # What the parameter does NOT waive is MED_EEG_REQUIRE_ENCRYPTION - /data is
+    # a real LUKS2 volume either way, so the acquisition service starting is
+    # still the assertion that encryption is real.
+    #
+    # "?=" rather than "=" is load-bearing: bitbake sets a passthrough variable
+    # in the datastore before local.conf is parsed, so "=" here would beat the
+    # parameter without failing anything. See the env: block in kas-base.yml.
+    MED_DATA_KEY_SOURCE ?= "tpm2"
     PACKAGECONFIG:append:pn-systemd = " tpm2"
 
     # meta-tpm expects the feature it is named after, and warns once per build

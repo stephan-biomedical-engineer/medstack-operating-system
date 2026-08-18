@@ -54,6 +54,16 @@ MED_KEY_STORE_DEV ?= ""
 MED_KEY_STORE_FSTYPE ?= ""
 
 python () {
+    # An unrecognised key source is substituted into the provisioning script
+    # verbatim, and med-data-provision.sh only rejects it at first boot on the
+    # device - with /data unprovisioned and MedicalStorage refusing to start.
+    # The value now arrives as a build parameter (MED_DATA_KEY_SOURCE is in
+    # kas-base.yml's env:), so a typo has a shorter path here than it used to.
+    key_source = d.getVar('MED_DATA_KEY_SOURCE')
+    if key_source not in ('tpm2', 'development'):
+        bb.fatal('MED_DATA_KEY_SOURCE is "%s"; med-data-provision.sh knows only '
+                 '"tpm2" and "development".' % key_source)
+
     # A development key with nowhere to live fails at first boot, on the device,
     # with /data unprovisioned and the acquisition service refusing to start.
     # That is exactly the class of failure this repository moves to build time.
