@@ -550,14 +550,16 @@ O placar dos nomes, com o que é medição e o que é inferência separados:
 | `med-boot` | `/dev/mmcblk0p8` (cartão) | montar por `by-partlabel` imprimiu `EXT4-fs (mmcblk0p8)` |
 | `med-root-a` | `/dev/mmcblk0p9` (cartão) | `rauc status`: `Booted from: rootfs.0 (/dev/mmcblk0p9)` |
 | `bootfs`, `rootfs`, `vendorfs` | eMMC | inferência sólida: estes nomes **não existem** no nosso layout |
-| `u-boot-env`, `fip-a`, `fip-b`, `metadata1`, `metadata2` | **não determinado** | os nomes existem nos dois layouts; a saída do `ls -l` foi truncada pela largura do terminal |
+| `u-boot-env` | **`/dev/mmcblk2p5` — o eMMC de fábrica** | `readlink -f`, medido depois (§9.8); o nosso é `mmcblk0p7` |
+| `fip-a`, `fip-b`, `metadata1`, `metadata2` | não determinado | os nomes existem nos dois layouts; a saída do `ls -l` foi truncada |
 
 Os quatro nomes `med-*` são únicos por construção e todos foram para o cartão — que é exatamente o
 que a renomeação `bootfs` → `med-boot` existia para garantir, e o motivo pelo qual a chave do
 `/data` foi parar no disco certo.
 
-A última linha da tabela é uma pendência, não um detalhe: **é dela que depende o
-`/etc/fw_env.config`** (§9.5). Para fechar sem truncamento:
+A linha do `u-boot-env` era uma pendência, não um detalhe: **é dela que dependia a forma do
+`/etc/fw_env.config`** (§9.5). Está fechada, e da pior maneira possível — o nome foi para o disco
+errado. Os quatro nomes restantes continuam sem medição, e o comando que fecha sem truncamento é:
 
 ```sh
 for l in /dev/disk/by-partlabel/*; do echo "$l -> $(readlink -f $l)"; done
@@ -739,6 +741,61 @@ deste repositório.
 trilha de auditoria do MedOS é o journald com Forward Secure Sealing, que **validou na placa**
 (`journalctl --verify` → `PASS`), então isto não invalida a §5 do `RESULTS.md` — mas convém saber
 que o subsistema `audit` do kernel não está coletando.
+
+---
+
+### 9.8 Segunda sessão na placa: o `fw_env.config` validado, e o que ele destravou
+
+Ainda 2026-08-18, com a placa ligada e o rootfs `rw` — o que permitiu testar o arquivo **antes** de
+reconstruir a imagem, escrevendo-o à mão com o mesmo conteúdo que a receita gera.
+
+**A colisão de nomes, medida.**
+
+```
+$ readlink -f /dev/disk/by-partlabel/u-boot-env
+/dev/mmcblk2p5                       <- eMMC de fábrica
+$ ls -l /dev/disk/by-partuuid/ | grep d7ba3548
+d7ba3548-04a4-4269-aab6-913b1bc68d06 -> ../../mmcblk0p7   <- a nossa
+```
+
+O `fw_env.config.mmc` que a ST distribui endereça essa partição por *partlabel*. Usá-lo teria
+apontado o `fw_setenv` para o ambiente de bootloader **de outro sistema operacional**, no disco
+errado — e teria funcionado, em silêncio, até alguém se perguntar por que uma troca de slot nunca
+surtia efeito. Isto não é mais um argumento sobre unicidade de nomes; é uma medição.
+
+**O arquivo funciona.**
+
+```
+$ fw_setenv BOOT_ORDER "A B" && fw_printenv BOOT_ORDER
+BOOT_ORDER=A B
+```
+
+Um round-trip exercita as três decisões de uma vez: o endereço por PARTUUID, o `ENV_SIZE` de
+`0x2000`, e o formato redundante de duas entradas em `-0x2000`/`-0x4000` que diverge do arquivo da
+ST. As duas primeiras eram indícios (o default do U-Boot e a própria declaração da ST); a terceira
+era derivação a partir do `env/mmc.c`. As três passam.
+
+**E o RAUC avançou uma etapa — a mensagem de erro mudou.**
+
+```
+antes:  Failed getting primary slot: uboot backend: fw_printenv failed with exit code: 1
+agora:  Failed getting primary slot: uboot backend: Unable to find primary boot slot
+```
+
+Isso é progresso, não um segundo defeito: o RAUC passou a **ler** o ambiente e agora falha um passo
+adiante. O backend `uboot` escolhe o slot primário percorrendo `BOOT_ORDER` e pegando o primeiro
+cujo `BOOT_<bootname>_LEFT` seja maior que zero. `BOOT_A_LEFT` e `BOOT_B_LEFT` não existem — o
+ambiente foi criado zerado pelo `.wks` e nunca semeado — então nenhum slot se qualifica, e é a mesma
+ausência que faz os dois aparecerem como `boot status: bad`.
+
+Semear é atribuição do `rauc status mark-good`, que o pacote `rauc-mark-good` (presente na imagem)
+executa no boot. Ele não teve efeito no primeiro boot porque o `fw_setenv` falhava. Está por
+verificar se passa a ter.
+
+Vale registrar o que este teste mostra sobre método: o arquivo foi validado **sem reconstruir a
+imagem**, porque o perfil de desenvolvimento monta o rootfs `rw`. Um rootfs imutável — que é o que
+o `med-image-prod` terá — teria exigido um ciclo de build e regravação de cartão para descobrir a
+mesma coisa. A imutabilidade é política correta para produto e é atrito puro no bring-up.
 
 ---
 

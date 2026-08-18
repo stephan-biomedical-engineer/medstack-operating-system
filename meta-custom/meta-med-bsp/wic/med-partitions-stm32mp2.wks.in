@@ -110,10 +110,11 @@ part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b
 # is was measured on two boots of this same hardware, with no configuration
 # change between them, and came out differently: SD=mmcblk1/eMMC=mmcblk0 once,
 # SD=mmcblk0/eMMC=mmcblk2 the next. Enumeration is a race, so by-partlabel is
-# not merely "usually the eMMC" - it has no defined answer at all. Which disk
-# won the name u-boot-env on the second boot was not determined (the ls output
-# was truncated), and it does not need to be: a PARTUUID is unique by
-# construction.
+# not merely "usually the eMMC" - it has no defined answer at all. And for this
+# partition the answer measured on 2026-08-18 is the wrong disk:
+# by-partlabel/u-boot-env resolved to /dev/mmcblk2p5, the factory eMMC, while
+# ours is /dev/mmcblk0p7 by PARTUUID. Addressing it by name would have sent
+# fw_setenv to another operating system's bootloader environment.
 part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K --uuid ${MED_UBOOT_ENV_PARTUUID}
 
 # ---------------------------------------------------------------------------

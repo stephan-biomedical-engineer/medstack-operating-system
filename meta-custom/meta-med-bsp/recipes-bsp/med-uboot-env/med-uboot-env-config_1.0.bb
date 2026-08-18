@@ -24,8 +24,11 @@ RDEPENDS:${PN} = "libubootenv-bin"
 MED_UBOOT_ENV_PARTUUID ?= ""
 
 # CONFIG_ENV_SIZE. 0x2000 is U-Boot's default and no stm32mp defconfig
-# overrides it; ST's own fw_env.config.mmc declares the same value, which is
-# two independent indications for a number that would otherwise be a guess.
+# overrides it; ST's own fw_env.config.mmc declares the same value. Both were
+# indications rather than proof until the board confirmed them: with this file
+# in place, "fw_setenv BOOT_ORDER 'A B'" followed by fw_printenv round-trips,
+# which exercises the address, the size and the two-entry redundant format at
+# once.
 MED_UBOOT_ENV_SIZE ?= "0x2000"
 
 # Copy 1 sits one ENV_SIZE further back than copy 0, so it is derived rather
@@ -53,7 +56,17 @@ install this package on this machine."
 # disk that is was measured twice and came out differently both times: the SD
 # card was mmcblk1 and the eMMC mmcblk0 on one boot, mmcblk0 and mmcblk2 on the
 # next, same hardware, no configuration change. Device enumeration is a race.
-# A PARTUUID is unique by construction, so it is the only stable address here.
+#
+# And for this partition the race is lost, measured on the board 2026-08-18:
+#
+#     readlink -f /dev/disk/by-partlabel/u-boot-env   ->  /dev/mmcblk2p5
+#     readlink -f /dev/disk/by-partuuid/d7ba3548-...  ->  /dev/mmcblk0p7
+#
+# mmcblk2 is the factory eMMC. ST's own fw_env.config.mmc, addressing this by
+# partlabel, would therefore have pointed fw_setenv at *another operating
+# system's* bootloader environment - and it would have worked, silently, until
+# someone wondered why a slot switch never took effect. A PARTUUID is unique by
+# construction, so it is the only stable address here.
 #
 # The two entries are required, not optional. ST's U-Boot is built with
 # CONFIG_SYS_REDUNDAND_ENVIRONMENT=y, which changes the on-media format (a

@@ -553,9 +553,41 @@ data errada é pior que um registro ausente. Nada no repositório trata disso, e
 - **O serviço de aquisição pode estar reiniciando**: `Started …` aparece duas vezes no log de boot.
   `NRestarts` não foi consultado. Pela ressalva da §10, este é exatamente o sintoma que
   `systemctl is-active` esconde — a suíte tem a asserção certa, ela só não foi executada aqui.
-- **`u-boot-env`, `fip-a/b`, `metadata1/2` colidem por nome com o eMMC de fábrica** e não se
-  determinou qual disco venceu (saída truncada no terminal). É disso que depende a forma do
-  `/etc/fw_env.config` a ser escrito.
+- **`fip-a/b` e `metadata1/2` colidem por nome com o eMMC de fábrica** e não se determinou qual
+  disco venceu (saída truncada no terminal). O `u-boot-env`, que era o caso que importava, foi
+  medido depois — ver abaixo.
+
+#### Segunda sessão na placa: `/etc/fw_env.config` validado
+
+Escrito à mão no rootfs (o perfil de desenvolvimento monta `rw`), com o mesmo conteúdo que a receita
+`med-uboot-env-config` gera — de modo que o arquivo foi validado sem reconstruir a imagem.
+
+| # | O que se mediu | Comando | Resultado |
+|---|---|---|---|
+| 12 | Para onde vai o nome que a ST usaria | `readlink -f /dev/disk/by-partlabel/u-boot-env` | **`/dev/mmcblk2p5`** — o eMMC de fábrica |
+| 13 | Para onde vai o nosso endereço | `readlink -f /dev/disk/by-partuuid/d7ba3548-…` | `/dev/mmcblk0p7` — o cartão |
+| 14 | O ambiente do U-Boot é legível e gravável | `fw_setenv BOOT_ORDER "A B" && fw_printenv BOOT_ORDER` | `BOOT_ORDER=A B` |
+| 15 | O RAUC passa a ler o ambiente | `rauc status` | erro muda de `fw_printenv failed` para `Unable to find primary boot slot` |
+
+A linha 12 é o resultado que fecha a discussão sobre endereçamento: o `fw_env.config.mmc` que a ST
+distribui teria apontado o `fw_setenv` para o ambiente de bootloader **de outro sistema operacional**
+— e teria funcionado em silêncio, até alguém perguntar por que uma troca de slot não surtia efeito.
+
+A linha 14 exercita as três decisões do arquivo de uma vez: endereço por PARTUUID, `ENV_SIZE` de
+`0x2000`, e o formato redundante de duas entradas em `-0x2000`/`-0x4000`, que **diverge** do arquivo
+da ST (ele lista `-0x2000` duas vezes). As duas primeiras eram indícios; a terceira era derivação a
+partir do `env/mmc.c` do U-Boot. As três passam.
+
+A linha 15 é progresso e não um segundo defeito. O backend `uboot` do RAUC escolhe o slot primário
+percorrendo `BOOT_ORDER` e pegando o primeiro cujo `BOOT_<bootname>_LEFT` seja maior que zero;
+`BOOT_A_LEFT` e `BOOT_B_LEFT` não existem, porque o `.wks` cria a partição zerada e nada a semeou
+ainda. É a mesma ausência que faz os dois slots aparecerem como `boot status: bad`. Semear é
+atribuição do `rauc status mark-good`, que não teve efeito no primeiro boot porque o `fw_setenv`
+falhava.
+
+**Ainda não medido**: se o `mark-good` semeia corretamente, se o RAUC passa a reportar um slot
+primário, e a instalação de um bundle na placa. A seleção de slot em si continua não implementada —
+o `extlinux.conf` fixa o slot A, independentemente do que o `BOOT_ORDER` diga.
 
 ### O que isso **não** significa
 
