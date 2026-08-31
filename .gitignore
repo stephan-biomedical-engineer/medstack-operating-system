@@ -27,3 +27,6 @@ local.mk
 # that installs it. Regenerate with scripts/med-pki.sh; the ability to sign a
 # bundle devices will accept is deliberately not repository content.
 pki/
+
+
+log/

@@ -65,7 +65,7 @@
 
   // Rulers at the widths this repository actually writes to: 80 for the
   // recipes and prose, 100 as the hard stop the C++ stays under.
-  "editor.rulers": [80, 100],
+  "editor.rulers": [],
   "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,
 
