@@ -242,7 +242,9 @@ keyring do dispositivo, e escrito no slot inativo. Slots simétricos, 2.097.152 
 
 **Limite, e ele é importante**: a *política* A/B está validada (atomicidade, escrita no slot
 inativo, verificação criptográfica). A *integração com bootloader* **não está** — o QEMU roda com
-`MED_BOOTLOADER = "noop"`. Além disso, `boot-attempts` é rejeitado pelo RAUC para qualquer backend
+`MED_BOOTLOADER = "noop"`. A §8 estende este resultado ao alvo físico, onde o backend é `uboot` de
+verdade e o ambiente do bootloader é reordenado para `BOOT_ORDER=B A`; o que continua sem medição,
+nos dois alvos, é um boot que **use** essa ordem. Além disso, `boot-attempts` é rejeitado pelo RAUC para qualquer backend
 que não seja `uboot`/`barebox`, então o mecanismo de fallback do QEMU seria diferente do que o
 STM32MP257 usa. Ver `implementation_plan_rauc.md` §3.
 
@@ -589,6 +591,151 @@ falhava.
 primário, e a instalação de um bundle na placa. A seleção de slot em si continua não implementada —
 o `extlinux.conf` fixa o slot A, independentemente do que o `BOOT_ORDER` diga.
 
+### Resultado — instalação de bundle assinado na placa (2026-08-30)
+
+A §6 mede o caminho de atualização no QEMU. Esta subseção mede o mesmo caminho no alvo físico, que é
+o que a §9 listava como não medido.
+
+#### Método
+
+```bash
+make stm32 KEY=development        # imagem, com CONFIG_DM_VERITY já no fragmento de kernel
+make bundle BOARD=stm32 KEY=development
+make verify-bundle BOARD=stm32    # host: verifica com as opções do dispositivo
+# placa: fw_setenv BOOT_ORDER "A B"; fw_setenv BOOT_A_LEFT 3; fw_setenv BOOT_B_LEFT 0
+#        rauc info <bundle>; rauc install <bundle>; rauc status
+```
+
+O bundle foi transferido por `scp` sobre IPv6 link-local para `/tmp` (tmpfs) da placa.
+
+#### Resultado
+
+| medida | valor |
+|---|---|
+| Bundle | `med-bundle-eeg-stm32mp25-disco.raucb`, 115.475.853 B, `Build: '20260828034740'` |
+| Assinatura, verificada **na placa** contra o chaveiro **da placa** | `Verified inline signature by 'O = MedPlatform, OU = Update Infrastructure, CN = MedPlatform Bundle Signing'` |
+| Política de verificação em vigor | `check-purpose=codesign`, `check-crl=true`, cadeia de 2 certificados |
+| `Compatible` do bundle × do dispositivo | `med-os-stm32mp25-disco` — iguais |
+| Formato | `verity` (salt `7ca3ad0e…`, hash `9c0d0bbb…`, árvore de 909.312 B) |
+| `rauc install` | `succeeded`, sem advertências |
+| Slot escrito | `rootfs.1` (B), o inativo — escolhido pelo RAUC a partir do slot bootado |
+| Payload escrito | 747.560.960 B numa partição de 1024 MiB |
+| **Conteúdo do slot, conferido byte a byte** | `dd … bs=4096 count=182510 \| sha256sum` = `4b07dae3…345c` = o `Checksum` do manifesto |
+| Estado após o install | `Activated: rootfs.1 (B)`, ambos os slots `good` |
+| Ambiente do bootloader após o install | `BOOT_ORDER=B A`, `BOOT_A_LEFT=3`, `BOOT_B_LEFT=3` |
+
+O `BOOT_ORDER=B A` é o número que sustenta a alegação de reversibilidade: o RAUC **reordenou** a
+lista mantendo o slot anterior como fallback, em vez de substituí-la.
+
+A verificação byte a byte é deliberada e não redundante. O `install` relatar `succeeded` é o
+relatório da ferramenta sobre si mesma; o `sha256sum` da partição é o artefato. O handler para
+`ext4→ext4` é `img_to_fs_handler` = `write_image_to_dev()` cru, sem `resize` declarado no
+`system.conf`, então a igualdade com o checksum do manifesto é exigível.
+
+#### A condição que precisou ser criada — e o defeito que ela revelou
+
+Antes deste resultado, `rauc install` **não podia** funcionar nesta placa, por uma razão que nenhum
+build reportava: `med-kernel-features.cfg` exigia `CONFIG_SQUASHFS` e nunca exigiu
+`CONFIG_DM_VERITY`, embora o `system.conf` da distro declare `bundle-formats=-plain` e o bundle seja
+`verity`. O defconfig do `linux-yocto` traz `DM_VERITY=y` e o do `linux-stm32mp` não — o QEMU
+passava por herança do vendor. É o **oitavo** defeito da família da §1, e o mesmo mecanismo do
+sétimo: uma política da distro que só existia como default de terceiro.
+
+Duas coisas foram medidas, não deduzidas: `CONFIG_DM_VERITY=y` e `CONFIG_BLK_DEV_LOOP=y` no
+`config-6.6.129` **produzido**, e o `md5sum` do `Image.gz` do rootfs igual ao do kernel implantado —
+o que prova que é esse kernel que chega à partição `med-boot`.
+
+E um segundo defeito, este ainda aberto: **`BOOT_ORDER` não é escrito por ninguém no
+provisionamento**. O `.wks` cria `u-boot-env` com `--source empty`, o RAUC só grava essa variável
+durante um install, e `rauc status mark-good` grava apenas `BOOT_<slot>_LEFT`. Um dispositivo
+recém-gravado reporta *todos* os slots `bad` — inclusive o que está executando — e `Activated: none`.
+O valor inicial foi semeado à mão para esta medição (`BOOT_ORDER="A B"`, `BOOT_A_LEFT=3`,
+`BOOT_B_LEFT=0`). Ver `BRINGUP_STM32MP2.md` §9.10.
+
+#### O slot escrito boota (mesma sessão)
+
+A comparação byte a byte prova o conteúdo, não a bootabilidade. Com o `root=PARTUUID=` do
+`extlinux.conf` editado à mão para o slot B e a placa reiniciada:
+
+| medida | valor |
+|---|---|
+| Linha de comando do kernel | `root=PARTUUID=2997c20d-239f-43cd-8658-9c7010186c9b` — o slot B |
+| Slot em execução, segundo o próprio sistema | `Booted from: rootfs.1 (/dev/mmcblk0p10)` |
+| Estado do RAUC visto de dentro do slot B | `Activated: rootfs.1 (B)`, B `booted`/`good`, A `inactive`/`good` |
+| Serviços | multi-user, rede, SSH e `/data` LUKS abertos normalmente |
+
+O que isso mede: **o rootfs que o RAUC escreveu é intercambiável com o original.** Nada dentro do
+sistema nomeia um slot — o `fstab` monta `/` como `/dev/root`, o `system.conf` endereça os slots por
+`by-partlabel`, o `crypttab` está vazio por projeto. A única coisa que nomeia o slot A é o
+`extlinux.conf`, que é justamente a peça a ser substituída.
+
+O que isso **não** mede: a troca de slot. Foi um arquivo de texto editado à mão, não uma decisão do
+dispositivo. Ver `BOOT_SLOT_AB_STM32MP2.md`.
+
+##### Dois defeitos que esse boot revelou, e que não são sobre boot
+
+1. **Cada slot tem identidade de máquina própria.** O rootfs não traz chave de host SSH nem
+   `machine-id` (`/etc/machine-id` com 0 bytes), então cada slot gera as suas no primeiro boot. A
+   fingerprint SSH da placa mudou entre os dois slots, mesmo endereço, mesmo hardware. Uma
+   atualização A/B, portanto, **troca a identidade do dispositivo**.
+2. **A trilha de auditoria mora dentro de um slot A/B.** `Storage=persistent` grava em
+   `/var/log/journal/<machine-id>/`, no rootfs. A próxima atualização escreve por cima de um dos dois
+   históricos, e o selo (FSS) é por `machine-id`, que também é por slot. É a mesma armadilha que o
+   `implementation_plan_luks.md` resolveu para a chave do `/data` — *"uma chave no rootfs seria
+   destruída pela primeira atualização bem-sucedida"* — repetida para a evidência de rastreabilidade
+   IEC 62304. Previsto por inspeção do artefato; **ainda não observado na placa**.
+
+#### Seleção de slot pelo bootloader (2026-08-31)
+
+O que faltava para a política A/B existir no dispositivo e não só no `rauc status`: um `bootcmd` que
+lê `BOOT_ORDER`. Ele agora vem na imagem — `med-uboot-env-image` monta um ambiente de U-Boot de
+512 KiB que o wic escreve na partição `u-boot-env` por `rawcopy`.
+
+**Método**: `make stm32 KEY=development`, `bmaptool`, `sgdisk -e`, ligar. **Nenhum comando na placa
+antes da medição** — é essa a condição que o resultado afirma.
+
+| medida | valor |
+|---|---|
+| Linha de comando do kernel | `root=PARTUUID=e91c4e10-…  rauc.slot=A` |
+| Slot escolhido | A, o primeiro de `BOOT_ORDER=A B` com contador > 0 |
+| Estado do RAUC num aparelho recém-gravado | `Activated: rootfs.0 (A)`; A `good`, B `bad` |
+| `rauc-mark-good.service` | `active (exited)`, `status=0/SUCCESS` |
+| Contador depois do boot | `BOOT_A_LEFT=3` — o bootloader gastou uma tentativa, o userspace restaurou |
+| `BOOT_B_LEFT` | `0` — slot B nunca foi escrito neste cartão, e o valor diz isso |
+| Ambiente no cartão × no `.wic` | `sha256` idêntico (`8fc40565…`), 129 de 129 blocos cobertos pelo `.bmap` |
+
+Três coisas que este número fecha, e que estavam abertas desde o início do porte:
+
+1. **`Activated: none` num aparelho novo deixou de existir.** Antes, nada escrevia `BOOT_ORDER` em
+   momento algum da vida do dispositivo: o wic criava a partição vazia, o RAUC só a escreve durante
+   um install, e `mark-good` escreve apenas o contador. Um cartão recém-gravado reportava *todos* os
+   slots `bad`, inclusive o que estava executando.
+2. **`rauc-mark-good.service` rodou.** A unidade era pulada por
+   `ConditionKernelCommandLine=|rauc.slot` em todos os boots desde 2026-08-18 — e uma unidade pulada
+   por `Condition*` não falha, não avisa e não aparece em `--state=failed`.
+3. **O RAUC identifica o slot pelo bootloader**, não pelo dispositivo de root: `Booted from:
+   rootfs.0 (A)` em vez de `rootfs.0 (/dev/mmcblk0p9)`. Com quatro enumerações diferentes medidas no
+   mesmo hardware, isso troca uma inferência sujeita a corrida por uma declaração.
+
+##### O que ainda **não** foi medido
+
+- **A troca de slot.** `rauc install` seguido de reboot deve bootar B. Implementado, não observado.
+- **O fallback.** Um slot que falha *n* vezes deve ceder a vez ao outro. É o único item que exige
+  injeção de falha — corromper o slot B e contar os boots — e sem isso continua sendo alegação, pela
+  mesma razão que o `acq-active` da suíte de aceitação ensinou.
+- **Nada disso tem rede de proteção automatizada.** O `make check` roda no QEMU, onde
+  `MED_BOOTLOADER` é `noop`; nenhuma das 21 asserções pode ver uma regressão aqui. A bancada é o
+  único teste.
+
+#### O que este resultado **não** significa
+
+1. **Não é a troca de slot.** O `extlinux.conf` continua fixando `root=PARTUUID=e91c4e10-…`, o slot
+   A. `BOOT_ORDER=B A` não tem leitor: o script de U-Boot não existe. Um reboot boota A.
+2. **Não é um dispositivo em estado de fábrica.** `BOOT_ORDER` foi semeado à mão; sem isso o install
+   ainda ocorreria, mas o estado antes/depois não seria comparável.
+3. **Não é a configuração de produto.** `KEY=development`, `MED_DATA_KEY_SOURCE` de desenvolvimento,
+   e o bundle assinado pela CA de desenvolvimento.
+
 ### O que isso **não** significa
 
 1. ~~**Não significa que o dispositivo boota.**~~ **Superado em 2026-08-18**: boota, e a subseção
@@ -607,10 +754,13 @@ o `extlinux.conf` fixa o slot A, independentemente do que o `BOOT_ORDER` diga.
    nunca foi executada em hardware, e não pode ser: não há TPM alcançável (§7 do
    `BRINGUP_STM32MP2.md`). O que a subseção anterior mede é o **mecanismo** — LUKS2, provisionamento
    de primeiro boot, a asserção do `MedicalStorage` — não a custódia de produto.
-4. **Não significa que o RAUC consegue marcar um slot.** O backend `uboot` chama `fw_setenv`, que lê
-   `/etc/fw_env.config`; `u-boot-fw-config-stm32mp` instala `fw_env.config.mmc`, `.nand` e `.nor` e
-   **nunca** esse nome. Previsto por inspeção do manifest e **confirmado em execução em 2026-08-18**
-   (`fw_printenv failed with exit code: 1`, ambos os slots reportados `bad`, `Activated: none`).
+4. ~~**Não significa que o RAUC consegue marcar um slot.**~~ **Superado em 2026-08-30**: marca,
+   ativa e instala — a subseção seguinte mede. Mantido riscado porque a afirmação estava certa
+   quando escrita: `u-boot-fw-config-stm32mp` instala `fw_env.config.mmc`, `.nand` e `.nor` e
+   **nunca** `/etc/fw_env.config`, e em 2026-08-18 isso produziu `fw_printenv failed with exit
+   code: 1`, ambos os slots `bad`, `Activated: none`. A correção foi a receita
+   `med-uboot-env-config` em `meta-med-bsp`, que escreve esse arquivo endereçando a partição por
+   PARTUUID.
 5. **Os `.tsv` de flashlayout gerados não descrevem este disco.** O BSP os produz a partir do layout
    da ST (`rootfs`/`vendorfs`/`userfs`, um único rootfs, sem `med-root-*` e sem `med-data`).
    Gravar por eles produz um disco que o MedOS não usa: grave o `.wic`.
@@ -653,14 +803,18 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   `rpmsg` continua não exercitado em alvo nenhum. O boot acrescentou uma restrição ao plano —
   `stm32-rproc 0.m33: Support of signed firmware only`.
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
-- **Integração com bootloader e fallback A/B em boot falho** — §6. A §8 não muda isso: no
-  STM32MP257 a seleção de slot **não está implementada** (`bootfs` compartilhada, `extlinux.conf`
-  fixando o slot A), e no QEMU o mecanismo é outro.
-- **A imagem de produto no STM32MP257** — o que executou em 2026-08-18 foi
-  `make stm32 KEY=development`. Não foi executado: o perfil como o arquivo de projeto o declara
-  (`MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar), nem instalação de bundle na placa (o
-  RAUC não consegue ativar slot), nem seleção de slot A/B (o `extlinux.conf` fixa o slot A), nem a
-  HMI (o `weston` falha).
+- **Integração com bootloader e fallback A/B em boot falho** — §6. A §8 não muda isso, nem depois
+  do `rauc install` de 2026-08-30: no STM32MP257 a seleção de slot **não está implementada**
+  (`med-boot` compartilhada, `extlinux.conf` fixando o slot A), então `BOOT_ORDER=B A` é escrito e
+  nunca lido; no QEMU o mecanismo é outro. Também não medido: o **estado de fábrica** desse
+  ambiente, que hoje não é escrito por ninguém e faz um aparelho novo reportar todos os slots
+  `bad` (`BRINGUP_STM32MP2.md` §9.10).
+- **A imagem de produto no STM32MP257** — tudo o que executou na placa foi
+  `make stm32 KEY=development`. Não foi executado o perfil como o arquivo de projeto o declara
+  (`MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar). **Continua não medida** a seleção de
+  slot A/B: o `extlinux.conf` fixa o PARTUUID do slot A, então nem o boot no slot recém-escrito nem
+  o fallback para o slot anterior foram observados em lugar nenhum. A instalação de bundle na placa
+  deixou esta lista em 2026-08-30 (§8), e a HMI em 2026-08-27 (`BRINGUP_HMI_STM32MP2.md`).
 - **Estabilidade do serviço de aquisição na placa** — subiu, mas o log de boot traz dois
   `Started …` e o `NRestarts` não foi consultado. Não se pode afirmar que roda sem reiniciar.
 - **Carimbo de tempo confiável no alvo físico** — a placa correu sem RTC inicializado, com data de
@@ -672,6 +826,13 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   desenvolvimento **nos dois alvos**, e não apenas no de simulação (§7).
 - **A HMI Qt em execução** — exige `NATIVE=1` com runqemu gráfico; sob `nographic` o
   `weston.service` falha por projeto.
+- **Continuidade de identidade e de trilha de auditoria através de uma atualização** — a chave de
+  host SSH e o `machine-id` são gerados por slot (observado), e o journal persistente mora dentro do
+  slot (previsto por inspeção, não observado). Nenhum dos dois tem correção implementada. Ver
+  `BOOT_SLOT_AB_STM32MP2.md` §5.1 e §5.2.
+- **Atualização que troque a versão do kernel** — `med-boot` é compartilhada pelos dois slots e o
+  kernel mora lá, então o esquema A/B atual entrega rootfs e nada mais. Com `CONFIG_MODVERSIONS=y`,
+  um desencontro apareceria em tempo de carga de módulo e não em tempo de boot.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.
 - **Perfil tomógrafo no STM32MP257** — nunca construído; a §2 é inteira sobre `qemux86-64`.
 
