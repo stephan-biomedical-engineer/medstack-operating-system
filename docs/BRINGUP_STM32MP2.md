@@ -1220,8 +1220,31 @@ produto:
   verificação que não pode passar é pior que nenhuma**: produz alarme falso e consome a atenção que
   o alarme verdadeiro precisaria. Para sistemas de arquivos, compare os arquivos.
 
-O que **não** foi medido nesta sessão: a troca de slot depois de um `rauc install`, e o fallback por
-injeção de falha. Ver `implementation_plan_uboot_ab.md` §8.
+#### E a troca, no mesmo dia
+
+Bundle reconstruído da imagem que a placa roda (`Build: '20260831034731'`), instalado, reiniciado:
+
+```
+depois do install, ainda em A:   Activated: rootfs.1 (B)   BOOT_ORDER=B A   BOOT_A_LEFT=3  BOOT_B_LEFT=3
+                                 sha256 do slot B = bb6cc1e7… = Checksum do manifesto
+
+depois do reboot:                root=PARTUUID=35822773-… rauc.slot=B
+                                 Booted from: rootfs.1 (B)   A: inactive, good
+```
+
+A cadeia inteira, ponta a ponta: o RAUC escolheu o slot inativo, escreveu, verificou e reordenou o
+ambiente; o U-Boot leu `BOOT_ORDER`, gastou uma tentativa, montou o `root=` e declarou `rauc.slot=B`;
+o kernel montou o slot que o bootloader escolheu; o `mark-good` restaurou o contador de dentro do
+slot novo. **`BOOT_A_LEFT=3` intocado** é a outra metade: o slot anterior segue elegível, que é o que
+faz a atualização ser reversível em vez de destrutiva.
+
+De quebra, o §5.1 do `BOOT_SLOT_AB_STM32MP2.md` deixou de ser observação de laboratório: a
+fingerprint SSH mudou de `SHA256:lAW0DlTk…` para `SHA256:25lyKZU9…` **numa atualização de verdade**,
+que é o cenário em que aquele defeito importa — um aparelho em campo troca de identidade ao se
+atualizar.
+
+O que **não** foi medido: o fallback por injeção de falha, e o pulo de um slot com contador zerado.
+Ver `implementation_plan_uboot_ab.md` §8, passos 5 e 6.
 
 ---
 
@@ -1256,13 +1279,14 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
 | **O slot escrito pelo RAUC boota** (`BOOT_SLOT_AB_STM32MP2.md`) | `Booted from: rootfs.1 (/dev/mmcblk0p10)` após editar o `extlinux.conf` à mão |
 | **O dispositivo escolhe o slot sozinho** (§9.11) | `rauc.slot=A` na cmdline de um cartão recém-gravado, sem `fw_setenv` |
 | **`rauc-mark-good` roda no boot** (§9.11) | `active (exited)`, e `BOOT_A_LEFT` volta a 3 depois de o bootloader decrementá-lo |
+| **A troca A/B, ponta a ponta** (§9.11) | `rauc install` → `BOOT_ORDER=B A` → reboot → `Booted from: rootfs.1 (B)`, com A ainda `good` |
 
 **Continua sem evidência de execução na placa** — cada item com causa conhecida:
 
 | bloqueio | causa | estado |
 |---|---|---|
-| Troca de slot depois de um `rauc install` | implementada em `med-uboot-env-image`; ainda não observada | **não medido** (`implementation_plan_uboot_ab.md` §8, passo 4) |
-| Fallback A/B em boot falho | o `bootcmd` o implementa; nunca foi exercitado | **não medido** — exige injeção de falha (§8, passo 6) |
+| Fallback A/B em boot falho | o `bootcmd` o implementa; nunca foi exercitado | **não medido** — exige injeção de falha (`implementation_plan_uboot_ab.md` §8, passo 6) |
+| Identidade estável através de uma atualização | chave SSH e `machine-id` gerados por slot | **medido numa atualização real** (§9.11); sem correção |
 | Identidade estável através de uma atualização | chave de host SSH e `machine-id` são gerados por slot | **defeito novo** (`BOOT_SLOT_AB_STM32MP2.md` §5.1) |
 | Continuidade da trilha de auditoria | `/var/log/journal` mora dentro de um slot A/B | **defeito novo**, previsto por inspeção (`BOOT_SLOT_AB_STM32MP2.md` §5.2) |
 | Atualização que troca a versão do kernel | `med-boot` é compartilhada; o kernel está fora dos slots | não suportado pelo esquema atual (`BOOT_SLOT_AB_STM32MP2.md` §5.4) |

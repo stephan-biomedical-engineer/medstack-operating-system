@@ -140,11 +140,12 @@ nomeia o slot A é o `extlinux.conf` — e é exatamente ela que a peça faltant
 alcançável; não prova que o dispositivo sabe escolhê-lo, nem que ele volta ao slot anterior quando o
 novo falha.
 
-*Atualização de 2026-08-31*: o dispositivo agora **sabe** escolher — o `bootcmd` de
-`med-uboot-env-image` lê `BOOT_ORDER` e monta o `root=PARTUUID=` a partir dos dois `--uuid` que a
-§5.3 exigiu, e um cartão recém-gravado boota com `rauc.slot=A` sem nenhum comando manual. O que
-continua sem medição é a troca acontecendo depois de um `rauc install`, e o fallback. A frase honesta
-passa a ser: *a seleção de slot está validada em hardware; a troca e o fallback, não.*
+*Atualização de 2026-08-31*: o dispositivo agora **sabe** escolher, e a troca foi medida. O `bootcmd`
+de `med-uboot-env-image` lê `BOOT_ORDER` e monta o `root=PARTUUID=` a partir dos dois `--uuid` que a
+§5.3 exigiu; um `rauc install` seguido de `reboot` levou a placa ao slot B sozinha, com `rauc.slot=B`
+na cmdline e o slot A ainda `good` e ainda na ordem. A frase honesta passa a ser: *a seleção e a
+troca de slot estão validadas em hardware; o fallback, não.* Ver `implementation_plan_uboot_ab.md`
+§8.
 
 ---
 
@@ -215,7 +216,9 @@ conclusão de lá foi tirar a chave do rootfs. A trilha de auditoria tem exatame
 continua no rootfs. `/data` existe, sobrevive a atualizações e é onde o `MedicalStorage` já escreve.
 
 Estado: **previsto por inspeção do artefato, ainda não observado na placa.** Os comandos que
-fechariam a medição estão na §8.
+fechariam a medição estão na §8. (O §5.1, este sim, foi observado numa atualização real em
+2026-08-31: a fingerprint SSH mudou de `SHA256:lAW0DlTk…` para `SHA256:25lyKZU9…` ao trocar de
+slot — não num boot manual, mas no cenário em que o defeito importa.)
 
 ### 5.3 O PARTUUID do slot B é aleatório, e isso bloqueia o script
 

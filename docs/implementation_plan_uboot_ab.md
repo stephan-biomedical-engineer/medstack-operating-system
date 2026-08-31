@@ -1,9 +1,10 @@
 # Plano de implementação — seleção de slot A/B no U-Boot (STM32MP257)
 
-**Estado**: **implementado e parcialmente validado em hardware.** O código do §4 está na árvore, o
-`make stm32` produz o `.wic`, e o primeiro boot de um cartão recém-gravado seleciona o slot sozinho,
-passa `rauc.slot=` e faz o `rauc-mark-good` rodar pela primeira vez desde o início do porte — sem um
-único `fw_setenv`. A §8 registra o medido e o que falta (troca de slot e fallback). A §10 registra as
+**Estado**: **implementado e validado em hardware, menos o fallback.** O ciclo completo foi medido em
+2026-08-31: `make bundle` → `rauc install` → `BOOT_ORDER=B A` → `reboot` → a placa boota o slot B
+pelo PARTUUID que o bootloader escolheu, com `rauc.slot=B` na cmdline, e o slot A permanece elegível.
+Nenhum `fw_setenv` em nenhum ponto. O que resta é o passo 6 do §8 — o fallback por injeção de falha,
+o único item que exercita o mecanismo que só existe para quando algo dá errado. A §10 registra as
 sete coisas que o plano dizia errado e a implementação corrigiu.
 **Pré-requisitos**: todos satisfeitos — ver §2.
 **Leitura obrigatória antes**: `BOOT_SLOT_AB_STM32MP2.md` (o ensaio que mediu o problema),
@@ -528,8 +529,52 @@ Cinco coisas, e cada uma fecha um item que estava aberto:
    passou a identificar o slot pelo `rauc.slot=` que o bootloader declara, em vez de inferi-lo do
    dispositivo de root. A identificação deixou de depender de uma corrida de enumeração.
 
-**Não medido ainda**: passos 3 a 6 — a permanência do contador em boots repetidos, a troca de slot
-após um `rauc install`, o pulo de um slot com contador zerado, e o fallback por injeção de falha.
+### Resultado medido — passo 4, a troca (2026-08-31)
+
+Bundle reconstruído a partir da imagem que a placa está rodando (`Build: '20260831034731'`,
+payload 747.569.152 B, checksum `bb6cc1e7…`), transferido por `scp`, instalado e a placa reiniciada.
+
+**Depois do `rauc install`, ainda no slot A:**
+
+```
+Activated: rootfs.1 (B)          B: boot status good     A: boot status good
+BOOT_ORDER=B A   BOOT_A_LEFT=3   BOOT_B_LEFT=3
+
+$ dd if=/dev/disk/by-partlabel/med-root-b bs=4096 count=182512 | sha256sum
+bb6cc1e7457ba8e9a300beb27935a53867a83747f6546a099b76c7403c084ad0    ← = Checksum do manifesto
+```
+
+**Depois do `reboot`:**
+
+```
+$ cat /proc/cmdline
+root=PARTUUID=35822773-a851-41e9-af87-4f6fa8e8b905 rootwait rw earlycon console=ttySTM0,115200 rauc.slot=B
+
+$ rauc status
+Booted from: rootfs.1 (B)        Activated: rootfs.1 (B)
+x [rootfs.1] (med-root-b) bootname: B  boot status: good  booted
+o [rootfs.0] (med-root-a) bootname: A  boot status: good  inactive
+
+$ fw_printenv BOOT_ORDER BOOT_A_LEFT BOOT_B_LEFT
+BOOT_ORDER=B A   BOOT_A_LEFT=3   BOOT_B_LEFT=3
+```
+
+Aquele PARTUUID é o `--uuid` que a §4.2 fixou para o slot B, e ele fecha a cadeia inteira: o RAUC
+escolheu o slot inativo, escreveu, verificou, reordenou o ambiente; o U-Boot leu `BOOT_ORDER`,
+gastou uma tentativa, montou o `root=` correspondente e declarou `rauc.slot=B`; o kernel montou o
+slot que o bootloader escolheu; e o `mark-good` restaurou `BOOT_B_LEFT` para 3 de dentro do slot
+novo. **`BOOT_A_LEFT=3` intocado é a outra metade do resultado** — o slot anterior segue elegível,
+que é o que torna a atualização reversível em vez de destrutiva.
+
+Uma confirmação que veio de graça, e que é do §5.1 do `BOOT_SLOT_AB_STM32MP2.md`: a fingerprint SSH
+mudou de `SHA256:lAW0DlTkHJ63PgC1jHXNjjfsnXuvDHhQYteDSZR3czo` (slot A) para
+`SHA256:25lyKZU9Sb2zgzhrpVyN/yo/4xxWoEezZwmQJowLuhQ` (slot B). Aquele defeito estava registrado a
+partir de um boot manual; agora está medido **numa atualização de verdade**, que é o cenário em que
+ele importa: um aparelho em campo troca de identidade ao se atualizar.
+
+**Não medido ainda**: passos 3, 5 e 6 — a permanência do contador em boots repetidos, o pulo de um
+slot com contador zerado, e o fallback por injeção de falha. O sexto é o único que exercita o
+mecanismo que existe para falhar.
 
 Registrar os resultados em `RESULTS.md` §8 e em `BOOT_SLOT_AB_STM32MP2.md`; a §6 deste arquivo
 recebe o que foi medido, como fizeram os planos do RAUC e do LUKS.

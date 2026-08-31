@@ -717,9 +717,30 @@ Três coisas que este número fecha, e que estavam abertas desde o início do po
    rootfs.0 (A)` em vez de `rootfs.0 (/dev/mmcblk0p9)`. Com quatro enumerações diferentes medidas no
    mesmo hardware, isso troca uma inferência sujeita a corrida por uma declaração.
 
+#### A troca de slot (2026-08-31)
+
+O ciclo completo, na mesma sessão. Bundle reconstruído da imagem que a placa executa
+(`Build: '20260831034731'`, payload 747.569.152 B), instalado e a placa reiniciada.
+
+| medida | valor |
+|---|---|
+| Slot escrito e conferido byte a byte | `bb6cc1e7…` = `Checksum` do manifesto |
+| Ambiente do bootloader após o install | `BOOT_ORDER=B A`, `BOOT_B_LEFT=3`, **`BOOT_A_LEFT=3`** |
+| Linha de comando após o reboot | `root=PARTUUID=35822773-…`, `rauc.slot=B` |
+| Slot em execução | `Booted from: rootfs.1 (B)`, `Activated: rootfs.1 (B)` |
+| Slot anterior | `inactive`, `boot status: good` — segue elegível |
+
+O `BOOT_A_LEFT=3` intocado é metade do resultado, e a metade que sustenta a alegação regulatória: a
+atualização é **reversível**, porque o slot anterior continua bootável e continua na ordem. O RAUC
+reordenou uma lista, não a substituiu.
+
+Com isto, a frase da §6 muda pela primeira vez desde que foi escrita. Era *"a política A/B está
+validada no QEMU, a integração com o bootloader não está validada em lugar nenhum"*. Passa a ser:
+**a política A/B está validada no QEMU, e no STM32MP257 estão validadas a instalação, a ativação e a
+troca de slot — o fallback não.**
+
 ##### O que ainda **não** foi medido
 
-- **A troca de slot.** `rauc install` seguido de reboot deve bootar B. Implementado, não observado.
 - **O fallback.** Um slot que falha *n* vezes deve ceder a vez ao outro. É o único item que exige
   injeção de falha — corromper o slot B e contar os boots — e sem isso continua sendo alegação, pela
   mesma razão que o `acq-active` da suíte de aceitação ensinou.
