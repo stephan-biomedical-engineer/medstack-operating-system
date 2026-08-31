@@ -67,6 +67,20 @@ ifneq ($(KEY),)
   endif
 endif
 
+# Which profile the update-path helpers act on. A parameter on the existing
+# targets rather than a second set of them, for the same reason KEY is one: the
+# only thing that differs is the machine, and the machine is already declared -
+# read it back out of the kas file instead of writing it down twice.
+#
+#   make bundle                  the QEMU profile
+#   make bundle BOARD=stm32      the STM32MP257F-DK profile
+BOARD ?= qemu
+ifeq ($(filter $(BOARD),qemu stm32),)
+  $(error BOARD must be "qemu" or "stm32", not "$(BOARD)")
+endif
+BOARD_CFG     := $(if $(filter stm32,$(BOARD)),$(STM32_CFG),$(QEMU_CFG))
+BOARD_MACHINE := $(shell awk '/^machine:/{print $$2}' $(BOARD_CFG))
+
 # runqemu is only worth running with hardware acceleration, which needs the KVM
 # character device and membership of the group that owns it on the *host* - the
 # numeric gid is what the kernel checks, so it is read from the device itself.
@@ -109,13 +123,14 @@ help:
 	@echo "  checkout    clone the external layers, write build/conf, do not build"
 	@echo "  layers      bitbake-layers show-layers (parse only)"
 	@echo "  risks       the three known metadata risks, all parse only"
-	@echo "  parse       full recipe parse + dry-run task graph for $(IMAGE)"
+	@echo "  parse       full recipe parse + dry-run task graph for $(IMAGE) (BOARD=stm32 too)"
 	@echo "  framework   build med-framework-api only (first cross compile)"
 	@echo "  service     build eeg-acquisition-service only (fast inner loop)"
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
+	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY= as the image"
 	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
 	@echo "  bundle-disk    wrap the bundle in a disk the QEMU guest can mount"
 	@echo "  shell       interactive build environment"
@@ -169,8 +184,8 @@ risks: $(TOOL)
 	@grep -H LAYERSERIES_COMPAT layers/meta-qt6/conf/layer.conf
 
 parse: $(TOOL)
-	$(KAS) shell $(QEMU_CFG) -c "bitbake -p"
-	$(KAS) shell $(QEMU_CFG) -c "bitbake -n $(IMAGE)"
+	$(KAS) shell $(BOARD_CFG) -c "bitbake -p"
+	$(KAS) shell $(BOARD_CFG) -c "bitbake -n $(IMAGE)"
 
 framework: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake med-framework-api"
@@ -189,17 +204,30 @@ tomograph: $(TOOL)
 
 # Cheapest test of the update path: no image boot, no bootloader, no slots -
 # just the signature, the keyring, the codeSigning purpose and the CRL.
+#
+# KEY is forwarded here for the same reason it is on the image targets, and
+# getting it wrong is just as silent: the bundle payload *is* a rootfs, so a
+# bundle built with the profile's default key source installs a slot whose
+# med-data-provision.sh looks for a key that is not on this board. It would
+# build, sign, verify and install, and fail on the next boot.
 bundle: $(TOOL)
-	$(KAS) shell $(QEMU_CFG) -c "bitbake med-bundle-eeg"
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) shell $(BOARD_CFG) -c "bitbake med-bundle-eeg"
 
 # Verifies with the *device's* keyring settings, which is the whole point: with
 # rauc's defaults this same bundle fails with "unsuitable certificate purpose",
 # because OpenSSL's CMS code falls back to the smime_sign purpose and rejects a
 # codeSigning certificate. Verifying without these two flags would be a test of
 # something the device does not do.
-RAUC_NATIVE := $(KAS_BUILD_DIR)/tmp-glibc/work/qemux86_64-med-linux/med-bundle-eeg/1.0/recipe-sysroot-native/usr/bin/rauc
+# Not the copy under the bundle recipe's WORKDIR, which is where this used to
+# point: local.conf inherits rm_work, so ${WORKDIR} - recipe-sysroot-native
+# included - is deleted the moment the recipe finishes. That made the path
+# valid only in the window before rm_work ran, and "make verify-bundle" has
+# been unable to find it since. The sysroots-components copy is what sstate
+# installs and what rm_work does not touch; it is also build-arch rather than
+# machine specific, so it needs no BUNDLE_MACHINE.
+RAUC_NATIVE := $(firstword $(wildcard $(KAS_BUILD_DIR)/tmp-glibc/sysroots-components/*/rauc-native/usr/bin/rauc))
 KEYRING     := meta-custom/meta-med-distro/recipes-core/rauc/rauc-conf/med-keyring.pem
-BUNDLE      := $(KAS_BUILD_DIR)/tmp-glibc/deploy/images/qemux86-64/med-bundle-eeg-qemux86-64.raucb
+BUNDLE      := $(KAS_BUILD_DIR)/tmp-glibc/deploy/images/$(BOARD_MACHINE)/med-bundle-eeg-$(BOARD_MACHINE).raucb
 
 # RAUC refuses a block device ("Bundle is not a regular file"), so the bundle
 # cannot simply be attached raw - it has to arrive as a file in a filesystem.
