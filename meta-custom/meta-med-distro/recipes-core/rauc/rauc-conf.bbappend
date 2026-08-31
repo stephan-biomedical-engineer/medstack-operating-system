@@ -42,6 +42,10 @@ RAUC_KEYRING_FILE = "med-keyring.pem"
 # dead service or, worse, an A/B switch the bootloader will not honour.
 MED_BOOTLOADER ?= "noop"
 
+# Declared in med-os.conf, alongside the reason it must not exceed 9. The
+# fallback here only matters if this recipe is ever built under another distro.
+MED_BOOT_ATTEMPTS ?= "3"
+
 # system.conf is a plain configuration file, so bitbake does not expand
 # variables inside it. The compatible string has to match the machine the
 # bundle was built for, otherwise RAUC refuses to install - substitute it here
@@ -52,6 +56,22 @@ do_install:append() {
                -e "s|@MED_VERSION@|${DISTRO_VERSION}|g" \
                -e "s|@MED_BOOTLOADER@|${MED_BOOTLOADER}|g" \
                ${D}${sysconfdir}/rauc/system.conf
+
+        # boot-attempts exists only for uboot/barebox: RAUC refuses to load a
+        # configuration that sets it for any other backend, so on a target with
+        # MED_BOOTLOADER = "noop" the placeholder has to disappear entirely
+        # rather than take a value. Getting this wrong stops rauc.service on
+        # qemux86-64 and takes "make check" with it, while the STM32 build stays
+        # green - the shape of defect this repository keeps rediscovering.
+        case "${MED_BOOTLOADER}" in
+        uboot|barebox)
+            sed -i -e "s|@MED_BOOT_ATTEMPTS@|boot-attempts=${MED_BOOT_ATTEMPTS}\nboot-attempts-primary=${MED_BOOT_ATTEMPTS}|" \
+                   ${D}${sysconfdir}/rauc/system.conf
+            ;;
+        *)
+            sed -i -e "/@MED_BOOT_ATTEMPTS@/d" ${D}${sysconfdir}/rauc/system.conf
+            ;;
+        esac
     fi
 
     # A leftover placeholder means the substitution above silently missed one,

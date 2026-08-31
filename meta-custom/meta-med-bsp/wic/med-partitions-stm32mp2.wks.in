@@ -36,14 +36,18 @@
 #
 # What is NOT solved here
 # -----------------------
-# The disk is A/B-shaped and slot A boots. Slot *selection* is not implemented:
-# med-boot is shared by both slots, and the extlinux.conf the BSP generates
-# hardcodes root=PARTUUID=${DEVICE_PARTUUID_ROOTFS:SDCARD} - slot A - so a
-# device that RAUC has marked "boot B" still boots A. Closing that means a
-# U-Boot boot script that reads BOOT_ORDER/BOOT_<slot>_LEFT, which is what the
-# u-boot-env partition below is for and what MED_BOOTLOADER = "uboot" promises.
-# Until then, "the A/B policy is validated on QEMU, the bootloader integration
-# on hardware" remains a statement about work still to do.
+# Slot selection *is* now implemented, but not in this file: the bootcmd in
+# med-uboot-env-image reads BOOT_ORDER/BOOT_<slot>_LEFT and builds
+# root=PARTUUID= from the two --uuid values below. The extlinux.conf the BSP
+# generates still hardcodes slot A, deliberately - it is the rescue path for a
+# lost or corrupt environment, and the one thing that must not change is that
+# losing the environment degrades to booting slot A rather than to a panic.
+#
+# What remains unsolved here is the kernel. med-boot is shared by both slots and
+# Image.gz lives on it, so an update replaces a rootfs and never a kernel; with
+# CONFIG_MODVERSIONS=y a bundle carrying a different kernel version would boot
+# and then fail at module load, silently. Fixing that is a change to this file -
+# kernel inside each slot, or med-boot itself A/B - and is not attempted yet.
 
 # ---------------------------------------------------------------------------
 # Boot chain. Offsets and part-types are the SoC's contract, not a preference:
@@ -115,7 +119,18 @@ part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b
 # by-partlabel/u-boot-env resolved to /dev/mmcblk2p5, the factory eMMC, while
 # ours is /dev/mmcblk0p7 by PARTUUID. Addressing it by name would have sent
 # fw_setenv to another operating system's bootloader environment.
-part u-boot-env --source empty --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size 512K --uuid ${MED_UBOOT_ENV_PARTUUID}
+# Created empty until 2026-08-30, which was itself a defect: nothing wrote
+# BOOT_ORDER at provisioning time, RAUC only writes it during an install, and
+# "rauc status mark-good" writes only the attempt counter - so a freshly
+# flashed device reported every slot bad, including the one it was running
+# from, and had no primary slot. See docs/implementation_plan_uboot_ab.md.
+#
+# It now carries a built environment: the A/B bootcmd, BOOT_ORDER and the
+# counters. The image is built from U-Boot's own u-boot-initial-env, because
+# U-Boot *replaces* its built-in environment with a valid stored one rather
+# than merging - a partial image would produce a board with no distro_bootcmd
+# and no kernel_addr_r.
+part u-boot-env --source rawcopy --fstype=ext4 --fsoptions "noauto" --sourceparams="file=${DEPLOY_DIR_IMAGE}/med-uboot-env.bin" --part-name=u-boot-env --ondisk mmcblk --part-type 0x8301 --fixed-size ${MED_UBOOT_ENV_PART_SIZE_K}K --uuid ${MED_UBOOT_ENV_PARTUUID}
 
 # ---------------------------------------------------------------------------
 # Boot filesystem: kernel, devicetrees and extlinux.conf, all of which the BSP
@@ -158,11 +173,18 @@ part /boot --source rootfs --rootfs-dir=${IMAGE_ROOTFS}/boot --part-name=med-boo
 # constant below; a slot A with any other PARTUUID produces a kernel that
 # panics with no root filesystem. Slot B has no such constraint yet precisely
 # because nothing boots it yet.
-part / --source rootfs --part-name med-root-a --label med-root-a --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024 --uuid e91c4e10-16e6-4c0e-bd0e-77becf4a3582
+part / --source rootfs --part-name med-root-a --label med-root-a --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024 --uuid ${MED_ROOT_A_PARTUUID}
 
 # Written by RAUC, never by the build. Identical in size to slot A is a hard
 # requirement: a bundle built from a larger slot A does not fit.
-part --part-name med-root-b --label med-root-b --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024
+#
+# --uuid was deliberately absent here, with the note that "slot B has no such
+# constraint yet precisely because nothing boots it yet". Booting slot B by hand
+# on 2026-08-30 ended that, and the note was wrong within the hour: wic
+# randomises an unspecified --uuid on every image build, so the bootcmd's
+# root=PARTUUID= for slot B would name a partition that stops existing at the
+# next build. Fixed values on both slots, declared together in layer.conf.
+part --part-name med-root-b --label med-root-b --ondisk mmcblk --fstype=ext4 --align 1024 --fixed-size 1024 --uuid ${MED_ROOT_B_PARTUUID}
 
 # LUKS container for patient data. Created as plain ext4 and converted on first
 # boot by med-data-provision.service - on this machine with
