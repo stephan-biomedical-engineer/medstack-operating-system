@@ -75,6 +75,13 @@ All code written in this repository must strictly adhere to the 4-layer unidirec
 +-------------------------------------------------------------------------+
 ```
 
+**Adjunct layers.** The stack is four layers and stays four. Hardware enablement belonging to one
+particular front-end — an out-of-tree kernel driver, a devicetree overlay for one AFE — goes into an
+*adjunct* layer beside the vendor BSP (e.g. `meta-med-afe-ads1299`), never into the stack. Such a
+layer provides and never consumes, exactly like `meta-med-bsp`, and is **excluded from the reuse
+metric** on purpose: the metric is computed over the `meta-med-*` layers, and quarantining a
+front-end's kernel code is what keeps that number meaningful. See `implementation_plan_iio_afe.md` §4.
+
 ---
 
 ## 4. Key Components Breakdown
@@ -143,16 +150,25 @@ Built and validated on `qemux86-64`: both device profiles, the signed A/B update
 verified against the device keyring and written to the inactive slot), and the encrypted `/data`
 volume. `make check` boots the image and runs 21 runtime assertions, exiting non-zero on failure.
 
-The **STM32MP257** target now builds too (`make stm32`, `MACHINE=stm32mp25-disco`), producing a
-2.57 GiB `.wic` whose GPT was verified by inspection: 11 partitions, both slots exactly 1 GiB,
-`med-root-a`'s PARTUUID equal to the `root=PARTUUID=` in the BSP's generated `extlinux.conf`, and
-TF-A/FIP magic at the offsets the ROM code searches. Nothing has been *booted* on that hardware,
-and boot-slot selection is not implemented — `bootfs` is shared by both slots and `extlinux.conf`
-hardcodes slot A, so a device RAUC has marked "boot B" still boots A.
+The **STM32MP257** target builds (`make stm32`, `MACHINE=stm32mp25-disco`), produces a `.wic` whose
+GPT was verified by inspection, and **has been running on the physical board since 2026-08-18**
+across several bench sessions. Validated there: the TF-A/OP-TEE/U-Boot chain, the encrypted `/data`
+volume provisioned on first boot, the sealed audit trail, RAUC enumerating and identifying its slots,
+and — most recently — **the Qt operator display rendering on an HDMI monitor**. Boot-slot selection
+and the A/B switch have their own records: `implementation_plan_uboot_ab.md` and
+`BOOT_SLOT_AB_STM32MP2.md`, which are the authority for that half and should be read rather than
+paraphrased here.
 
-Never built: `med-image-prod`. Read-only rootfs, real-time latency, AMP/`rpmsg`, TPM and bootloader
-integration are therefore unmeasured — see `RESULTS.md` §9, which lists absences explicitly so they
-are not read as results.
+Two things are broken on the board and worth knowing before touching either area. The **acquisition
+service crash-loops** — `MED_EEG_DRIVER` is `rpmsg`, the Cortex-M33 carries no firmware, the
+front-end self-test cannot open the endpoint, and the unit restarts every 2.5 s without ever reaching
+`failed`, because its cadence falls just outside systemd's default start limiter. And **three of the
+fixes that made the display work exist only on a running card**, applied with `chmod` and `vi`: a
+udev rule for `/dev/galcore`, `idle-time=0` in a `weston.ini` of our own, and a pinned CEA video mode.
+See `BRINGUP_HMI_STM32MP2.md` §9.
+
+Never built: `med-image-prod`. Read-only rootfs, real-time latency, AMP/`rpmsg` and TPM are therefore
+unmeasured — see `RESULTS.md` §9, which lists absences explicitly so they are not read as results.
 
 **The lesson that governs this repository**: in a system with an update path, *"it builds and
 boots" is not evidence*. Of the six defects found while implementing the A/B path, five failed no
@@ -244,8 +260,23 @@ roots, and without the partition table RAUC resolves no slots at all.
   their §8 sections record measured results. The LUKS plan's §9 records a second execution: key
   custody became a per-machine fact, and `tpm2` turned out to be unreachable in the current layer
   set, so custody stays development-grade on **both** targets.
+* `docs/implementation_plan_uboot_ab.md`, `docs/BOOT_SLOT_AB_STM32MP2.md` — boot-slot selection and
+  the A/B switch on the STM32MP257: the plan, and the record of what was measured on the bench.
+  Authority for anything about which slot the device boots.
+* `docs/BRINGUP_HMI_QEMU.md`, `docs/BRINGUP_HMI_STM32MP2.md` — the operator display, on the emulator
+  and on the board. The second one ends with three fixes that are still volatile, and a video-mode
+  finding (CEA-861 timings work, PC timings do not) whose cause is explicitly not identified.
 * `docs/implementation_plan_mac.md`, `docs/implementation_plan_ads1299.md` — current, **not yet
-  implemented**.
+  implemented**. The ADS1299 plan's "Ligação B" is superseded by the next entry, and says so at the
+  top and at each place where the old instruction would send you to write the wrong thing.
+* `docs/implementation_plan_iio_afe.md` — current, **not yet implemented**: the USB mode of the
+  analogue front-end as kernel IIO, the two drivers it needs, and the **adjunct layer** that holds
+  them outside the four-layer stack.
+* `docs/LAYER_MED_BSP.md`, `_DISTRO.md`, `_FRAMEWORK.md`, `_APP.md` — one document per custom layer:
+  what it contains, which invariants it enforces, and what it has no evidence for. Read the relevant
+  one before a non-trivial change to that layer.
+* `docs/PLANO_TCC.md`, `docs/PROPOSTA_TCC.md` — the thesis itself: execution plan (phases, deliverables,
+  risks, cut order) and proposal (context, objectives, contribution).
 * `docs/implementation_plan.md`, `_EEG.md`, `_improvements.md` — earlier design iterations, kept as
   rationale. Some use the superseded `produto`/`meta-produto-*` naming. Not current spec.
 * `docs/BUILD_CONTAINER.md` — the container build host and its measured limits.

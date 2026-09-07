@@ -102,6 +102,11 @@ sobre um sistema com defeito conhecido.
   possíveis; **compra do módulo ADS1299** (prazo de entrega é o risco crítico do plano).
 - **Critério de pronto**: suíte 22/22 e interface de operador de pé por ≥ 10 min sem reinício, com
   captura de tela arquivada.
+- **Já feito nesta fase** (bancada de 27/08): `SystemCallFilter=mincore` aplicado e **validado em
+  hardware**, e a interface de operador renderizando em monitor HDMI. Continuam pendentes, e nenhuma
+  sobrevive a um reboot: a regra de udev do `/dev/galcore`, o `weston.ini` com `idle-time=0`, o modo
+  CEA fixado, o `QB_MEM` do QEMU e os limites de reinício da unidade de aquisição. Ver
+  `BRINGUP_HMI_STM32MP2.md` §9.
 - **Texto**: capítulo de metodologia (§3 acima).
 
 ### Fase 2 — Fechar a atualização A/B no alvo físico
@@ -126,6 +131,9 @@ sintético gerado no coprocessador, antes de qualquer conversor físico entrar n
 - **Escopo**: firmware mínimo no M33 emitindo o cabeçalho de quadro de 40 bytes que o framework já
   declara; enfrentar a restrição `Support of signed firmware only` observada no primeiro boot;
   primeira medição de **latência, jitter e perda de amostras** — hoje listados como não medidos.
+- **Também nesta fase**: a camada adjunta vazia, com receitas construindo módulos triviais. É o
+  passo que verifica `module.bbclass`, gancho e autoload enquanto errar ainda custa zero, e é
+  pré-requisito das duas frentes de driver da Fase 4.
 - **Critério de pronto**: a mesma aplicação, sem recompilar, consome quadros do coprocessador
   trocando um valor de configuração.
 - **Texto**: capítulo de multiprocessamento assimétrico.
@@ -136,12 +144,18 @@ sintético gerado no coprocessador, antes de qualquer conversor físico entrar n
 O teste mais duro da tese: introduzir um *part-number* concreto e verificar que ele não vaza para
 cima.
 
-- **Escopo**: ligação SPI + `DRDY` ao M33 e descrição no device tree de `meta-med-bsp`; firmware com
-  mapa de registradores e conversão para nanovolts; parâmetros clínicos (ganho, taxa de dados,
-  detecção de eletrodo solto) em `eeg.conf`; aquisição do sinal de teste interno do conversor e, se
-  possível, de eletrodos.
-- **Critério de pronto**: **zero ocorrências da string `ADS1299` fora de `meta-med-bsp` e do
-  firmware** — verificável por `grep`, que é a evidência que o próprio plano do conversor exige.
+- **Escopo, modo hat**: ligação SPI + `DRDY` ao M33 e descrição no device tree; firmware com mapa de
+  registradores e conversão para nanovolts; parâmetros clínicos (ganho, taxa de dados, detecção de
+  eletrodo solto) em `eeg.conf`; aquisição do sinal de teste interno do conversor.
+- **Escopo, modo USB**: a **camada adjunta** (`meta-med-afe-ads1299`, fora das quatro camadas do
+  `MedStack`), o *backport* do `ti-ads1298.c` de 6.9 para 6.6 e sua adaptação para o ADS1299 com
+  canal de carimbo de tempo, e o driver `mcp2210` (`spi_controller` sobre HID) — precedido da
+  avaliação das implementações de terceiros já existentes. Ver `implementation_plan_iio_afe.md`, que
+  é a autoridade sobre esta metade, incluindo a ordem: **o driver do AFE vem antes da ponte**, por
+  ser o de menor risco e maior retorno.
+- **Critério de pronto**: **zero ocorrências das strings `ADS1299` e `MCP2210` fora da camada
+  adjunta e do firmware** — verificável por `grep` —, e a mesma aplicação consumindo dos três
+  drivers (`simulated`, `rpmsg`, `iio`) por troca de configuração.
 - **Texto**: capítulo da prova de conceito EEG.
 
 ### Fase 5 — Segurança, perfil de produção e avaliação comparativa
@@ -174,7 +188,8 @@ escorregar.
 - Correções pendentes e lacunas de medição
 - Seleção de slot A/B pelo bootloader, com rollback
 - Firmware no Cortex-M33 e caminho `rpmsg` fim a fim
-- Front-end ADS1299 físico
+- Front-end ADS1299 físico, nos dois modos (hat/AMP e USB/IIO)
+- Dois drivers de kernel na camada adjunta, um deles derivado de driver mainline
 - AppArmor e perfil de produção
 - Avaliação comparativa com alternativas
 
@@ -187,6 +202,8 @@ escorregar.
 - Suíte de aceitação automatizada contra alvo serial: hoje a verificação em hardware é manual
 - Modelagem explícita de variabilidade (*feature model*)
 - Perfil de tomógrafo no alvo físico
+- Submissão do suporte a ADS1299 para o kernel *upstream* — fora do caminho crítico, e um bônus
+  possível justamente por o ponto de partida ser um driver mainline
 - Submissão a processo de certificação real
 
 ---
@@ -205,7 +222,8 @@ escorregar.
 **Ordem de corte, se o calendário apertar.** Esta ordem é a decisão que peço para aprovar junto com
 o plano — descartar nesta sequência:
 
-1. Front-end ADS1299 físico (a Fase 3 já sustenta o argumento de AMP)
+1. O **modo USB** (camada adjunta e os dois drivers de kernel) — o modo hat sustenta sozinho o
+   argumento de particionamento, que é o mais forte dos dois
 2. Firmware no Cortex-M33 (o driver `rpmsg` permanece não exercitado, e isso já está declarado como
    limitação)
 3. Avaliação comparativa com Buildroot e Debian
