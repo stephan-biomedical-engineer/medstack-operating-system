@@ -31,6 +31,10 @@
 namespace med {
 
 /// A bound a configuration value must satisfy to be usable clinically.
+///
+/// The three predicates below are all "shapes a number may take", which is a
+/// platform concern and belongs here. What a *particular* value must be, and
+/// how one parameter constrains another, stays in the application.
 struct SafetyLimit {
     std::string key;
     double minimum = 0.0;
@@ -41,6 +45,22 @@ struct SafetyLimit {
     /// Human readable purpose, copied into the violation report and the audit
     /// record.
     std::string description;
+
+    /// When non-empty, the value must be one of these exactly - a range check
+    /// is still applied but is not sufficient.
+    ///
+    /// Real hardware rarely offers continuous settings. A converter whose
+    /// output data rates are a fixed set of powers of two does not take a value
+    /// between two of them, so a configuration asking for one is not a
+    /// slightly-off request, it is an unimplementable one. Expressing that as a
+    /// range would let it through and leave the driver to round - and a device
+    /// running at a setting its own records do not name is a traceability
+    /// defect, not a rounding convenience.
+    std::vector<double> allowed;
+
+    /// When > 0, the value must be an exact multiple of this - channels that
+    /// only come in blocks, a buffer that only takes whole pages.
+    double multipleOf = 0.0;
 };
 
 struct SafetyViolation {

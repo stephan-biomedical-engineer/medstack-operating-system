@@ -1,11 +1,35 @@
 # Plano de Implementação — Front-end de Aquisição ADS1299 (PoC EEG)
 
-> **Estado**: plano corrente para a **Ligação A** (hat/AMP), **não implementado**. A **Ligação B
-> (USB) foi redecidida em 2026-08-27** e passou a ser *kernel* com IIO, não uma ponte em userspace:
-> ver **`implementation_plan_iio_afe.md`**, que é o plano vigente daquele modo. Tudo o que este
-> documento diz sobre a Ligação B vale como **levantamento** — os fatos de kernel, os números do
-> MCP2210 e a análise de jitter continuam corretos e foram a base da decisão nova — e **não vale
-> como instrução de implementação**. Os pontos onde isso muda o que fazer estão marcados no texto.
+> **Estado, revisto em 2026-09-07**: a metade deste plano que não dependia de hardware **está
+> implementada**, e a que depende continua aberta. Implementado: a escala em nanovolts (§7.1), a
+> mensagem de controle e o `driverOptions` (§7.4), o `eeg.conf` novo (§7.5), o envelope de segurança
+> derivado (§7.6), o simulador que passa a simular *este* conversor (§7.7), a janela de reconexão
+> (§7.9) e a contenção de *part-number* (§3), agora verificável por `grep`. **Não** implementado, e
+> nada aqui deve ser lido como se estivesse: o firmware do Cortex-M33, a atribuição RIF (§11.4), e
+> qualquer medição de bancada. Ver `implementation_plan_iio_afe.md` §13 para a lista exata.
+>
+> Duas coisas mudaram de forma em relação ao que este documento previa. O `selfTest()` real (§7.3)
+> existe **do lado do kernel**, no driver IIO, e não como um passo do firmware — porque foi o
+> caminho IIO que ficou pronto primeiro. E o modo hat ganhou uma segunda topologia: com um driver
+> IIO do ADS1299 existindo, o conversor pode ficar no SPI6 do **A35**, com `DRDY` como interrupção
+> de verdade, sem passar pelo bloqueio de firmware assinado da §11.1. Isso não substitui a Ligação
+> A como caminho de produto — o argumento da §5.3 continua dependendo de o Linux não tocar no
+> conversor — mas tira o cronograma de refém dele. Por isso `acquisition.link` tem quatro valores
+> (`simulated`, `amp`, `spi`, `usb`) e não os três que a §7.5 previa.
+>
+> A **Ligação B (USB) foi redecidida em 2026-08-27** e passou a ser *kernel* com IIO, não uma ponte
+> em userspace: ver **`implementation_plan_iio_afe.md`**, que é o plano vigente daquele modo. Tudo o
+> que este documento diz sobre a Ligação B vale como **levantamento** — os fatos de kernel, os
+> números do MCP2210 e a análise de jitter continuam corretos e foram a base da decisão nova — e
+> **não vale como instrução de implementação**. Os pontos onde isso muda o que fazer estão marcados
+> no texto.
+>
+> **Uma correção de número.** A §5 e a §7.3 falam de um sinal de teste interno de "±1 mV / ±2 mV".
+> Esse é o valor do irmão ECG, cuja referência é 2,4 V: o gerador entrega V<sub>REF</sub>/2400, o
+> que com a referência de 4,5 V do ADS1299 dá **1,875 mV**, não 1 mV. É por isso que
+> `afe.test_signal` aceita `internal` e não um nome que cite amplitude — uma chave de configuração
+> que carrega um número errado é pior que uma que não carrega nenhum, porque é citada. Conferir em
+> SBAS499 junto com o resto.
 >
 > Revisado em 2026-09-06 para incorporar a decisão de hardware que define **duas ligações físicas**
 > para o mesmo conversor: *hat* sobre SPI6 e USB através de uma ponte MCP2210. Complementa
@@ -707,7 +731,7 @@ assinado) deixa de estar no caminho crítico do resultado que a tese precisa mos
 | Host | Teste funcional estendido: quantização de 22,35 nV, saturação em ±187,5 mV, rejeição de ODR inválida, rejeição de ganho inválido, `max_input_uv > FS` recusado |
 | Host | `static_assert` do quadro **na ponte** (redeclaração independente) e teste de ida e volta ponte→driver `socket` com quadro sintético, incluindo CRC deliberadamente errado |
 | Build | `make qemu` e `make stm32`; conferir o `.sha256` do `eeg.conf` no rootfs e `CONFIG_HIDRAW` no `.config` produzido — no artefato, não no log |
-| QEMU | `make check` continua 21/21; a asserção de reinícios continua consultando `NRestarts` (§7.9) |
+| QEMU | `make check` continua verde (23 asserções); a asserção de reinícios continua consultando `NRestarts` (§7.9) |
 | QEMU | Serviço publica quadros com CRC válido; HMI reconstrói a amplitude a partir de `scaleNanoUnitsPerLsb = 1` |
 | Bancada B | VID/PID conferidos; nó estável por udev; onda de teste de 1 mV nos 8 canais; ruído com entradas em curto; eletrodo solto até a HMI; **perda de amostras medida** contra o contador do GP6; latência e jitter medidos |
 | Bancada A | Frequência de `DRDY` medida = ODR programado; mesmos quatro testes do `selfTest`; latência e jitter medidos e **comparados com a ligação B** — é a comparação que justifica a arquitetura AMP com número, não com adjetivo |

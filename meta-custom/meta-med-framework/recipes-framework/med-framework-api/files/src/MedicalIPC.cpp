@@ -135,6 +135,16 @@ Status MedicalIpcChannel::send(const void* data, std::size_t length) {
             if (errno == EINTR) {
                 continue;
             }
+            // Handled here and not through statusFromErrno, which maps EAGAIN
+            // to Timeout - correct for receive(), where "nothing arrived yet"
+            // is what a caller asked about, and wrong here, where nothing was
+            // asked about and the peer is simply behind. The caller has to be
+            // able to tell "this viewer is slow" (keep it, count the loss)
+            // from "this viewer is gone" (drop it), and one status for both
+            // makes that impossible.
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return Status::WouldBlock;
+            }
             return statusFromErrno(errno);
         }
         // Both transports are message oriented, so a short write means the
@@ -277,7 +287,22 @@ Result<std::unique_ptr<MedicalIpcChannel>> MedicalIpcServer::accept(
         return ChannelResult::fail(Status::Timeout, "no client within timeout");
     }
 
-    const int client = ::accept4(fd_, nullptr, nullptr, SOCK_CLOEXEC);
+    // SOCK_NONBLOCK, and it is load bearing rather than tidy.
+    //
+    // An accepted channel is a *viewer* of a sample stream, and the producer of
+    // that stream is a real-time acquisition loop. With a blocking socket, a
+    // viewer that stops draining fills the socket buffer and the next write()
+    // in the producer blocks until it drains - so the display ends up deciding
+    // how fast the patient is sampled. Measured before this line existed
+    // (RESULTS.md §3): 6,735 frames/s with the HMI attached against 17,893
+    // without, i.e. 94 of a configured 250 samples per second per channel, with
+    // the session metadata still declaring 250.
+    //
+    // Non-blocking turns that backpressure into a reportable event: send()
+    // returns WouldBlock, the caller records that this viewer missed a frame,
+    // and acquisition keeps its own clock. A viewer may lose data; the record
+    // may not.
+    const int client = ::accept4(fd_, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (client < 0) {
         return ChannelResult::fail(statusFromErrno(errno),
                                    std::string("accept: ") + std::strerror(errno));

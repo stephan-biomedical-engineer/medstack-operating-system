@@ -201,14 +201,32 @@ da interface de operador, e o caminho para obtê-la é o monitor do QEMU (`Ctrl-
 
 ---
 
-## 9. Correções pendentes — nenhuma implementada
+## 9. Correções pendentes — duas implementadas, duas não
 
-| defeito | correção | camada | por quê ali |
+Atualizado em 2026-09-07. Duas linhas desta tabela deixaram de ser pendências, e a do OOM só saiu
+porque **cobrou o preço de novo**: durante a entrega do front-end analógico, `make check` reportou as
+quinze primeiras asserções passando e as sete restantes como "sem resposta do guest", sem nenhuma
+unidade falha. O convidado tinha entrado exatamente no laço descrito na §5, e a evidência veio do
+dump do próprio kernel:
+
+```
+oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,
+         global_oom,task_memcg=/user.slice/...,task=weston,pid=341,uid=1000
+Out of memory: Killed process 341 (weston) total-vm:277812kB, anon-rss:77056kB
+```
+
+Vale registrar por que ficou escondido por tanto tempo: enquanto um defeito **anterior** ao OOM
+matava o serviço de aquisição, a HMI nunca chegava a subir, e o consumo que estoura os 256 MiB nunca
+acontecia. Corrigido o primeiro defeito, o segundo apareceu na hora. Um defeito mascarado por outro
+defeito é a mesma forma do "defeito escondido atrás de uma recusa" que o `BRINGUP_STM32MP2.md` §11
+já registra.
+
+| defeito | correção | camada | estado |
 |---|---|---|---|
-| §5 OOM | `QB_MEM:qemux86-64 = "-m 1024"` | `meta-med-bsp` | a RAM da máquina virtual é fato de máquina, e é a única camada autorizada a nomear uma; `QB_FSINFO` e `QB_KERNEL_ROOT` já moram lá |
-| §7 SIGSYS | `SystemCallFilter=mincore` (linha adicional; allowlists se somam) | `meta-med-app` | é propriedade da aplicação, não da placa |
-| §7 (2) | avaliar `SystemCallErrorNumber=EPERM` na HMI | `meta-med-app` | hoje a metade **não** relevante para segurança morre de vez numa syscall imprevista, enquanto a relevante apenas recebe erro — invertido em relação ao que se esperaria |
-| §6 janela | asserção de estabilidade com horizonte maior que 30 s | `scripts/med-check.py` | ver §11.3 |
+| §5 OOM | `QB_MEM:qemux86-64 = "-m 1024"` | `meta-med-bsp` | **implementado** (2026-09-07) — a RAM da máquina virtual é fato de máquina, e é a única camada autorizada a nomear uma; `QB_FSINFO` e `QB_KERNEL_ROOT` já moravam lá. Verificado no artefato: `qb_mem = -m 1024` no `.qemuboot.conf` produzido |
+| §7 SIGSYS | `SystemCallFilter=mincore` (linha adicional; allowlists se somam) | `meta-med-app` | **implementado** — está em `eeg-hmi.service:57` |
+| §7 (2) | avaliar `SystemCallErrorNumber=EPERM` na HMI | `meta-med-app` | **pendente** — hoje a metade **não** relevante para segurança morre de vez numa syscall imprevista, enquanto a relevante apenas recebe erro; invertido em relação ao que se esperaria |
+| §6 janela | asserção de estabilidade com horizonte maior que 30 s | `scripts/med-check.py` | **pendente**, e é a que continua custando caro: a suíte declara a HMI saudável aos 30 s e o primeiro OOM chegava aos 150 s, então ela via o sistema morrer *depois* de já ter aprovado. Ver §11.3 |
 
 O valor de `-m 1024` é o que foi **medido como suficiente** (OOM desaparece, HMI sobrevive ao ponto
 de ser morta por outra causa). Não é um requisito derivado: ninguém mediu o mínimo, e o número

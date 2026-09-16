@@ -1,0 +1,31 @@
+# MedPlatform - stable naming and permissions for the ADS1299 front-end.
+#
+# /dev/iio:deviceN is numbered in probe order. On a board with one IIO device
+# today it is always 0, and on the day a second one appears - a temperature
+# sensor, an accelerometer, anything - the acquisition service silently opens
+# the wrong converter. BRINGUP_STM32MP2.md §11 records the general form of this
+# lesson: a device name is always a race, never a fact. So the platform
+# addresses the front-end by a name only this front-end can claim, and
+# eeg.conf's device.address names the symlink.
+#
+# The match is on the IIO device's own "name" attribute, which ti-ads1299 sets
+# from the ID register the chip answered with. That makes the link an assertion
+# about silicon that replied, not about a driver that loaded.
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTR{name}=="ads1299-*", \
+    SYMLINK+="med-afe-eeg0", OWNER="root", GROUP="root", MODE="0660"
+
+# 0660 root:root, and not a dedicated group.
+#
+# The plan asked for "by group, not 0666", and the reason to answer it with
+# root ownership instead is a layering one: the only consumer is
+# eeg-acquisition.service, which runs as root inside a systemd sandbox that
+# already denies every device it is not explicitly granted. Creating a system
+# group here would put an OS-policy fact (who exists on this system) inside a
+# front-end layer, which is the boundary this layer exists to respect. If a
+# non-root acquisition service ever arrives, the group is declared by
+# meta-med-distro and this rule gains a GROUP= - one line, in the right place.
+
+# The bridge, for the USB link. No node to name - the interrupt counter lives
+# in sysfs - so this rule exists only to make the bridge's attributes
+# discoverable by a stable path for the jitter and sample-loss measurements.
+SUBSYSTEM=="hid", DRIVER=="mcp2210", TAG+="med-afe-bridge"

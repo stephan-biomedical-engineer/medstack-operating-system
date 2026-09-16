@@ -39,7 +39,7 @@ struct IpcEndpoint {
     IpcTransport transport = IpcTransport::UnixSeqpacket;
 
     /// Device node for RpmsgChar ("/dev/rpmsg0"), filesystem socket path for
-    /// UnixSeqpacket ("/run/medplatform/eeg.sock").
+    /// UnixSeqpacket ("/run/medplatform/<service>.sock").
     std::string address;
 
     /// Permission bits applied to a listening UNIX socket. Default 0660: the
@@ -59,6 +59,16 @@ public:
     /// Send exactly one message. Partial sends are reported as IoError rather
     /// than silently truncating - a truncated frame from an acquisition
     /// front-end is corrupt data, and corrupt data must never look like data.
+    ///
+    /// Returns **WouldBlock** when the peer is not draining fast enough. A
+    /// channel obtained from MedicalIpcServer::accept() is non-blocking
+    /// precisely so this can happen: a consumer must never be able to slow its
+    /// producer down, because on this platform the producer is a real-time
+    /// acquisition loop and the consumer is a display. Callers are expected to
+    /// treat WouldBlock as "this peer missed this message" - counted and
+    /// reported - and to keep the peer, which is present and merely slow.
+    /// Every other non-Ok status means the peer is unusable and should be
+    /// dropped.
     Status send(const void* data, std::size_t length);
 
     /// Receive one message, waiting up to `timeout`. A zero timeout polls.
@@ -102,6 +112,12 @@ public:
 
     /// Accept one client, waiting up to `timeout`. Returns Timeout when no
     /// client arrived.
+    ///
+    /// The returned channel is **non-blocking**: see send()'s WouldBlock
+    /// contract. This differs deliberately from a channel obtained through
+    /// MedicalIpcChannel::connect(), which stays blocking - a client talking to
+    /// a co-processor wants its write to complete, while a server publishing to
+    /// viewers must never wait on one.
     Result<std::unique_ptr<MedicalIpcChannel>> accept(std::chrono::milliseconds timeout);
 
     int descriptor() const noexcept;

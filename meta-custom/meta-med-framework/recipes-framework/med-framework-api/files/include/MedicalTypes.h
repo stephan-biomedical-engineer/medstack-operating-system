@@ -29,6 +29,21 @@ enum class Status : int {
     OutOfRange,       ///< a value violates a declared safety limit
     NotSupported,     ///< valid request, not implemented by this backend
     Internal,         ///< framework defect - always audit-logged
+    /// The peer is not keeping up: the operation would have blocked and was
+    /// refused instead.
+    ///
+    /// Distinct from Timeout on purpose, and the distinction is the difference
+    /// between two very different clinical situations. Timeout means nothing
+    /// arrived in the window the caller allowed. WouldBlock means the caller is
+    /// producing faster than the far side consumes - the far side is present
+    /// and healthy, it is just slow. A producer that treats the second as an
+    /// error drops a working consumer; one that treats it as backpressure lets
+    /// a display decide how fast a patient is sampled. Neither is acceptable,
+    /// so the status says which one happened.
+    ///
+    /// Appended after Internal rather than inserted, so no existing enumerator
+    /// changes value.
+    WouldBlock,
 };
 
 /// Stable, machine-parsable spelling of a Status, used as a journal field.

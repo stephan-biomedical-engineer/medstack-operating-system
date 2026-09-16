@@ -77,10 +77,39 @@ All code written in this repository must strictly adhere to the 4-layer unidirec
 
 **Adjunct layers.** The stack is four layers and stays four. Hardware enablement belonging to one
 particular front-end — an out-of-tree kernel driver, a devicetree overlay for one AFE — goes into an
-*adjunct* layer beside the vendor BSP (e.g. `meta-med-afe-ads1299`), never into the stack. Such a
-layer provides and never consumes, exactly like `meta-med-bsp`, and is **excluded from the reuse
-metric** on purpose: the metric is computed over the `meta-med-*` layers, and quarantining a
-front-end's kernel code is what keeps that number meaningful. See `implementation_plan_iio_afe.md` §4.
+*adjunct* layer beside the vendor BSP, never into the stack. Such a layer provides and never
+consumes, exactly like `meta-med-bsp`, and is **excluded from the reuse metric** on purpose: the
+metric is computed over the `meta-med-*` layers, and quarantining a front-end's kernel code is what
+keeps that number meaningful. See `implementation_plan_iio_afe.md` §4.
+
+```text
++-------------------------------------------------------------------------+
+|            meta-med-afe-ads1299 (Priority 7)  — ADJUNCT                 |
+|            [One analogue front-end's kernel code, quarantined]          |
+|  - ti-ads1299: IIO driver, derived from mainline drivers/iio/adc/       |
+|    ti-ads1298.c (Linux 6.9), backported to 6.6 and adapted              |
+|  - mcp2210-spi: HID driver registering a USB bridge as a real           |
+|    spi_controller, plus its gpiochip and the GP6 edge counter           |
+|  - udev rule giving the converter a name, not a probe-order number      |
+|  - devicetree overlay for the hat wiring (per machine, dynamic-layers)  |
+|  - Fills MED_BSP_INSTALL. LAYERDEPENDS = "core". Consumes nothing.      |
+|  - The ONLY place outside the M33 firmware where a part number appears  |
++-------------------------------------------------------------------------+
+```
+
+One adjunct layer exists today, `meta-custom/meta-med-afe-ads1299`. It is present only in the KAS
+project files that use a front-end, which is why the tomograph profile — the one the reuse metric is
+computed against — does not carry it at all. What it installs is decided by `MED_EEG_LINK`:
+
+| `MED_EEG_LINK` | Where the converter is | Installed from the adjunct layer |
+|---|---|---|
+| `simulated` | nowhere | nothing |
+| `amp` | on the Cortex-M33, over `rpmsg` | nothing (the firmware is a BSP artefact, via `MED_AMP_FIRMWARE`) |
+| `spi` | on the host's SPI bus, `DRDY` as a real interrupt | `ti-ads1299` |
+| `usb` | behind a USB-SPI bridge, no interrupt possible | `ti-ads1299`, `mcp2210-spi`, the udev rule |
+
+That table is the extensibility result the layer exists to produce: a new analogue front-end costs
+one adjunct layer and three variables, and **zero lines in the four platform layers**.
 
 ---
 
@@ -135,8 +164,43 @@ Contains 6 standardized C++ abstraction classes:
 5. `MedicalConfiguration`: Calibration tables, operational thresholds, and DERS safety parameter verification.
 6. `MedicalDevice`: Universal abstraction interface for biomedical sensors (AFEs, ADCs) and actuators.
 
+`MedicalDevice` ships three drivers, and every one of them is named after a **transport**, never
+after a part: `simulated`, `rpmsg` (frames from a real-time co-processor) and `iio` (a converter the
+Linux kernel drives, through the industrial I/O ABI). The `iio` driver was written against `open`,
+`read`, `poll` and sysfs text files rather than against `libiio`, so the framework still has exactly
+two external dependencies — `libsystemd` and `libcrypto` — which is a property the thesis claims and
+a third entry would end. The conversion scale is **read from the kernel** and never computed in
+userspace: a constant like "22.35 nV per LSB" in this layer would be a converter's datasheet leaking
+two layers above the only one allowed to know it.
+
+Two things travel with a front-end and are worth knowing:
+
+* `DeviceConfig::driverOptions` is an opaque `map<string,string>`, and the framework has **no
+  vocabulary for a class of device**. Each driver owns the vocabulary of its transport and nothing
+  more: `simulated` takes its generator's parameters (`unit`, `full_scale`, `resolution_bits`,
+  `noise_rms`, `tones`, `square`), `rpmsg` interprets nothing and forwards every option to the
+  producer, which answers in its `ControlAck`, and `iio` treats a key as the name of one of the
+  device's own sysfs attributes, written and read back. An option a driver cannot honour is a
+  **failure**, never a silent drop. The EEG's prescription (`afe.gain`, `afe.reference_uv`, …) is the
+  application's own language, checked by its safety table and translated per link at build time by
+  `do_derive_device_options` in the service recipe. (Until 2026-09-16 the framework parsed exactly
+  those five `afe.*` keys in all three drivers and refused any other, which made every non-EEG
+  front-end unconfigurable while passing the part-number `grep`.)
+* The analogue self test — test generator routed to the inputs, shorted-input noise — is the kernel
+  driver's, run **at probe** following the IIO convention (`adis_self_test`, `ak8974_selftest`). A
+  front-end that fails it is not registered, so `IioDevice::selfTest()` checks only what the IIO ABI
+  can say (identity, channels with a scale) and reports an absent device as possibly refused by its
+  driver, with the cause in the kernel log.
+* `med::amp::ControlMessage` / `ControlAck` are fixed-layout, packed, `static_assert`-ed messages —
+  the same discipline as `FrameHeader`, for the same reason: they cross a boundary between two
+  toolchains and two architectures. `ControlMessage` is 464 bytes, sized so it fits one stock rpmsg
+  buffer; needing a ninth option is a protocol change, and the framework refuses to send rather than
+  truncating, because half a prescription is worse than none.
+
 ### 4.5. `meta-med-app` (Pure Userspace Applications & Profiles)
 * **Applications**: `eeg-acquisition-service` (data daemon using `MedicalIPC`, `MedicalDevice`, `MedicalStorage`, `MedicalConfiguration`, `MedicalUpdate` & `MedicalLogger`), `eeg-hmi-gui` (Qt6 Quick / Wayland user interface).
+* **The safety envelope is the application's**, and it is where a converter's real capabilities are declared: sample rate as membership of the discrete set {250 … 16000} rather than a range (300 SPS is not a slightly-off request, it is an unimplementable one, and a device acquiring at a rate its own session metadata does not name is a traceability defect), channels as a multiple of eight, gain as membership of a set, and one **relational** check no table of independent bounds can express — `safety.max_input_uv ≤ reference / gain`, because a threshold above full scale is a threshold the hardware can never be seen to cross.
+* **The record declares its own provenance.** `acquisition.link` is substituted from `MED_EEG_LINK` and written into every session's `metadata.json`. It is not a driver parameter: the four links do not know a sample's time equally well, and on `usb` the timestamp is when the host was *told*, one bus frame and one scheduling delay after the conversion. That is an error of phase rather than of date, nothing downstream can undo it, and it belongs in the record and not in a footnote.
 * **Packagegroups** carry reusable platform capability and **never an application**: `packagegroup-med-core.bb` (MedFramework runtime), `packagegroup-med-amp.bb` (AMP enablement plus the `MED_AMP_FIRMWARE` hook a BSP fills in), `packagegroup-med-gui.bb` (weston + Qt runtime). Applications are installed by the image that owns them, which is what lets the tomograph profile reuse `med-core` and `med-gui` byte for byte.
 * **Images**: `med-image-eeg.bb` (PoC) and `med-image-tomograph.bb`, both `require recipes-core/images/med-image-base.bb` **and** `med-image-dev.inc` from `meta-med-distro`. The `.inc` holds the development profile (writable rootfs, ssh, debug-tweaks, verification tooling) in one place so the two device profiles cannot drift apart — which matters because the reuse metric is only meaningful if they differ exclusively by device class. `med-image-prod.bb` requires only the base, so production differs by not opting in.
 * **Update bundle**: `recipes-core/bundles/med-bundle-eeg.bb`. `RAUC_BUNDLE_COMPATIBLE` must equal what `rauc-conf.bbappend` writes into `system.conf`, and `RAUC_BUNDLE_FORMAT` must be `verity`; neither has a safe default, and a mismatch is only caught at install time on the device.
@@ -167,8 +231,23 @@ fixes that made the display work exist only on a running card**, applied with `c
 udev rule for `/dev/galcore`, `idle-time=0` in a `weston.ini` of our own, and a pinned CEA video mode.
 See `BRINGUP_HMI_STM32MP2.md` §9.
 
+The **analogue front-end** is implemented up to the point where hardware is needed, and not one step
+past it. Written and verified: the adjunct layer, both kernel drivers (the AFE one derived from
+mainline's `ti-ads1298.c`, backported at a measured cost of zero API changes), the `iio` framework
+driver, the control-message ABI, the safety envelope, and the kernel symbols that were missing.
+Verified means: both modules compile and link clean for arm64 against the board's real kernel with
+`W=1` and no warnings, 80 host checks of the new framework behaviour pass, `bitbake -p` is clean on
+both profiles, `MED_EEG_LINK` selects the right contents, both images build, and `make check` is
+23/23 on QEMU. **Not** verified, and not to be
+implied: no module has ever been loaded, no sample has ever been acquired, every datasheet constant
+is still unchecked, and no image has been built since the change. `implementation_plan_iio_afe.md`
+§13 draws that line item by item and is the section to read before repeating any of this.
+
 Never built: `med-image-prod`. Read-only rootfs, real-time latency, AMP/`rpmsg` and TPM are therefore
 unmeasured — see `RESULTS.md` §9, which lists absences explicitly so they are not read as results.
+The front-end measurements the two plans ask for — jitter, sample loss under load, timestamp
+granularity and CPU cost, compared *between* links — are in the same category: the whole point of
+having three of them is that comparison, and it has not happened.
 
 **The lesson that governs this repository**: in a system with an update path, *"it builds and
 boots" is not evidence*. Of the six defects found while implementing the A/B path, five failed no

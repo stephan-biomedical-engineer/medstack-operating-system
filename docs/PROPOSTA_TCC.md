@@ -208,7 +208,7 @@ cada número.
 | Resultado | Situação |
 |---|---|
 | Plataforma comum de 206 pacotes; delta de 3 para o EEG | Medido em simulação |
-| Integridade do caminho de aquisição (3.226 quadros, sem escrita parcial) | Medido em simulação |
+| Integridade do caminho de aquisição (resto zero na divisão pelo quadro; taxa entregue = configurada) | Medido em simulação |
 | Particionamento: escalonamento de tempo real concedido pelo kernel e sandbox medido | Medido em simulação |
 | Atualização A/B: bundle assinado verificado no dispositivo e escrito no slot inativo | Medido em simulação |
 | Trilha de auditoria selada, verificada íntegra | Medido **nos dois alvos** |

@@ -123,31 +123,131 @@ cruzada é o defeito, não o valor. Os números acima são do mesmo commit.
 
 ## 3. Caminho de aquisição
 
+> **Remedido em 2026-09-07.** A medição anterior (sessão de 5 min 22 s, 3.226 quadros de 840 bytes,
+> resto zero) descrevia uma geometria de quadro que **não existe mais**: `samples_per_frame` passou
+> de 25 para 14 quando o front-end analógico entrou, porque 14 é o teto de um buffer `rpmsg` padrão
+> para 8 canais (§7.2 do `implementation_plan_ads1299.md`). O quadro passou de 840 para 488 bytes e
+> a taxa de quadro de 10 para 17,857 Hz. Os números antigos ficam como registro histórico e **não
+> descrevem a configuração entregue**.
+>
+> A remedição encontrou um defeito que a antiga não podia ver, e que nenhuma das 22 asserções da
+> suíte conseguia ver. Está abaixo, com a correção e a injeção de falha que a valida.
+
 ### Método
 
-Sessão de aquisição com o driver `simulated`, e conferência do arquivo de registro contra o formato
-de quadro declarado em `MedicalDevice.h`.
+Duas janelas na mesma sessão, medindo o **delta** entre dois `stat` do mesmo registro — e não
+tamanho dividido por uptime, porque `/data` persiste entre boots e a sessão pode já conter execuções
+anteriores. A segunda janela repete a primeira com a HMI parada, que é o que separa as duas causas
+possíveis de bloqueio no laço de aquisição.
 
-### Resultado
+```sh
+S=$(ls -d /data/eeg/session-* | tail -n 1)
+date +%s; stat -c %s $S/raw.bin      # início da janela
+# ... 120 s ...
+date +%s; stat -c %s $S/raw.bin      # fim da janela
+systemctl stop eeg-hmi.service       # entre as duas janelas
+```
 
-`raw.bin` = **2.709.840 bytes** após uma sessão de 5 min 22 s.
+### Resultado — o formato está íntegro
 
 ```
-40 (FrameHeader) + 8 canais × 25 amostras × 4 bytes = 840 bytes/quadro
-2.709.840 ÷ 840 = 3.226 quadros, resto ZERO
-3.226 quadros ÷ 10 Hz (25 amostras a 250 Hz = 100 ms) = 322,6 s
+quadro = 40 (FrameHeader) + 8 canais × 14 amostras × 4 bytes = 488 bytes
+
+acumulado   983.808 bytes ÷ 488 = 2.016 quadros,  resto ZERO
+delta       594.872 bytes ÷ 488 = 1.219 quadros,  resto ZERO
+delta       1.056.520 bytes ÷ 488 = 2.165 quadros, resto ZERO
 ```
 
-E 322,6 s é exatamente o intervalo entre o início da sessão e o `mtime` do arquivo.
+**O que isso demonstra**: o formato em disco bate com o `static_assert(sizeof(FrameHeader) == 40)`
+do header, e **resto zero em três medidas independentes** significa que não houve escrita parcial
+nem quadro truncado. Essa metade do resultado antigo se mantém, com outro divisor.
 
-**O que isso demonstra**: a taxa de amostragem configurada é a taxa real; o formato em disco bate
-com o `static_assert(sizeof(FrameHeader) == 40)` do header; e **resto zero** significa que não houve
-escrita parcial nem quadro truncado.
+### Resultado — a taxa **não** é a configurada quando a HMI está conectada
 
-**Custo**: 19,353 s de CPU em ~322 s de aquisição ≈ **6% de um núcleo** para 8 canais a 250 Hz.
+| janela | duração | quadros | taxa de quadro | amostras/canal/s | contra os 250 configurados |
+|---|---|---|---|---|---|
+| **com** a HMI conectada | 181 s | 1.219 | 6,735 Hz | 94,3 | **−62%** |
+| **sem** a HMI (parada) | 121 s | 2.165 | 17,893 Hz | 250,5 | **0%** |
 
-**Limite**: sob QEMU, sem garantia de tempo real. Este número é de *throughput e correção de
-formato*, **não** de latência. Latência só tem significado no STM32MP257.
+Sem a HMI a aquisição entrega exatamente a taxa configurada. Com ela, entrega 38% dela — e o
+`metadata.json` da sessão continua declarando `"sample_rate_hz": 250.000000`.
+
+**A causa não é o armazenamento.** O `append` no volume LUKS sustenta 17,9 Hz sem esforço, o que
+esta tabela isola. O custo por quadro decompõe-se assim:
+
+```
+período real por quadro  = 148 ms
+  sleep intencional      =  56 ms  (1/17,857 Hz)
+  CPU medido             = 5,1 ms  (1.026 ticks / 2.016 quadros)
+  bloqueado              ≈  87 ms
+```
+
+O bloqueio é a **publicação para a HMI**, e o mecanismo está no código, não em hipótese:
+`MedicalIpcServer::accept` chama `accept4(fd_, nullptr, nullptr, SOCK_CLOEXEC)` sem `SOCK_NONBLOCK`,
+e `MedicalIpcChannel::send` faz um `::write()` bloqueante. Quando o buffer de recepção do
+visualizador enche, o laço de aquisição para dentro do `write` até ele drenar: **a taxa de aquisição
+passa a ser a taxa de consumo da tela.**
+
+### O que isso significa, e é mais do que um número de desempenho
+
+A `eeg-acquisition.service` ignora `SIGPIPE` com o comentário "a departing HMI must not kill
+acquisition". A intenção declarada é que o visualizador não afete a aquisição. Uma HMI que **sai**
+de fato não afeta; uma HMI **lenta** afeta, e em silêncio — o registro não fica menor, ele fica com
+menos amostras do que afirma ter. Para um registro clínico isso é pior que uma falha: uma falha é
+visível.
+
+**Este defeito é anterior à mudança de geometria e foi exposto por ela.** A 10 Hz o visualizador
+dava conta e o `write` não bloqueava; a 17,857 Hz não dá. É a mesma forma do OOM do `QB_MEM`
+(`BRINGUP_HMI_QEMU.md` §9): um defeito que só aparece quando outro sai da frente.
+
+### Correção, e o que ela mudou
+
+Aplicada no mesmo dia, depois de a medição isolar a causa:
+
+| | antes | depois |
+|---|---|---|
+| `MedicalIpcServer::accept` | `accept4(..., SOCK_CLOEXEC)` | `accept4(..., SOCK_CLOEXEC \| SOCK_NONBLOCK)` |
+| `MedicalIpcChannel::send` | `write` bloqueante; qualquer erro é erro | `EAGAIN` → `Status::WouldBlock`, distinto |
+| serviço de aquisição | qualquer status ≠ Ok derruba o visualizador | `WouldBlock` mantém o visualizador e conta o quadro |
+| registro | perda invisível | `viewer missed` no evento `AcquisitionStopped` |
+
+`Status::WouldBlock` foi acrescentado **depois** de `Internal`, de modo que nenhum enumerador
+existente muda de valor. Ele não vem de `statusFromErrno`: lá `EAGAIN` continua sendo `Timeout`, que
+é o correto para `receive()` ("nada chegou na janela que você pediu"). No `send()` não existe janela,
+então `EAGAIN` só pode significar "o par está atrasado" — e é essa distinção que permite ao chamador
+não confundir um visualizador **lento** com um visualizador **ausente**. O canal obtido por
+`connect()` continua bloqueante de propósito: quem fala com um coprocessador quer que o `write`
+complete; quem publica para visualizadores nunca pode esperar por um.
+
+A escolha de projeto por trás disso, dita uma vez: **um visualizador pode perder dados; o registro
+não.** Era o que a unit já declarava ao ignorar `SIGPIPE`, e agora é o que o código faz.
+
+### A asserção que faltava
+
+`acq-sample-rate` (23ª) compara a taxa **entregue** com a **configurada**, com a HMI conectada,
+tolerância de 10% numa janela de 20 s. Ela lê a geometria do quadro do próprio `eeg.conf` em vez de
+embutir 488 bytes — senão passaria a mentir no dia em que a geometria mudasse, que é exatamente o
+dia em que precisa funcionar.
+
+Ela existe porque as outras 22 **não podiam** ver este defeito: todas medem *estado* (ativo, sem
+reinícios, socket publicado), e o serviço estava perfeitamente ativo enquanto perdia 62% das
+amostras. Medir estado não é medir função.
+
+**E ela viu a falha que procura**, o que é a condição para contar como verificação neste
+repositório. Injetada revertendo **uma única flag** — `SOCK_NONBLOCK` fora do `accept4`, todo o
+resto da correção intacto — e reconstruindo a imagem:
+
+| imagem | resultado |
+|---|---|
+| com `SOCK_NONBLOCK` | **23/23** |
+| sem `SOCK_NONBLOCK` | **22/23**, única falha `acq-sample-rate` → `RATE_LOW` |
+
+As outras 22 continuaram verdes na imagem defeituosa, o que fecha o argumento nos dois sentidos: a
+asserção nova isola exatamente o defeito para o qual foi escrita, e as antigas de fato não
+conseguiam vê-lo.
+
+**Limite**: sob QEMU, sem garantia de tempo real. Estes números são de *vazão e correção de
+formato*, **não** de latência. Latência só tem significado no STM32MP257, e continua não medida.
 
 ---
 
@@ -847,6 +947,9 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   desenvolvimento **nos dois alvos**, e não apenas no de simulação (§7).
 - **A HMI Qt em execução** — exige `NATIVE=1` com runqemu gráfico; sob `nographic` o
   `weston.service` falha por projeto.
+- **A taxa de aquisição com a HMI conectada, depois de corrigida** — hoje ela é medida e está
+  errada (§3, −62%), e a correção não foi feita. Quando for, isto volta como medida, não como
+  ausência.
 - **Continuidade de identidade e de trilha de auditoria através de uma atualização** — a chave de
   host SSH e o `machine-id` são gerados por slot (observado), e o journal persistente mora dentro do
   slot (previsto por inspeção, não observado). Nenhum dos dois tem correção implementada. Ver
@@ -856,6 +959,29 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   um desencontro apareceria em tempo de carga de módulo e não em tempo de boot.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.
 - **Perfil tomógrafo no STM32MP257** — nunca construído; a §2 é inteira sobre `qemux86-64`.
+- **O front-end analógico, em qualquer das quatro ligações.** Desde 2026-09-07 existem os dois
+  drivers de kernel, a camada adjunta e o driver `iio` do framework, e o que foi medido deles é
+  **de build e de host**: os dois módulos compilam e linkam limpos para arm64 contra o kernel real
+  da placa (`W=1`, sem avisos), o *backport* 6.9→6.6 custou zero linhas de API, e 80 verificações
+  funcionais do comportamento novo passam no host. Nada disso é uma medida de aquisição. Continuam
+  **não medidos**, e são exatamente o que os dois planos pedem:
+  - **jitter entre amostras, perda de amostra sob carga, granularidade do carimbo de tempo e custo
+    de CPU**, em cada ligação e **comparados entre elas** — a comparação é o resultado, e é o que
+    justificaria com número (e não com adjetivo) por que a arquitetura de produto é a do
+    coprocessador;
+  - a vazão da ligação USB, que continua sendo a **conta** do `implementation_plan_ads1299.md` §8 e
+    não uma medição: os multiplicadores de 2–4 relatórios por transação vêm do protocolo e nunca
+    foram observados;
+  - o autoteste real contra sinal de teste interno e ruído com entradas em curto — o código existe
+    no probe do driver de kernel (`ads1299_self_test()`, movido do framework em 2026-09-16), nunca
+    rodou contra silício;
+  - o contador de bordas do GP6 como referência de perda de amostra;
+  - **se os módulos sequer carregam**. Compilar não é `insmod`, e em particular a disputa de
+    associação com o `hid-generic` está *lida no fonte do kernel* e não observada.
+  E há uma classe de erro anterior a todas essas: **nenhuma constante de datasheet foi conferida**.
+  Mapa de registradores do ADS1299, opcodes e deslocamentos do MCP2210, VID/PID. Estão marcadas nos
+  fontes e agrupadas para que conferir seja uma passada só; enquanto não for, qualquer medida feita
+  com esses drivers estaria medindo a interpretação do datasheet junto com o hardware.
 
 ---
 
@@ -869,7 +995,7 @@ make qemu
 make tomograph
 make bundle && make verify-bundle
 make bundle-disk
-make check            # 21 asserções: plataforma + perfil EEG
+make check            # 23 asserções: plataforma + perfil EEG
 python3 scripts/med-check.py tomograph   # 11 asserções: só as de plataforma
 make stm32                      # §8: o alvo físico, configuração de produto
 make stm32 KEY=development      # §8: a configuração que foi executada na placa
@@ -882,7 +1008,7 @@ ela conversa por pty com o `runqemu` — de modo que as asserções ali foram ex
 precisamente a condição que a suíte existe para eliminar. Automatizá-las contra um alvo serial é
 trabalho pendente, e até lá o alvo físico está no regime "verificado uma vez", não "verificável".
 
-**A verificação de runtime é automatizada.** `make check` boota a imagem, executa 21 asserções e
+**A verificação de runtime é automatizada.** `make check` boota a imagem, executa 23 asserções e
 sai com código não-zero se alguma falhar — o que transforma "verificado uma vez" em "verificável",
 que é o que a IEC 62304 pede de uma atividade de verificação.
 

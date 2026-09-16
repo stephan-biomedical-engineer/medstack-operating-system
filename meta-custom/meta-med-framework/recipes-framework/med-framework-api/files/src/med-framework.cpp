@@ -30,6 +30,7 @@ const char* toString(Status status) noexcept {
         case Status::OutOfRange:       return "OUT_OF_RANGE";
         case Status::NotSupported:     return "NOT_SUPPORTED";
         case Status::Internal:         return "INTERNAL";
+        case Status::WouldBlock:       return "WOULD_BLOCK";
     }
     return "UNKNOWN";
 }

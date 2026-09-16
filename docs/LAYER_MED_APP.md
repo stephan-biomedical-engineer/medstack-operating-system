@@ -164,11 +164,33 @@ pertence a uma conta sem privilégio**, justamente o único arquivo que não pod
 
 ### 5.2 `eeg.conf`
 
-Front-end, aquisição (8 canais, 250 Hz, 25 amostras/quadro), armazenamento, socket de publicação e
-envelope de segurança (`safety.max_input_uv = 500`). Um comentário ali é uma restrição de hardware
-descoberta antes da hora e registrada no lugar certo: um buffer rpmsg padrão de 512 bytes comporta
-40 bytes de cabeçalho + 114 int32, então um perfil AMP de 8 canais tem de cair para **12 amostras
-por quadro**.
+Front-end, aquisição (8 canais, 250 Hz, **14 amostras/quadro**), opções do front-end (`afe.*`),
+ligação física (`acquisition.link`), armazenamento, socket de publicação e envelope de segurança
+(`safety.max_input_uv = 500`).
+
+A geometria do quadro é uma restrição de **transporte**, não uma preferência, e ela está no arquivo
+porque foi descoberta antes da hora: um buffer rpmsg padrão de 512 bytes tem ~496 úteis, menos 40 de
+cabeçalho deixa 456, que são 114 `int32`, que num perfil de 8 canais dão **14 amostras por canal**.
+O número era **12** aqui e no comentário do `eeg.conf` — errado desde sempre, e corrigido em
+2026-09-07 junto com a entrega do front-end. A ligação USB agrupa as mesmas 14 em memória (lá o teto
+é a transação, não o quadro), então um número serve às duas e o arquivo não bifurca por ligação.
+
+Duas regras do arquivo que não são estilo:
+
+* **O valor vai até o fim da linha.** Não há comentário inline e não pode haver:
+  `MedicalConfiguration::parse` pega tudo depois do `=`, então `afe.gain = 24  # PGA` faz de
+  `afe.gain` a string `"24  # PGA"`, o envelope reporta *not a number* e o serviço recusa subir.
+  A recusa está correta — um valor de calibração ilegível não pode ser adivinhado — e por isso a
+  verificação foi para o build: `do_seal_configuration` reprova o arquivo antes de selá-lo.
+* **Nenhum *part-number*.** `device.driver` nomeia o transporte (`simulated`, `rpmsg`, `iio`), nunca
+  o conversor.
+* **O bloco `afe.*` é a prescrição, não a configuração do driver.** O framework não conhece essas
+  chaves. `do_derive_device_options`, no recipe, traduz a prescrição para o vocabulário do link de
+  `MED_EEG_LINK` — chaves de firmware no `amp`, atributos sysfs do driver de kernel em `spi`/`usb`,
+  parâmetros do conversor simulado em `simulated` — e acrescenta linhas `device.option.*` antes do
+  selo. Uma prescrição que o link não honra reprova o build: hoje é o caso de `afe.bias_drive = true`
+  em `spi`/`usb`, porque o driver de kernel deixa o buffer de bias desligado
+  (`implementation_plan_iio_afe.md` §14).
 
 ### 5.3 A unit
 

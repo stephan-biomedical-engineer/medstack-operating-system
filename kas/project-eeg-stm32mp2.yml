@@ -11,6 +11,14 @@ header:
 machine: stm32mp25-disco
 
 repos:
+  # The analogue front-end's adjunct layer: two out-of-tree kernel modules, the
+  # udev rules that name the converter, and the hat's devicetree overlay. It is
+  # an ADJUNCT and not a fifth MedStack layer - see CLAUDE.md rule 1. Nothing
+  # from it enters the image unless MED_EEG_LINK asks for it, which is why the
+  # co-processor profile below carries the layer and installs none of it.
+  meta-med-afe-ads1299:
+    path: "meta-custom/meta-med-afe-ads1299"
+
   meta-st-stm32mp:
     url: "https://github.com/STMicroelectronics/meta-st-stm32mp.git"
     branch: "scarthgap"
@@ -34,11 +42,46 @@ target:
 
 local_conf_header:
   eeg-stm32mp2: |
-    # The Cortex-M4 runs the acquisition firmware and publishes sample frames
+    # The Cortex-M33 runs the acquisition firmware and publishes sample frames
     # over OpenAMP rpmsg; the service reaches them through MedicalIPC. Compare
     # with kas/project-eeg-qemu.yml: same image, same applications, same
     # framework, different front-end driver.
+    #
+    # This is the PRODUCT topology, and the reason it is the product one is
+    # IEC 62304 §5.3: the converter belongs to the real-time core, Linux never
+    # touches it, and that is what lets the Linux software item be argued into a
+    # lower safety class. It is also the one with the open blocker - the M33
+    # rejects unsigned firmware (BRINGUP_STM32MP2.md §9.7) - so until that is
+    # solved this profile builds an image whose acquisition service cannot
+    # start, and does so loudly (163 restarts, measured).
+    #
+    # The two alternatives, both of which produce real samples today and neither
+    # of which needs signed firmware. Changing these three values is the whole
+    # switch: no source, no recipe and no target changes, and the adjunct layer
+    # installs exactly what each one needs.
+    #
+    #   hat, converter on the host's SPI6, DRDY as a real interrupt:
+    #     MED_EEG_DRIVER  = "iio"
+    #     MED_EEG_ADDRESS = "/dev/med-afe-eeg0"
+    #     MED_EEG_LINK    = "spi"
+    #   (also needs the devicetree overlay, which needs the board's chip
+    #    select, DRDY and RESET pins - see ads1299-overlay_1.0.bb, which
+    #    refuses to build until they are declared - and a "fdt apply" in the
+    #    bootcmd, which does not exist yet.)
+    #
+    #   USB, converter behind an MCP2210 bridge:
+    #     MED_EEG_DRIVER  = "iio"
+    #     MED_EEG_ADDRESS = "/dev/med-afe-eeg0"
+    #     MED_EEG_LINK    = "usb"
+    #
+    # They are NOT clinically equivalent to "amp" and the record says so:
+    # acquisition.link travels into every session's metadata, because on "usb"
+    # a sample's timestamp is when the host was told, one bus frame and one
+    # wakeup after the conversion. That is an error of phase, not of date, and
+    # no arithmetic downstream can undo it.
     MED_EEG_DRIVER = "rpmsg"
+    MED_EEG_ADDRESS = "/dev/rpmsg0"
+    MED_EEG_LINK = "amp"
     MED_EEG_REQUIRE_ENCRYPTION = "true"
 
     # U-Boot is what actually selects the boot slot on this SoC, and it is the

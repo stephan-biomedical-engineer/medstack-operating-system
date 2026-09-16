@@ -5,16 +5,51 @@ header:
 
 machine: qemux86-64
 
+repos:
+  # The analogue front-end's adjunct layer. Present on this profile, and not in
+  # kas-base.yml, because that would put it in the tomograph profile too - and
+  # the tomograph is the one that has to be able to say it installs nothing
+  # device specific. A layer only the profiles that use a front-end carry is
+  # what makes "a new front-end costs one layer" countable.
+  #
+  # Nothing from it is installed unless MED_EEG_LINK says so, so its presence
+  # here costs parse time and nothing in the image. What it buys is that the
+  # QEMU profile can acquire from a real converter over USB without a second
+  # entry point - see MED_EEG_LINK below.
+  meta-med-afe-ads1299:
+    path: "meta-custom/meta-med-afe-ads1299"
+
 target:
   - med-image-eeg
 
 local_conf_header:
   eeg-qemu: |
     # QEMU has no analogue front-end and no co-processor, so the acquisition
-    # service uses the framework's synthetic EEG source. This one line is the
-    # entire difference between the simulation profile and the hardware
+    # service uses the framework's synthetic EEG source. These three lines are
+    # the entire difference between the simulation profile and the hardware
     # profile - see kas/project-eeg-stm32mp2.yml.
+    #
+    # The simulator is not an idealised source: it quantises to the same LSB the
+    # real converter has, saturates at the same full scale, honours the same
+    # afe.* options and refuses the same ones. Without that, this profile would
+    # exercise code paths the hardware profile does not have, and every defect
+    # living in quantisation or option handling would wait for a bench session.
     MED_EEG_DRIVER = "simulated"
+    MED_EEG_ADDRESS = ""
+    MED_EEG_LINK = "simulated"
+
+    # A real front-end on this profile, with no second entry point and no new
+    # target: a USB bridge is reachable from any host, so with qemu USB
+    # passthrough these three values turn the simulation profile into an
+    # acquisition profile against the same image and the same applications.
+    #
+    #   MED_EEG_DRIVER  = "iio"
+    #   MED_EEG_ADDRESS = "/dev/med-afe-eeg0"
+    #   MED_EEG_LINK    = "usb"
+    #
+    # That is what would take the portability result from two machines to two
+    # machines and three physical topologies. It is not required by anything
+    # here and has not been done - the passthrough half is untried.
 
     # There IS a LUKS volume now: med-data-provision.service converts the
     # med-data partition on first boot. Requiring encryption here is the

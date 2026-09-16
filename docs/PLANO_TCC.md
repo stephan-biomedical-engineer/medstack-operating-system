@@ -40,7 +40,7 @@ A distinção que organiza esta seção é a mesma que organiza o repositório: 
 | Resultado | Evidência | Nível |
 |---|---|---|
 | Reuso entre classes de dispositivo | 206 pacotes comuns, delta de 3; `diff` só com remoções | QEMU |
-| Caminho de aquisição íntegro | Sessão de 5 min 22 s; 3.226 quadros; resto zero na divisão por 840 B | QEMU |
+| Caminho de aquisição íntegro | Resto zero na divisão por 488 B; taxa entregue = taxa configurada com a HMI conectada, depois de corrigida a contrapressão da publicação (`RESULTS.md` §3) | QEMU |
 | Particionamento de software | `exposure 3.7`; `SCHED_RR` prio. 50 concedido pelo kernel | QEMU |
 | Trilha de auditoria selada | `journalctl --verify` → `PASS`, nos dois alvos | **Hardware** |
 | Política de atualização A/B | Bundle assinado verificado contra o keyring do dispositivo e escrito no slot inativo | QEMU |
@@ -70,7 +70,7 @@ São quatro níveis de evidência, e um não substitui o outro:
 2. **Inspeção do artefato produzido.** Ler a tabela de partições do `.wic`, extrair o pacote e ler o
    arquivo instalado. Dos treze defeitos catalogados no porte para hardware, **seis não tinham
    sintoma nenhum** — não quebraram build, não emitiram aviso, e só apareceram assim.
-3. **Suíte de aceitação em execução.** `make check` boota a imagem e executa 22 asserções sobre o
+3. **Suíte de aceitação em execução.** `make check` boota a imagem e executa 23 asserções sobre o
    console serial. É a única coisa do repositório que pega regressão de comportamento.
 4. **Execução no alvo físico.** Quatro defeitos do primeiro boot dependiam de hardware que a imagem
    não contém — pânico da GPU no mundo seguro, colisão de rótulos de partição com o eMMC de fábrica,
@@ -100,7 +100,7 @@ sobre um sistema com defeito conhecido.
 - **Escopo**: `SystemCallFilter=mincore` na HMI; `QB_MEM` declarado em `meta-med-bsp`; asserção de
   estabilidade com janela maior que 30 s; tratamento do relógio sem RTC; captura das figuras já
   possíveis; **compra do módulo ADS1299** (prazo de entrega é o risco crítico do plano).
-- **Critério de pronto**: suíte 22/22 e interface de operador de pé por ≥ 10 min sem reinício, com
+- **Critério de pronto**: suíte 23/23 e interface de operador de pé por ≥ 10 min sem reinício, com
   captura de tela arquivada.
 - **Já feito nesta fase** (bancada de 27/08): `SystemCallFilter=mincore` aplicado e **validado em
   hardware**, e a interface de operador renderizando em monitor HDMI. Continuam pendentes, e nenhuma

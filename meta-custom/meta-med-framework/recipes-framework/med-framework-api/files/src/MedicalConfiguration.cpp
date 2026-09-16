@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -19,6 +20,16 @@ namespace med {
 namespace {
 
 const char* const kSidecarSuffix = ".sha256";
+
+/// Print a limit value the way it was written in the configuration file, so a
+/// violation message reads "not one of {250, 500, 1000}" and not
+/// "{250.000000, 500.000000}". A message an operator has to decode is a message
+/// that gets skipped.
+std::string formatNumber(double value) {
+    std::ostringstream out;
+    out << value;
+    return out.str();
+}
 
 std::string trim(const std::string& text) {
     const std::string::size_type first = text.find_first_not_of(" \t\r\n");
@@ -398,17 +409,56 @@ std::vector<SafetyViolation> MedicalConfiguration::validate(
             continue;
         }
 
+        SafetyViolation violation;
+        violation.key = limit.key;
+        violation.value = value;
+        violation.present = true;
+
+        const std::string suffix =
+            limit.description.empty() ? std::string() : " - " + limit.description;
+
         if (value < limit.minimum || value > limit.maximum) {
-            SafetyViolation violation;
-            violation.key = limit.key;
-            violation.value = value;
-            violation.present = true;
             violation.reason = "outside the permitted range [" +
                                std::to_string(limit.minimum) + ", " +
-                               std::to_string(limit.maximum) + "]" +
-                               (limit.description.empty() ? std::string()
-                                                          : " - " + limit.description);
+                               std::to_string(limit.maximum) + "]" + suffix;
             violations.push_back(violation);
+            continue;
+        }
+
+        if (!limit.allowed.empty()) {
+            bool found = false;
+            std::string permitted;
+            for (const double candidate : limit.allowed) {
+                // Exact equality is intended. These are settings a device
+                // either offers or does not, written as literals in both the
+                // configuration and the limit table, so a tolerance here would
+                // only serve to accept a value the hardware cannot take.
+                if (candidate == value) {
+                    found = true;
+                }
+                if (!permitted.empty()) {
+                    permitted += ", ";
+                }
+                permitted += formatNumber(candidate);
+            }
+            if (!found) {
+                violation.reason = "not one of the values the front-end offers {" +
+                                   permitted + "}" + suffix;
+                violations.push_back(violation);
+                continue;
+            }
+        }
+
+        if (limit.multipleOf > 0.0) {
+            const double quotient = value / limit.multipleOf;
+            const double rounded = (quotient < 0.0) ? -std::floor(-quotient + 0.5)
+                                                    : std::floor(quotient + 0.5);
+            if (std::fabs(quotient - rounded) > 1e-9) {
+                violation.reason = "not a multiple of " +
+                                   formatNumber(limit.multipleOf) + suffix;
+                violations.push_back(violation);
+                continue;
+            }
         }
     }
 

@@ -112,7 +112,7 @@ endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \
         tomograph bundle verify-bundle bundle-disk shell runqemu \
-        runqemu-tomograph check image-info clean purge
+        runqemu-tomograph check test image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -136,6 +136,7 @@ help:
 	@echo "  shell       interactive build environment"
 	@echo "  runqemu     boot the GPT disk image, KVM accelerated, serial console"
 	@echo "  check       boot and assert on the running system (exits non-zero on failure)"
+	@echo "  test        MedFramework host tests: no kas, no image, seconds"
 	@echo "  image-info  size and package count of the last build"
 	@echo "  clean       drop build artefacts, keep sstate and downloads"
 	@echo "  purge       drop everything kas manages"
@@ -282,6 +283,17 @@ runqemu: $(TOOL)
 # all, so building is not the place those regressions will be caught.
 check: $(TOOL)
 	python3 scripts/med-check.py eeg
+
+# The host-side functional tests of the MedFramework. No kas, no container, no
+# image: they compile the library's own sources for the host and run in
+# seconds, which is what makes them the inner loop `check` cannot be.
+#
+# The two suites are complementary and neither substitutes for the other.
+# `test` sees a wrong LSB, a path that escapes its namespace and an option
+# silently dropped; `check` sees a service that is active while losing 62% of
+# its samples. Nothing a host test can do would have caught that one.
+test:
+	@$(MAKE) --no-print-directory -C tests/framework check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform

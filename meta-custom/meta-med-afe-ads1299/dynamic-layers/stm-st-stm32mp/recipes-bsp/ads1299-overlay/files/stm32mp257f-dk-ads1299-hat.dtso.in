@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * ADS1299 EEG front-end on the STM32MP257F-DK expansion connector.
+ *
+ * This is the HAT link with the converter on the Linux side: SPI6 stays with
+ * the Cortex-A35 and DRDY is a real interrupt, so ti-ads1299 timestamps a
+ * sample one SPI transfer after the conversion. It is NOT the product topology
+ * described in implementation_plan_ads1299.md §2.1, where SPI6 and the DRDY
+ * pin are handed to the Cortex-M33 through the RIF and Linux never sees the
+ * converter at all. The two are mutually exclusive by construction - the same
+ * bus cannot belong to both cores - and which one an image builds is
+ * MED_EEG_LINK.
+ *
+ * What is verified, and where
+ * ---------------------------
+ * Read from the tree this repository builds (linux-stm32mp 6.6.129):
+ *   - spi6 exists and is disabled: stm32mp257f-dk.dts:826
+ *   - spi6_pins_a is SPI6_SCK=PF7, SPI6_MOSI=PC7, SPI6_MISO=PC4:
+ *     stm32mp25-pinctrl.dtsi:782
+ *   - spi6 is a RIF resource, access-controllers = <&rifsc 27>:
+ *     stm32mp251.dtsi:1597
+ *   - the pin group carries no NSS, so chip select is an ordinary GPIO
+ *
+ * What is NOT verified and cannot be, from any tree
+ * -------------------------------------------------
+ * Which GPIO carries the chip select, which carries DRDY, and which carries
+ * RESET. Those are schematic facts of a board that is still being designed
+ * (implementation_plan_ads1299.md §4.1-4.2), and the recipe REFUSES TO BUILD
+ * until they are declared rather than substituting a plausible default. A
+ * devicetree that names the wrong pin does not fail: it produces a converter
+ * that never signals, or a chip select that toggles someone else's line, and
+ * the symptom appears at the far end of the system.
+ *
+ * Also not solved here: applying the overlay. This recipe compiles a .dtbo and
+ * deploys it; nothing in the boot path loads it yet, which would be a U-Boot
+ * "fdt apply" in the bootcmd meta-med-bsp owns. And the base .dtb has to carry
+ * __symbols__ (dtc -@) for &spi6 to resolve at all, which meta-st's kernel
+ * build has not been checked for. Both are named in
+ * docs/implementation_plan_iio_afe.md rather than assumed away.
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+&{/} {
+	/*
+	 * The driver takes avdd as a mandatory regulator - it reads its voltage
+	 * to know the analogue supply. On the hat this comes from the expansion
+	 * connector with no software control, so it is declared as what it is:
+	 * a fixed supply that is always on. Declaring it is not paperwork; it
+	 * is how the driver learns 5 V rather than assuming it.
+	 */
+	eeg_afe_avdd: regulator-eeg-afe-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "eeg-afe-avdd";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+	};
+};
+
+&spi6 {
+	status = "okay";
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&spi6_pins_a>;
+	pinctrl-1 = <&spi6_sleep_pins_a>;
+	cs-gpios = <@MED_AFE_CS_GPIO@>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	eeg_afe: adc@0 {
+		compatible = "ti,ads1299";
+		reg = <0>;
+
+		/*
+		 * SPI mode 1 (CPOL=0, CPHA=1), which is what the ADS129x family
+		 * needs: only spi-cpha is set.
+		 */
+		spi-cpha;
+
+		/*
+		 * Well under the converter's 20 MHz ceiling and under the
+		 * 12 MHz the USB bridge can do, so that the two links run the
+		 * converter at the same bus speed and a difference between them
+		 * is a property of the link and not of the clock.
+		 */
+		spi-max-frequency = <4000000>;
+
+		/*
+		 * DRDY. This is the whole difference between this link and the
+		 * USB one: here the converter can interrupt the host, so the
+		 * driver takes the IRQ path and the timestamp is the
+		 * converter's. Falling edge - DRDY is asserted low when a
+		 * conversion is ready.
+		 */
+		interrupts-extended = <@MED_AFE_DRDY_GPIO@ IRQ_TYPE_EDGE_FALLING>;
+
+		reset-gpios = <@MED_AFE_RESET_GPIO@>;
+
+		avdd-supply = <&eeg_afe_avdd>;
+	};
+};

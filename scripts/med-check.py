@@ -230,6 +230,36 @@ EEG_CHECKS = [
     ("acq-socket", "o socket de amostras foi publicado",
      "test -S /run/medplatform/eeg.sock && echo OK", rx(r"OK")),
 
+    # A taxa ENTREGUE contra a CONFIGURADA, e não apenas "o serviço está vivo".
+    #
+    # Esta asserção existe porque a suíte deu 22/22 numa imagem que entregava 94
+    # das 250 amostras/canal/s configuradas: a publicação para a HMI era
+    # bloqueante, o laço de aquisição parava dentro do write() e o registro saía
+    # com menos amostras do que o próprio metadata.json declarava. Nenhuma das
+    # outras 22 podia ver isso - todas olham estado (ativo, sem reinícios,
+    # socket publicado), e o serviço estava perfeitamente ativo enquanto perdia
+    # 62% das amostras. Medir estado não é medir função.
+    #
+    # O método é o mesmo da RESULTS.md §3: delta entre dois stat do mesmo
+    # registro, e a geometria do quadro lida do eeg.conf em vez de embutida
+    # aqui - senão a asserção passa a mentir no dia em que a geometria mudar,
+    # que é exatamente o dia em que ela precisa funcionar.
+    #
+    # Tolerância de 10% e janela de 20 s: sob QEMU sem tempo real, a taxa
+    # instantânea oscila; o que esta asserção procura é a ordem de grandeza
+    # errada (62% de perda), não jitter.
+    ("acq-sample-rate", "a taxa entregue é a configurada, com a HMI conectada",
+     "C=/etc/medplatform/eeg.conf; "
+     "g() { grep \"^$1\" $C | cut -d= -f2 | tr -d ' '; }; "
+     "N=$(g acquisition.samples_per_frame); CH=$(g acquisition.channels); "
+     "R=$(g acquisition.sample_rate_hz); FB=$((40 + CH * N * 4)); "
+     "S=$(ls -d /data/eeg/session-* | tail -n 1); "
+     "A=$(stat -c %s $S/raw.bin); sleep 20; B=$(stat -c %s $S/raw.bin); "
+     "ACH=$(( (B - A) / FB * N / 20 )); "
+     "echo \"entregue=$ACH configurado=$R quadro=${FB}B\"; "
+     "test $ACH -ge $(( R * 9 / 10 )) && echo RATE_OK || echo RATE_LOW",
+     rx(r"RATE_OK")),
+
     ("acq-realtime", "o kernel concedeu SCHED_RR prioridade 50",
      "chrt -p $(pidof eeg-acquisition-service) 2>&1",
      rx(r"SCHED_RR[\s\S]*priority:\s*50")),

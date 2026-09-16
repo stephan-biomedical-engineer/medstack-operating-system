@@ -58,10 +58,23 @@ PrivateNetwork=yes
 # directories this service may write.
 ReadWritePaths=/data
 
-# The rpmsg endpoint to the Cortex-M4, on machines that have one. Harmless on
-# targets where the node does not exist.
+# The links the front-end can arrive on. Harmless on targets where the node
+# does not exist - DeviceAllow narrows, it does not require.
+#
+# The rpmsg entries name nodes; the industrial I/O one names a device CLASS,
+# "char-iio", resolved by systemd through /proc/devices. That difference is not
+# cosmetic. An IIO character device is numbered in probe order, so a node name
+# here would be the same race the udev rule exists to remove, and it would have
+# to be re-guessed for every board. A class is a statement about what kind of
+# hardware this service may talk to, which is what the sandbox is for.
+#
+# NOT YET EXERCISED on hardware: no target in this repository has run the
+# acquisition service against an industrial I/O front-end, so this line is
+# written and unproven. If the service ever reports EPERM opening its
+# converter, this is the line to check first.
 DeviceAllow=/dev/rpmsg0 rw
 DeviceAllow=/dev/rpmsg_ctrl0 rw
+DeviceAllow=char-iio rw
 
 [Install]
 WantedBy=multi-user.target
