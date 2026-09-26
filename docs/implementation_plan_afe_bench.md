@@ -141,6 +141,31 @@ identificou como diferença real entre o ADS1298 e o ADS1299:
 | VID/PID do MCP2210 | `mcp2210-spi.c` | não enumera; falha alta, barata |
 | Deslocamentos dos relatórios de 64 bytes | `mcp2210-spi.c` | transferência que "funciona" e devolve lixo |
 | Modo do pino de interrupção (GP6) | `mcp2210-spi.c` | contador de `DRDY` não conta; perda de amostra volta a ser indetectável |
+| Posição dos campos de `CONFIG2` | `ti-ads1299.c` | **pago em 2026-09-25 — ver abaixo** |
+
+### O primeiro item pago, e por que ele muda a Fase 3
+
+Em 2026-09-25, a primeira passada manual desta fase, sobre um único registrador, achou um defeito.
+`CONFIG2` estava transcrito com os campos **todos uma posição acima**: reservado em 7:6 em vez de
+7:5, `INT_CAL` no bit 5 em vez do 4, `CAL_AMP` no bit 3 em vez do 2 — sendo que o bit 3 é o *outro*
+campo reservado do registrador, que o datasheet manda escrever 0.
+
+O que ele teria causado, calculado antes e depois da correção:
+
+| escrita | antes | depois | o que o antes fazia |
+|---|---|---|---|
+| `off` | `0xc0` | `0xc0` | correto por acidente |
+| `1x_slow` | `0xe0` | `0xd0` | reservado 7h (proibido) e **`INT_CAL` = 0** |
+| `2x_slow` | `0xe8` | `0xd4` | idem, mais o bit 3 reservado escrito como 1 |
+
+Ou seja: **o gerador de teste interno nunca era ligado**. O autoteste do *probe* pediria o sinal,
+leria entrada em curto, o `swing` reprovaria, e o `dev_err_probe` recusaria registrar o front-end —
+sintoma ("não aparece `/dev/med-afe-eeg0`") a três passos da causa (um bit).
+
+**A lição transferível, e ela é sobre verificação e não sobre o ADS1299**: o valor de *reset* que a
+transcrição errada produz é `0xc0`, que é o valor certo. Um defeito de posição de campo que preserva
+o valor de reset é **invisível** para uma varredura de valores de reset — que é exatamente o critério
+5 da Fase 3. Ver a ressalva acrescentada lá.
 
 **Critério**: os dois `grep` acima retornam **0**.
 
@@ -323,6 +348,15 @@ cat /sys/kernel/debug/regmap/spi*/registers
 5. **o mapa de registradores completo (0x00–0x17) conferido contra os valores de reset**, um a um,
    em tabela. Esta é a verificação ponto a ponto mais barata de todo o plano e a que mais rende: ela
    valida de uma vez a leitura de registrador, a escrita, o `regmap` e boa parte da Fase 0.
+
+   **Ressalva, medida e não suposta** (§4, "o primeiro item pago"): este critério é **cego** a um
+   erro de posição de campo que preserve o valor de reset — e o defeito de `CONFIG2` achado em
+   2026-09-25 é exatamente disso. Ele escrevia `INT_CAL` e `CAL_AMP` um bit acima do lugar, e
+   mesmo assim produzia `0xc0` no reset, que é o valor correto. **Nenhuma comparação de valores de
+   reset o veria**, e uma releitura de escrita tampouco, porque o registrador é R/W e devolve o que
+   se escreveu nele. Só duas coisas o pegam: a leitura do datasheet (Fase 0) e a medição do sinal
+   analógico (Fase 4). Este critério continua valendo pelo que valida — endereçamento, `regmap`,
+   `RREG`/`WREG` — e **não** deve ser citado como conferência do mapa de bits.
 
 **Injeção de falha**: desligar a alimentação analógica do conversor (mantendo a ponte) e recarregar
 o `ti-ads1299`. O *probe* tem de **falhar nomeando o motivo**, e não produzir um dispositivo IIO. Um
