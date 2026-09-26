@@ -13,6 +13,16 @@ sstate-cache/
 *.swp
 *~
 
+# The Linux tree that is the SOURCE OF TRUTH for the two front-end drivers
+# (ti-ads1299, mcp2210-spi). It is a clone of STMicroelectronics/linux with our
+# development branch on top, and it is deliberately NOT content of this
+# repository: this repo integrates and builds, that tree holds kernel code, and
+# a copy here would be the second source of truth the whole arrangement exists
+# to avoid. See docs/implementation_plan_ads1299_upstream.md §2.2 and §2.3.
+# Ignored because it sits inside the working directory for convenience - ~5 GB
+# and 82k files that a "git add -A" would otherwise stage into the Yocto repo.
+linux-med/
+
 # Machine-local build paths (see the "-include local.mk" hook in the Makefile).
 # Where this build host keeps downloads/, sstate-cache/ and the build directory
 # is a property of the machine, not of the project - the same reason no layer
