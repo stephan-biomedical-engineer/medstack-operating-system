@@ -315,20 +315,23 @@ static void test_fragmentation(void)
 
 	/*
 	 * C5 - a device that claims a full 60 bytes on the reply that finishes
-	 * a 512-byte transfer, when only 32 were left. rx_flat is the field
+	 * a 512-byte transfer, when only 32 were left. Two things are checked
+	 * at once. The count is impossible, so the transfer is refused rather
+	 * than trimmed and carried on with. And rx_flat is the field
 	 * immediately before pin_designation in struct mcp2210, so without the
-	 * clamp at "received + got > len" those 28 extra bytes land on the pin
+	 * bound at "received + got > len" those 28 extra bytes land on the pin
 	 * designations: checking them is checking for the overflow.
 	 */
 	fresh();
 	fake.inflate_last_reply = true;
 	fill_pattern(tx, 512);
 	memset(rx, 0, sizeof(rx));
-	CHECK_EQ(run_one(tx, rx, 512), 0);
+	CHECK_EQ(run_one(tx, rx, 512), -EPROTO);
 	CHECK_EQ(mcp->pin_designation[0], FAKE_PIN_GPIO);
 	CHECK_EQ(mcp->pin_designation[1], FAKE_PIN_CS);
 	CHECK_EQ(mcp->pin_designation[2], FAKE_PIN_GPIO);
-	CHECK_MSG(memcmp(tx, rx, 512) == 0, "e os dados continuam corretos");
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SPI_CANCEL] >= 1,
+		  "e a ponte foi devolvida ao repouso antes de sair");
 	fake.inflate_last_reply = false;
 
 	/* C6 - several transfers in one message keep their boundaries */
@@ -410,13 +413,40 @@ static void test_stall_bound(void)
 	 * the same condition as 0xF8 "the engine is busy" and does not clear by
 	 * waiting. The driver maps both to -EBUSY and retries.
 	 */
-	clear_obs();
+	fresh();
 	fake.bus_unavailable = true;
-	CHECK_MSG(run_one(tx, rx, 8) != 0, "uma transferencia sem barramento falha");
-	DEFECT(shim_usleep_calls > 1,
-	       "0xF7 (barramento com dono externo) e repetido 100 vezes como se fosse 0xF8",
-	       "plano secao 4.2");
+	CHECK_EQ(run_one(tx, rx, 8), -EBUSY);
+	CHECK_MSG(shim_usleep_calls == 0,
+		  "e falha de imediato: esperar nao devolve um barramento que tem outro dono");
 	fake.bus_unavailable = false;
+
+	/*
+	 * D4 - the bound is a budget and not a number. At the controller's own
+	 * minimum bitrate a 512-byte transaction clocks for nearly three
+	 * seconds, so 500 refusals are still a transfer that is merely slow.
+	 * Under the old flat bound of 100 this transfer failed.
+	 */
+	{
+		u8 big_tx[512], big_rx[512];
+		struct spi_transfer slow;
+
+		fresh();
+		fill_pattern(big_tx, 512);
+		memset(big_rx, 0, sizeof(big_rx));
+		memset(&slow, 0, sizeof(slow));
+		slow.tx_buf = big_tx;
+		slow.rx_buf = big_rx;
+		slow.len = 512;
+		slow.speed_hz = 1500;
+
+		fake.busy_before_accept = 500;
+		CHECK_EQ(run_message(&slow, 1), 0);
+		CHECK_MSG(memcmp(big_tx, big_rx, 512) == 0,
+			  "uma transferencia lenta completa, com os dados certos");
+		CHECK_MSG(shim_usleep_calls >= 500,
+			  "e o driver realmente esperou as 500 recusas");
+		fake.busy_before_accept = 0;
+	}
 
 	check_no_nvram_or_eeprom();
 	do_release();
@@ -429,12 +459,12 @@ static void test_unimplemented_phases(void)
 	u8 tx[128], rx[128];
 	int gpio, count;
 
-	section("E. O que as Fases 3 e 4 existem para consertar");
+	section("E. O que as Fases 3 e 4 consertaram");
 
 	/*
 	 * E1 - a reply whose echoed command byte is not the command that was
-	 * sent should be discarded. Every reply echoes byte 0, including an
-	 * unsupported command (Table 3-72), so the check costs four lines.
+	 * sent is discarded. Every reply echoes byte 0, including an
+	 * unsupported command (Table 3-72), which is what makes the check cheap.
 	 */
 	fake_reset();
 	spi_chip_select = 1;
@@ -443,17 +473,16 @@ static void test_unimplemented_phases(void)
 	fake.gpio_value = 0x01ab;
 	fake.echo_wrong_command = true;
 	gpio = mcp->gc.get(&mcp->gc, 0);
-	DEFECT(gpio >= 0,
-	       "uma resposta com eco divergente e aceita em vez de descartada",
-	       "plano secao 2 padrao 1, Fase 3");
+	CHECK_EQ(gpio, -ETIMEDOUT);
+	CHECK_EQ(mcp->stray_replies, 1);
 	fake.echo_wrong_command = false;
 	do_release();
 
 	/*
-	 * E2 - and the consequence of not matching replies to commands: a reply
-	 * that arrives one exchange late is consumed by whatever asked next.
-	 * Here a GPIO read times out and its answer is then handed to the
-	 * interrupt counter, which reports the pin values as an edge count.
+	 * E2 - and the consequence of matching them: a reply that arrives one
+	 * exchange late is no longer consumed by whatever asked next. A GPIO
+	 * read times out, and its answer is refused by the interrupt counter
+	 * instead of being reported as an edge count.
 	 */
 	fake_reset_with_int_pin();
 	spi_chip_select = 1;
@@ -461,62 +490,91 @@ static void test_unimplemented_phases(void)
 	clear_obs();
 	fake.gpio_value = 0x01ab;
 	fake.int_count = 7;
-	fake.silent_start = fake.exchanges + 1;
+	fake.misbehave_cmd = MCP2210_CMD_GET_GPIO_VALUE;
 	fake.hold_count = 1;
 
 	CHECK_MSG(mcp->gc.get(&mcp->gc, 0) < 0,
 		  "a leitura de GPIO sem resposta falha, como deve");
 	count = read_interrupt_count();
-	DEFECT(count == 0x01ab,
-	       "uma resposta atrasada de outro comando vira a contagem de bordas",
-	       "plano secao 2 padrao 1, Fase 3");
-	CHECK_MSG(count == 0x01ab || count == 7,
-		  "a leitura devolveu ou o valor contaminado ou o correto");
+	CHECK_MSG(count != 0x01ab,
+		  "o valor dos pinos NAO virou a contagem de bordas");
+	CHECK_EQ(count, -ETIMEDOUT);
+	CHECK_MSG(mcp->stray_replies >= 1,
+		  "a resposta atrasada foi contada como descartada");
+	/*
+	 * And the shape of the failure is the point. A device one exchange
+	 * behind now produces a run of timeouts - loud, and impossible to
+	 * mistake for data - where before it produced plausible wrong numbers.
+	 */
 	do_release();
 
 	/*
-	 * E3 - a device that over-reports the byte count on every reply makes
-	 * the driver believe the transfer finished early. The driver trusts
-	 * byte 2 of the reply without ever comparing it against what it still
-	 * owes, so it stops clocking, the bridge is left mid-transaction, and
-	 * by E4 below that is unrecoverable. Found by this harness, not by
-	 * reading.
+	 * E3 - a device that over-reports the byte count on every reply. This
+	 * one was found by the harness and not by reading: the driver used to
+	 * trim the count and carry on, which finished the message early and
+	 * returned 0 with a buffer holding bytes that were never received. On
+	 * this path that buffer becomes a sample and a checksum is computed
+	 * over it afterwards, so the corruption would have arrived certified.
+	 * It is now refused.
 	 */
 	fresh();
 	fill_pattern(tx, 120);
 	fake.extra_return_bytes = 20;
 	memset(rx, 0, sizeof(rx));
-	CHECK_MSG(run_one(tx, rx, 120) == 0,
-		  "o driver relata SUCESSO nesta transferencia");
-	DEFECT(memcmp(tx, rx, 120) != 0,
-	       "uma contagem de recepcao inflada corrompe os dados e o status "
-	       "continua 0: um erro de transporte vira um valor plausivel",
-	       "achado desta suite, sem secao no plano");
+	CHECK_EQ(run_one(tx, rx, 120), -EPROTO);
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SPI_CANCEL] >= 1,
+		  "um erro de transporte nao deixa a ponte ocupada");
 	fake.extra_return_bytes = 0;
 
 	/*
-	 * E4 - and the one that costs the most: an abandoned transaction is
-	 * never cancelled, and Figure 3-13 says the settings command is refused
-	 * while a transfer is ongoing. One timeout and the controller never
-	 * works again.
+	 * E4 - the one that cost the most. A transfer is abandoned halfway,
+	 * and Figure 3-13 says the settings command is refused while a
+	 * transaction is ongoing. Before the cancel existed, that single
+	 * timeout made the controller useless for the rest of its life.
 	 */
 	fresh();
 	fill_pattern(tx, 120);
 
-	fake.silent_start = fake.exchanges + 2;	/* let 0x40 through, drop the first 0x42 */
+	fake.misbehave_cmd = MCP2210_CMD_SPI_TRANSFER;	/* lose one data chunk's reply */
 	fake.drop_count = 1;
 	CHECK_EQ(run_one(tx, rx, 120), -ETIMEDOUT);
-	CHECK_MSG(fake.engine_active,
-		  "a ponte ficou no meio de uma transacao, que e a premissa");
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SPI_CANCEL] >= 1,
+		  "o caminho de erro cancelou a transacao");
+	CHECK_MSG(!fake.engine_active,
+		  "e a ponte voltou ao repouso em vez de ficar segurando-a");
 
 	clear_obs();
 	memset(rx, 0, sizeof(rx));
-	DEFECT(run_one(tx, rx, 120) != 0,
-	       "depois de um timeout a proxima transferencia falha para sempre: "
-	       "ninguem envia 0x11",
-	       "plano secao 4.1, Fase 4");
-	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SPI_CANCEL], 0);
-	CHECK_EQ(fake.cmd_count[MCP2210_CMD_GET_CHIP_STATUS], 0);
+	CHECK_EQ(run_one(tx, rx, 120), 0);
+	CHECK_MSG(memcmp(tx, rx, 120) == 0,
+		  "a transferencia seguinte funciona, e com os dados certos");
+
+	/*
+	 * E5 - and the belt to that pair of braces. A bridge found already
+	 * mid-transaction, because a previous session died without cancelling
+	 * or because the cancel itself was lost, is recovered on the spot:
+	 * the settings command comes back refused, the driver cancels and
+	 * tries once more instead of propagating the refusal forever.
+	 */
+	fresh();
+	fake.engine_active = true;
+	fake.xfer_bytes = 120;
+	fake.engine_in = 60;
+	fake.engine_out = 60;
+	fill_pattern(tx, 120);
+	memset(rx, 0, sizeof(rx));
+	CHECK_EQ(run_one(tx, rx, 120), 0);
+	CHECK_MSG(memcmp(tx, rx, 120) == 0, "e os dados estao certos");
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SPI_CANCEL], 1);
+
+	/* E6 - a bus with an external owner is diagnosed, not just refused */
+	fresh();
+	fake.bus_unavailable = true;
+	CHECK_EQ(run_one(tx, rx, 8), -EBUSY);
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_GET_CHIP_STATUS] >= 1,
+		  "o driver perguntou quem e o dono do barramento");
+	CHECK_MSG(shim_log_contains("held by"), "e disse quem era no log");
+	fake.bus_unavailable = false;
 
 	check_no_nvram_or_eeprom();
 	do_release();

@@ -68,6 +68,7 @@ struct fake_mcp2210 {
 	int busy_before_accept;	 /* answer 0xF8 to this many 0x42 */
 	bool bus_unavailable;	 /* answer 0xF7 to 0x42 */
 	unsigned int silent_start;	/* first exchange to misbehave on */
+	u8 misbehave_cmd;	 /* if set, only this command misbehaves */
 	int drop_count;		 /* discard the reply: nothing is delivered */
 	int hold_count;		 /* queue the reply: it arrives one exchange late */
 	bool echo_wrong_command; /* corrupt byte 0 of every reply */

@@ -50,7 +50,11 @@ trabalhados do próprio DS20005176, o driver GPLv2 de terceiros lido como orácu
 
 ## O que a suíte diz hoje
 
-124 verificações, 0 falhas, 5 defeitos confirmados.
+**150 verificações, 0 falhas, 0 defeitos confirmados.**
+
+Os cinco defeitos que esta suíte demonstrou foram corrigidos pelas Fases 3 e 4
+do plano, e as verificações que os documentavam foram promovidas para `CHECK`.
+O mecanismo `DEFECT` fica, porque a próxima fase vai precisar dele.
 
 Um `DEFEITO` não é falha nem passagem: é um comportamento que esta suíte
 **espera estar errado**, porque a correção dele é uma fase do plano que ainda
@@ -58,21 +62,21 @@ não foi executada. Ele não afeta o código de saída. Se um deles passar a se
 comportar corretamente, o runner avisa — é o sinal de que a fase entrou e a
 verificação deve ser promovida para `CHECK`.
 
-Os cinco:
+Os cinco que foram, e onde estão agora:
 
-| Defeito | Onde |
+| Defeito | Corrigido em |
 |---|---|
-| `0xF7` (barramento com dono externo) é repetido 100 vezes como se fosse `0xF8` | plano §4.2 |
-| uma resposta com eco divergente é aceita em vez de descartada | plano §2 padrão 1, Fase 3 |
-| uma resposta atrasada de outro comando vira a contagem de bordas | plano §2 padrão 1, Fase 3 |
-| uma contagem de recepção inflada corrompe os dados e o status continua 0 | achado desta suíte |
-| depois de um timeout a próxima transferência falha para sempre: ninguém envia `0x11` | plano §4.1, Fase 4 |
+| `0xF7` (barramento com dono externo) repetido 100 vezes como se fosse `0xF8` | Fase 3 |
+| uma resposta com eco divergente aceita em vez de descartada | Fase 3 |
+| uma resposta atrasada de outro comando virando a contagem de bordas | Fase 3 |
+| uma contagem de recepção inflada corrompendo os dados com status 0 | Fase 4 |
+| depois de um timeout a próxima transferência falhando para sempre | Fase 4 |
 
 O quarto não estava no plano. Ele saiu de escrever o dispositivo falso: o driver
-confia no byte 2 da resposta sem nunca compará-lo com o que ainda deve, então um
-dispositivo que infla a contagem faz a transferência parar cedo e **devolver
-sucesso** com dados incompletos. Um erro de transporte vira um valor plausível,
-que é a forma de defeito que este repositório mais teme.
+confiava no byte 2 da resposta sem nunca compará-lo com o que ainda devia, então
+um dispositivo que inflasse a contagem fazia a transferência parar cedo e
+**devolver sucesso** com dados incompletos. Um erro de transporte virando um
+valor plausível, que é a forma de defeito que este repositório mais teme.
 
 ## A suíte foi injetada com falhas antes de ser acreditada
 
@@ -84,11 +88,23 @@ Fases 1, 2 e 3.4 foi revertida no driver, uma de cada vez, e a suíte rodada:
 | polaridade do byte de reposição do `0x12` | 3 falhas, todas em B |
 | os bytes 13–16 das *chip settings* | 2 falhas, ambas em A2 |
 | a reivindicação do pino de chip select | 4 falhas, em A3 e A4 |
-| o corte em `received + got > len` | `heap-buffer-overflow`, `WRITE of size 60`, `hid-mcp2210.c:414` |
+| o limite em `received + got > len` | `heap-buffer-overflow`, `WRITE of size 60` |
+| a verificação do eco do comando (Fase 3) | 5 falhas, em E1 e E2 |
+| o cancelamento no caminho de erro (Fase 4) | 9 falhas |
+| a recuperação de uma ponte já ocupada (Fase 4) | 3 falhas, todas em E5 |
+| a recusa de uma contagem impossível (Fase 4) | 4 falhas |
+| o orçamento derivado de `len`/`speed_hz` (Fase 4) | 3 falhas, em D4 |
 
 Cada injeção falha **só** as verificações que lhe dizem respeito, o que prova as
 duas coisas que interessam: que a suíte enxerga o defeito, e que as outras
 verificações não o enxergam por acidente.
+
+**E uma injeção já apodreceu uma vez.** A do E4 mirava por índice de troca
+(`silent_start = exchanges + 2`). Quando a Fase 4 inseriu o *read-back* de taxa
+entre o `0x40` e o primeiro `0x42`, ela passou a derrubar a resposta errada — e
+o teste continuou passando enquanto testava outra coisa. As injeções agora miram
+por **código de comando**. Uma asserção pode parar de ver a falha que procura
+sem que nada fique vermelho, e mirar por posição é como isso acontece.
 
 ## O que isto NÃO diz
 

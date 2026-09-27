@@ -58,12 +58,12 @@ Oito padrões que ele estabelece, e onde estamos em relação a cada um:
 
 | # | Padrão no `hid-mcp2221.c` | Evidência | Nós |
 | :-- | :--- | :--- | :--- |
-| 1 | `raw_event` despacha por `data[0]`, o eco do código de comando | `:760`, um `switch (data[0])` com um `case` por comando | ✗ aceita qualquer relatório |
-| 2 | Traduz o byte de estado em `errno` **por comando**, dentro do `raw_event` | `mcp_get_i2c_eng_state()`, `:716` | ~ traduz fora, e igual para todos |
+| 1 | `raw_event` despacha por `data[0]`, o eco do código de comando | `:760`, um `switch (data[0])` com um `case` por comando | ✓ Fase 3 |
+| 2 | Traduz o byte de estado em `errno` **por comando**, dentro do `raw_event` | `mcp_get_i2c_eng_state()`, `:716` | ✓ Fase 3 |
 | 3 | Comentário de cabeçalho com URL do datasheet | `:7` | ✗ |
 | 4 | VID/PID vindos de `hid-ids.h`, não de `#define` local | `:1233` | ✗ |
-| 5 | Um comando de cancelamento no caminho de erro | `mcp_chk_last_cmd_status_free_bus()`, `:194` | ✗ constante morta |
-| 6 | Uma consulta de estado do motor, usada | `mcp_chk_last_cmd_status()`, `:173` | ✗ constante morta |
+| 5 | Um comando de cancelamento no caminho de erro | `mcp_chk_last_cmd_status_free_bus()`, `:194` | ✓ Fase 4 |
+| 6 | Uma consulta de estado do motor, usada | `mcp_chk_last_cmd_status()`, `:173` | ✓ Fase 4 |
 | 7 | `hid_hw_start(hdev, 0)` sem flags de conexão + `hid_device_io_start()` | `:1148`, `:1173` | ✓ |
 | 8 | Múltiplos subsistemas num só módulo HID (i2c + gpio + iio), cada um sob `IS_REACHABLE` | `:609`, `:1202`, `:1224` | ✓ (spi + gpio) |
 
@@ -219,10 +219,10 @@ e os mesmos 5 defeitos. A Fase 7 já tinha antecipado isso por outro caminho: a
 transferência completa mesmo quando o dispositivo devolve um byte de estado que
 não está em tabela nenhuma.
 
-**Correção.** Feita. E a única aplicação natural do `FINISHED` corrigido —
-detectar um dispositivo que se declara concluído devendo bytes, que é vizinha
-do defeito da contagem inflada — pertence à Fase 4, junto do caminho de
-recuperação que ainda não existe.
+**Correção.** Feita. A aplicação natural do `FINISHED` corrigido — detectar um
+dispositivo que se declara concluído devendo bytes — foi resolvida pela Fase 4
+por outro caminho e mais forte: qualquer contagem de recepção impossível, e não
+só a do estado final, agora é `-EPROTO`.
 
 ### 3.6 Os atrasos e o `cs_change` do `spi_message` são descartados
 
@@ -276,15 +276,15 @@ tomada.
 | `0x21` | Set (VM) Chip Settings | implementado, incompleto | §3.2 |
 | `0x30` `0x31` `0x32` `0x33` | GPIO valor e direção, get/set | implementados | — |
 | `0x12` | Get interrupt event count | implementado, polaridade trocada | §3.1 |
-| `0x11` | Cancel the current SPI transfer | **constante morta** (`:79`) | §4.1 |
-| `0x10` | Get MCP2210 Status | **constante morta** (`:78`) | §4.1 |
-| `0x41` | Get (VM) SPI Transfer Settings | **constante morta** (`:88`) | §4.1 |
+| `0x11` | Cancel the current SPI transfer | implementado, Fase 4 | §4.1 |
+| `0x10` | Get MCP2210 Status | implementado (diagnóstico de `0xF7`), Fase 4 | §4.1 |
+| `0x41` | Get (VM) SPI Transfer Settings | implementado (taxa real, uma vez), Fase 4 | §4.1 |
 | `0x80` | Request SPI Bus Release | ausente | §4.2 |
 | `0x50` `0x51` | Read / Write EEPROM | ausente | §4.3 |
 | `0x60` `0x61` | Set / Get NVRAM (5 sub-comandos cada) | ausente | §4.3 |
 | `0x70` | Send Access Password | ausente | §4.3 |
 
-### 4.1 As três constantes mortas são o caminho de recuperação que não existe
+### 4.1 As três constantes mortas eram o caminho de recuperação — **implementadas**
 
 Este é o segundo defeito que impede o arranque confiável, e é maior que parece.
 
@@ -296,8 +296,11 @@ explicitamente que um `0x40` com transferência em curso devolve a Resposta 2
 (`0xF8`, definições **não escritas**), que o driver propaga como `-EBUSY` sem
 cancelar e sem repetir.
 
-**Um único timeout tranca o controlador para sempre.** A constante para desfazer
-isso já está no arquivo, na linha 79.
+**Um único timeout trancava o controlador para sempre.** A constante para
+desfazer isso já estava no arquivo, na linha 79. Agora `mcp2210_do_transaction()`
+cancela em todo caminho de erro, e uma ponte encontrada já ocupada — sessão
+anterior que morreu sem cancelar, ou um cancelamento perdido — é recuperada na
+hora: o `0x40` recusado é repetido uma vez depois de um cancelamento.
 
 O limite em si também está mal formado: 100 iterações de `usleep_range(100, 200)`
 assume que o custo dominante é a espera, quando cada troca HID custa ~1 ms. O
@@ -314,7 +317,7 @@ O `0x41` é o menos urgente dos três, e ainda assim vale: ler de volta as
 configurações depois de escrevê-las é o que transforma "pedimos 2,048 MHz" em
 "o integrado confirmou 2,048 MHz", e a ponte pode arredondar.
 
-### 4.2 O `0x80` é ausência legítima, mas deve ser declarada
+### 4.2 O `0x80` é ausência legítima — e o `0xF7` foi separado do `0xF8`
 
 *Request SPI Bus Release* só faz sentido num barramento com um segundo host, e
 o bit 0 das "outras configurações" controla se a ponte libera o barramento entre
@@ -322,9 +325,14 @@ transferências. Não implementar é defensável; o que não é defensável é o
 tratamento atual do `0xF7`, que mapeia "barramento pertence a um host externo"
 para `-EBUSY` e **repete**, como se fosse a mesma coisa que "motor ocupado"
 (`0xF8`). São condições diferentes com remédios diferentes: uma se resolve
-esperando, a outra não se resolve nunca sem o `0x80`. Distinguir as duas e
-devolver um `errno` diferente para cada (o 2221 usa `-EAGAIN` para ocupado e
-`-ENXIO` para inalcançável) é o mínimo.
+esperando, a outra não se resolve nunca sem o `0x80`.
+
+**Feito na Fase 3:** `0xF8` é `-EAGAIN` e `0xF7` é `-EBUSY`, o laço de repetição
+só repete o primeiro, e um barramento com dono externo falha de imediato em vez
+de custar cem esperas inúteis. A Fase 4 acrescentou o diagnóstico: depois de um
+`0xF7` o driver pergunta ao `0x10` quem é o dono e põe a resposta no log, porque
+"um host externo tem o barramento" é um fato de integração que o chamador não
+extrai de um `-EBUSY`.
 
 ### 4.3 As omissões deliberadas, e por que continuam deliberadas
 
@@ -522,31 +530,35 @@ Corrigir §3.2 (bytes 13–16 do `0x21`).
 **Injeção:** escrever um valor não-nulo na direção padrão dos GPIOs antes de
 carregar o módulo e confirmar que ele sobrevive.
 
-### Fase 3 — Correlação de resposta, no padrão do 2221
+### Fase 3 — Correlação de resposta, no padrão do 2221 — **fechada**
 
 Reescrever `mcp2210_raw_event()` (`:251`) para despachar por `data[0]` e
 traduzir o byte de estado em `errno` por comando, como `mcp_get_i2c_eng_state()`.
 Descartar um relatório cujo eco não corresponde ao comando pendente, em vez de
 completá-lo. Distinguir `0xF7` de `0xF8` (§4.2). Tratar `0xF9` explicitamente.
 
-**Critério:** uma resposta com eco divergente não completa a espera; o comando
-pendente termina em `-ETIMEDOUT` e o contador de descartes incrementa.
-**Injeção:** esta é a fase que mais precisa dela e a mais difícil de fazer com
-hardware. Ver Fase 7 — é para isto que o banco de testes de host existe.
+**Critério, cumprido:** uma resposta com eco divergente não completa a espera;
+o comando pendente termina em `-ETIMEDOUT` e `stray_replies` incrementa.
+**Injeção, executada:** removendo a verificação do eco, a suíte dá 5 falhas,
+todas em E1 e E2 — a fase que mais precisava de injeção e a mais difícil de
+fazer com hardware, feita sem nenhum.
 
-### Fase 4 — Recuperação
+### Fase 4 — Recuperação — **fechada**
 
 Emitir `0x11` em todo caminho de erro de `mcp2210_do_transaction()`. Usar `0x10`
 no diagnóstico quando um `0xF7` aparecer. Derivar o limite de estagnação de
 `len / speed_hz` em vez de contar iterações (§4.1). Opcionalmente, ler de volta
 com `0x41` (§4.1).
 
-**Critério:** depois de um `-ETIMEDOUT` forçado, a transferência seguinte
-tem sucesso. Hoje, por leitura do código, ela falharia com `-EBUSY` para sempre.
-**Injeção:** reduzir o limite de estagnação para 1, provocar o timeout,
-confirmar que a mensagem seguinte passa. Depois remover o `0x11` e confirmar que
-ela não passa. Esta é a injeção mais valiosa do plano inteiro, porque prova que
-o travamento é real e não uma leitura pessimista do código.
+**Critério, cumprido:** depois de um `-ETIMEDOUT` forçado a transferência
+seguinte tem sucesso, com os dados certos, e a ponte está no repouso em vez de
+segurando a transação.
+**Injeções, executadas** — quatro, cada uma falhando só o que lhe diz respeito:
+neutralizar o cancelamento dá 9 falhas; desligar a recuperação de uma ponte já
+ocupada dá 3 (todas em E5); repor o corte silencioso no lugar do `-EPROTO` dá 4;
+e voltar o limite de estagnação ao 100 fixo dá 3, em D4. **O travamento era
+real**, e não uma leitura pessimista: a suíte o observou antes de a correção
+existir.
 
 ### Fase 5 — O contrato SPI
 
@@ -945,3 +957,50 @@ Uma nota de processo, porque custou trabalho: as correções foram perdidas uma
 vez por um `git checkout --` usado para desfazer uma injeção de falha, num
 arquivo cujas correções ainda não estavam commitadas. Injetar falha em código
 não commitado apaga o código. Commitar antes de injetar.
+
+### 2026-09-27 — Fases 3 e 4, e os cinco defeitos fechados
+
+`3b7d91556580` (Fase 3) e `fdadc13ce0d9` (Fase 4) em `linux-med`. A suíte de
+host passou de **136 verificações / 5 defeitos** para **150 / 0**.
+
+| Defeito | Fase | O que passou a acontecer |
+| :--- | :--- | :--- |
+| eco divergente aceito | 3 | descartado e contado; o comando pendente dá `-ETIMEDOUT` |
+| resposta atrasada vira contagem de bordas | 3 | não cruza mais entre comandos; vira uma sequência de timeouts |
+| `0xF7` repetido como se fosse `0xF8` | 3 | `-EBUSY` imediato contra `-EAGAIN` repetível; zero esperas |
+| contagem de recepção inflada corrompe dados com status 0 | 4 | `-EPROTO`, e a ponte volta ao repouso |
+| travamento permanente após `-ETIMEDOUT` | 4 | cancelamento em todo caminho de erro, e recuperação se mesmo assim ficar ocupada |
+
+**O limite do que a Fase 3 pode prometer, escrito no código e não descoberto
+depois.** O eco carrega um código de comando, não um número de sequência, então
+uma resposta atrasada a um comando que é reemitido ainda casa. O que a
+verificação garante é que uma resposta velha nunca cruza de um *tipo* de
+comando para outro, e que um dispositivo atrasado produz uma corrida de
+timeouts — alto — no lugar de valores plausíveis errados — silencioso.
+
+**As três constantes mortas ganharam um uso cada, todas na direção da falha.**
+O `0x11` cancela em todo caminho de erro. O `0x10` roda depois de um `0xF7` para
+pôr no log quem é o dono do barramento. O `0x41` lê a taxa de volta **uma vez na
+vida do dispositivo** — a ponte divide um relógio fixo, então a taxa que ela
+programa não precisa ser a pedida, e um driver que nunca olha não sabe dizer em
+que relógio uma gravação foi feita.
+
+**O limite de estagnação virou orçamento.** Cem sondagens fixas não têm relação
+com quantos bytes estão sendo movidos: no mínimo do próprio controlador, 1500
+Hz, uma transação de 512 bytes clocka por quase três segundos, e o limite antigo
+teria dado `-ETIMEDOUT` numa transferência que era apenas lenta. A parte fixa
+continua, agora nomeada pelo que sempre foi — a margem de latência USB.
+
+**Um defeito de método, achado pela própria suíte.** A injeção do E4 mirava por
+*índice de troca* (`silent_start = exchanges + 2`). O read-back de taxa da Fase 4
+inseriu uma troca entre o `0x40` e o primeiro `0x42`, e a injeção passou a
+derrubar a resposta errada — **o teste continuou passando enquanto testava outra
+coisa**. As injeções agora miram por código de comando. É a mesma família do
+`acq-active` que passava com um serviço em *crash loop*: uma asserção pode parar
+de ver a falha que procura sem que nada fique vermelho.
+
+**O que continua fora.** Nada disto tocou silício. As Fases 5 (contrato SPI:
+`delay`, `cs_change`, `init_valid_mask` do GP8), 6 (forma mainline) e 8 (bancada)
+seguem abertas, e o §8 de integração de build também — o driver ainda existe em
+duas cópias.
+

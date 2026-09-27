@@ -307,7 +307,15 @@ int hid_hw_output_report(struct hid_device *hdev, u8 *buf, size_t len)
 
 	build_reply(buf, rep);
 
-	misbehave = fake.exchanges >= fake.silent_start;
+	/*
+	 * Aim by command, not by exchange index. An injection that counts
+	 * exchanges silently moves to a different command the moment the
+	 * driver gains one - which is exactly what happened when the bitrate
+	 * read-back was added between the settings write and the first data
+	 * chunk, and the test went on passing while testing nothing.
+	 */
+	misbehave = fake.exchanges >= fake.silent_start &&
+		    (!fake.misbehave_cmd || buf[0] == fake.misbehave_cmd);
 
 	if (misbehave && fake.drop_count > 0) {
 		/* The answer is lost. Nothing is ever delivered for it. */
