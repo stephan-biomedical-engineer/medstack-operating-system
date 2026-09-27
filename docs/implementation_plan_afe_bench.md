@@ -763,11 +763,14 @@ Três razões, e nenhuma é simetria de documento:
    nenhuma** — não há MCP2210 em mainline, e a única implementação de terceiros conhecida foi
    deliberadamente recusada (§2.2 do `implementation_plan_iio_afe.md`). O que a Fase 0 confere aqui,
    confere sozinha.
-3. **A maior parte dos recursos da ponte foi deliberadamente não implementada**, e uma recusa
-   deliberada precisa ser *verificada* como tal. "O driver não escreve NVRAM" é uma alegação até que
-   alguém leia a NVRAM antes e depois de uma sessão inteira e compare. Um driver que escrevesse
-   NVRAM por engano poderia mudar o VID/PID de um aparelho em campo — falha permanente, num
-   componente soldado.
+3. **Boa parte dos recursos da ponte ainda não foi implementada** — e desde 2026-09-27 isso é
+   "ainda não", não "nunca": o `implementation_plan_mcp2210.md` §4.3 passou o objetivo do driver
+   para cobertura funcional completa, faseada. A verificação muda de forma junto, e para melhor.
+   Era "o driver não escreve NVRAM", garantido pela ausência do código; passa a ser **"o caminho
+   de aquisição nunca escreve NVRAM"**, que é uma propriedade do runtime e não da ausência, e que
+   continua sendo uma alegação até que alguém leia a NVRAM antes e depois de uma sessão inteira e
+   compare. O risco não mudou em nada: um driver que escrevesse NVRAM por engano poderia mudar o
+   VID/PID de um aparelho em campo — falha permanente, num componente soldado.
 
 ### 13.1 O que dá para testar **sem hardware nenhum**, e o que isso não prova
 
@@ -831,10 +834,10 @@ explica por que as linhas com "não" importam tanto quanto as com "sim".
 | `SET/GET_GPIO_DIR` (0x32/0x33) | §13.4 | — | sim |
 | `SET/GET_SPI_SETTINGS` (0x40/0x41) | §13.3 | — | sim (só `SET`) |
 | `SPI_TRANSFER` (0x42) | Fase 2 | — | sim |
-| Ler/escrever EEPROM de 256 bytes | ler byte a byte | §13.6 | **não** |
-| Ler/escrever NVRAM (ajustes de *power-up*) | §13.6 | **negativo**: nunca escrita | **não, de propósito** |
-| Acesso protegido por senha / trava permanente | §13.6 | — | **não** |
-| Pedido de liberação do barramento por mestre externo | §13.7 | — | **não** |
+| Ler/escrever EEPROM de 256 bytes | ler byte a byte | §13.6 | **não ainda**, Fases 6B/6C |
+| Ler/escrever NVRAM (ajustes de *power-up*) | §13.6 | **negativo**: a aquisição nunca escreve | **não ainda**, Fase 6A |
+| Acesso protegido por senha / trava permanente | §13.6 | — | **não ainda**, Fase 6A |
+| Pedido de liberação do barramento por mestre externo | §13.7 | — | **não ainda** |
 
 Duas observações que saem da tabela e não do datasheet:
 
@@ -936,13 +939,17 @@ adiada.
 
 ### 13.6 NVRAM, EEPROM e proteção de acesso — os testes **negativos**
 
-Aqui a pergunta não é "funciona?", é "ficou intocado?".
+Aqui a pergunta não é "funciona?", é "ficou intocado?". E note que a pergunta
+sobrevive à mudança de escopo do §4.3 do plano do MCP2210: quando a Fase 6A
+existir, o driver **saberá** escrever a NVRAM, e a partir daí estas
+verificações passam a medir o que sempre importou de verdade — que o caminho
+de aquisição não a escreve — em vez de medir a ausência de uma função.
 
 | Verificação | Procedimento | Critério |
 |---|---|---|
-| **A NVRAM nunca é escrita** | ler os ajustes de *power-up* antes da sessão e depois de todas as fases | **byte a byte idênticos** |
+| **A aquisição nunca escreve NVRAM** | ler os ajustes de *power-up* antes da sessão e depois de todas as fases | **byte a byte idênticos** |
 | VID/PID de *power-up* preservados | idem | o aparelho continua enumerando como o mesmo dispositivo depois de um ciclo de energia |
-| EEPROM de 256 bytes | ler o conteúdo | registrado como está; o driver não a usa |
+| EEPROM de 256 bytes | ler o conteúdo | registrado como está; o caminho de aquisição não a usa |
 | Contador de tentativas de senha | `GET_CHIP_STATUS` antes e depois | não avança — nada aqui tenta autenticar |
 
 O teste da NVRAM é o mais importante da §13 inteira e é barato: duas leituras e um `cmp`. A razão é

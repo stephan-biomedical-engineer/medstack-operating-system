@@ -266,7 +266,7 @@ tomada.
 
 ---
 
-## 4. Os comandos: cobertura, omissões deliberadas e constantes mortas
+## 4. Os comandos: cobertura, o que ainda falta, e constantes mortas
 
 | Código | Comando | Estado | Categoria |
 | :--- | :--- | :--- | :--- |
@@ -279,10 +279,14 @@ tomada.
 | `0x11` | Cancel the current SPI transfer | implementado, Fase 4 | §4.1 |
 | `0x10` | Get MCP2210 Status | implementado (diagnóstico de `0xF7`), Fase 4 | §4.1 |
 | `0x41` | Get (VM) SPI Transfer Settings | implementado (taxa real, uma vez), Fase 4 | §4.1 |
-| `0x80` | Request SPI Bus Release | ausente | §4.2 |
-| `0x50` `0x51` | Read / Write EEPROM | ausente | §4.3 |
-| `0x60` `0x61` | Set / Get NVRAM (5 sub-comandos cada) | ausente | §4.3 |
-| `0x70` | Send Access Password | ausente | §4.3 |
+| `0x80` | Request SPI Bus Release | **pendente** | §4.2 |
+| `0x50` `0x51` | Read / Write EEPROM | **pendente**, Fases 6B e 6C | §4.3 |
+| `0x60` `0x61` | Set / Get NVRAM (5 sub-comandos cada) | **pendente**, Fase 6A | §4.3 |
+| `0x70` | Send Access Password | **pendente**, Fase 6A | §4.3 |
+
+As quatro últimas **eram** escopo declarado e deixaram de ser: o objetivo agora
+é cobertura total, faseada. O §4.3 registra a inversão e o que ela custa aos
+dois argumentos que se apoiavam nela.
 
 ### 4.1 As três constantes mortas eram o caminho de recuperação — **implementadas**
 
@@ -334,27 +338,90 @@ de custar cem esperas inúteis. A Fase 4 acrescentou o diagnóstico: depois de u
 "um host externo tem o barramento" é um fato de integração que o chamador não
 extrai de um `-EBUSY`.
 
-### 4.3 As omissões deliberadas, e por que continuam deliberadas
+### 4.3 O que ainda não foi escrito — e **não** está fora de escopo
 
-NVRAM, EEPROM e senha estão fora de escopo por decisão registrada no cabeçalho
-do arquivo ("no ioctl or configfs ABI, no NVRAM provisioning, no persistent chip
-settings"), e essa decisão tem duas justificativas independentes que continuam
-valendo:
+**Esta seção foi revista em 2026-09-27 e a decisão inverteu.** Ela dizia que
+NVRAM, EEPROM e senha estavam deliberadamente fora de escopo. O objetivo do
+driver agora é **cobertura funcional completa do MCP2210**: toda função
+alcançável pelo protocolo HID — SPI, GPIO, contador de interrupções, chip
+settings voláteis, NVRAM, EEPROM e controle de acesso por senha. A
+implementação é faseada; nenhuma dessas funções é permanentemente excluída.
 
-1. **IEC 62304.** Cada comando é superfície dentro do domínio de confiança do
-   kernel, e o motivo de este driver ter sido escrito em vez de adotado foi
-   precisamente recusar superfície (`implementation_plan_iio_afe.md` §2.2).
-2. **O teste negativo do `afe_bench` §8-B.** "A NVRAM está byte a byte
-   inalterada depois de uma sessão inteira" é um critério de aceitação, e a
-   forma mais barata de garanti-lo é não ter o código que a escreve. Um driver
-   que escrevesse a NVRAM por acidente mudaria o VID/PID de um dispositivo em
-   campo, numa peça soldada, de modo que o próprio driver dele deixaria de dar
-   match.
+"Ainda não implementado" e "fora de escopo" são palavras diferentes, e o
+cabeçalho do driver passou a usá-las como tais.
 
-O que muda com este plano: a omissão passa a ser **declarada no código**, num
-bloco de comentário que lista os códigos não implementados e o motivo. Hoje ela
-é inferível pela ausência, e ausência não é documentação. Um revisor de mainline
-vai perguntar; é melhor a resposta já estar lá.
+**As duas justificativas antigas não morreram — foram reescritas com precisão,
+e uma delas ficou mais forte.**
+
+1. **IEC 62304 e superfície.** O argumento nunca foi contra a *funcionalidade*;
+   foi contra **aquela ABI**. O que se recusou no
+   `daniel-santos/mcp2210-linux` foi um ioctl/configfs, um formato binário que
+   o próprio projeto declara instável, e uma lista de 28 anomalias abertas
+   (`implementation_plan_iio_afe.md` §2.2). Um comando de protocolo não é
+   superfície; uma interface de usuário sem limites é. A consequência prática,
+   registrada no cabeçalho do driver: **um comando sem interface de subsistema
+   decidida fica na camada de transporte** até que ela exista, e nenhuma das
+   funções pendentes pode chegar como um monte de atributos sysfs *ad hoc* ou
+   um `ioctl` por comando.
+
+2. **O teste negativo do `afe_bench` §8-B, reformulado.** Ele era "a NVRAM está
+   byte a byte inalterada", garantido pela forma mais barata possível: não ter
+   o código que a escreve. Essa garantia acaba. A substituta é melhor: **"o
+   caminho de aquisição nunca escreve NVRAM"** — uma propriedade do runtime e
+   não da ausência de código, verificável, e que a suíte de host já checa ao
+   fim de cada grupo (`check_no_nvram_or_eeprom()`). O risco que o teste existe
+   para cobrir não mudou: um driver que escrevesse a NVRAM por acidente
+   mudaria o VID/PID de um aparelho em campo, numa peça soldada, e o próprio
+   driver dele deixaria de dar match.
+
+### 4.4 A arquitetura que a cobertura total exige
+
+Quatro camadas, e a de transporte já existe — é o que as Fases 3 e 4
+construíram. Todos os comandos compartilham a mesma máquina comando/resposta
+(§3.0 do documento de protocolo), então nenhum subsistema precisa de
+infraestrutura própria. Esse é o principal dividendo das Fases 3 e 4.
+
+```text
+hid-mcp2210.c
+    │
+    ├── transporte HID / comando-resposta        [Fases 3 e 4, feito]
+    │
+    ├── configuração
+    │     ├── chip settings em RAM               [feito]
+    │     ├── chip settings em NVRAM             [Fase 6A]
+    │     └── senha / controle de acesso         [Fase 6A]
+    │
+    ├── periféricos
+    │     ├── SPI                                [feito]
+    │     ├── GPIO                               [feito]
+    │     └── contador de interrupções           [feito]
+    │
+    └── EEPROM, 256 bytes                        [6B protocolo, 6C interface]
+```
+
+**A NVRAM não é "mais um read/write", e a API interna tem que dizer isso.** O
+documento distingue quatro coisas (§2.0 e §2.1): os ajustes gravados na NVRAM;
+a cópia deles carregada em RAM no *power-up*; o fato de que a RAM pode ser
+alterada mesmo com a NVRAM protegida; e a escrita na NVRAM condicionada a senha
+ou trava permanente. Então a API interna separa semanticamente:
+
+```text
+get_ram_settings()   /  set_ram_settings()      já existem
+get_nvram_settings() /  set_nvram_settings()    Fase 6A
+send_password()                                 Fase 6A
+```
+
+Sem essa separação, uma futura interface sysfs ou debugfs embaralha
+"configuração em uso" com "configuração persistente" — que são a mesma
+estrutura de bytes e coisas diferentes.
+
+**E a EEPROM não vira uma coleção arbitrária de atributos.** São 256 bytes de
+memória não volátil acessíveis só por comandos USB (§1.7). O protocolo pode ser
+implementado antes da interface; a interface é uma decisão separada, e é por
+isso que a Fase 6C existe como fase própria e não como um detalhe da 6B. O
+mesmo cuidado vale para VID/PID e descritores de string, que a §1.4.1 diz serem
+configuráveis: "cobertura total" tem de significar uma interface Linux
+defensável para cada função, e não um `ioctl` por comando HID.
 
 ---
 
@@ -462,8 +529,10 @@ O precedente do 2221 (i2c + gpio + iio) cobre isso, mas não gratuitamente.
   título é `MICROCHIP MCP2210 HID USB-TO-SPI DRIVER`, que pertence ao bloco
   `MICROCHIP`, muito abaixo. E falta `L: linux-spi@vger.kernel.org`: o driver
   registra um `spi_controller`, e o 2221 lista `linux-i2c` pelo motivo simétrico.
-- **Comentário de escopo** listando os comandos deliberadamente não
-  implementados (§4.3).
+- **Bloco de cobertura pretendida** (§4.3): o que está implementado, o que
+  está pendente, e a regra de que um comando sem interface de subsistema
+  decidida fica na camada de transporte. Não escrever "todos os comandos
+  implementados" antes de existir cobertura de todas as famílias.
 
 ### 5.5 Um item de rebase, não de correção
 
@@ -638,6 +707,46 @@ precisando da Fase 0.
 **Critério:** os casos passam; e cada um falha quando a correção correspondente
 é revertida.
 
+### Fase 6A — NVRAM e controle de acesso
+
+Os comandos `0x60`, `0x61` e `0x70`, sobre a camada de transporte que as Fases
+3 e 4 já construíram, com a separação semântica do §4.4:
+`get_nvram_settings()` / `set_nvram_settings()` distintas das de RAM, e
+`send_password()`.
+
+O que precisa de decisão antes do código: **qual interface Linux**. Ajustes de
+*power-up* de um dispositivo são configuração persistente, e nenhuma das
+respostas óbvias é boa por si — sysfs vira um atributo por campo, debugfs não é
+ABI, e um `ioctl` por comando é exatamente o que se recusou no §4.3. Decidir e
+registrar antes de escrever.
+
+**Critério:** os ajustes de NVRAM podem ser lidos; a escrita existe e é
+exercitada contra o dispositivo falso; o caminho de aquisição continua sem
+tocá-la (`check_no_nvram_or_eeprom()` continua passando em todos os grupos).
+**Injeção:** provocar a escrita a partir do caminho de aquisição e confirmar
+que a suíte a vê — o teste negativo reformulado do §4.3 só vale se já tiver
+visto a falha que procura.
+
+### Fase 6B — EEPROM, o protocolo
+
+Os comandos `0x50` e `0x51`, os 256 bytes, byte a byte. Só o protocolo: ler,
+escrever, e os casos de borda de endereço. Sem interface de usuário.
+
+**Critério:** um ciclo escrita-leitura sobre o dispositivo falso devolve o que
+foi escrito, e um endereço fora de faixa é recusado.
+**Injeção:** a de sempre — reverter cada limite e confirmar que a suíte o vê.
+
+### Fase 6C — EEPROM, a interface Linux
+
+Fase própria, e não um detalhe da 6B, porque é onde está a decisão. Uma memória
+não volátil de 256 bytes tem abstrações prontas no Linux; escolher uma é um
+trabalho de revisão, não de implementação. A regra do §4.3 vale aqui mais que
+em qualquer outro lugar: **não expor a EEPROM como uma coleção arbitrária de
+atributos sysfs.**
+
+**Critério:** a interface está escolhida, justificada por escrito contra as
+alternativas, e implementada.
+
 ### Fase 8 — Bancada
 
 Delegada ao `implementation_plan_afe_bench.md` §8-B, que já está estruturada e
@@ -736,19 +845,29 @@ atualização" — aplicada a um driver.
 ## 10. Ordem, e o que bloqueia o quê
 
 ```
-Fase 0 (constantes + tabelas faltantes)
+Fase 0 (constantes + tabelas faltantes)          FECHADA
    │
-   ├──> Fase 1 (polaridade 0x12, designação do CS)  ──┐
-   ├──> Fase 2 (RMW das chip settings)               ──┤
-   ├──> Fase 3 (correlação de resposta)              ──┼──> Fase 7 (testes de host)
-   ├──> Fase 4 (recuperação: 0x11, 0x10, limite)     ──┤         │
-   └──> Fase 5 (contrato SPI)                        ──┘         │
-                                                                 v
-Fase 6 (forma mainline) ── paralela, não bloqueia nada ──> Fase 8 (bancada, §8-B)
-                                                                 │
-                                                                 v
-                                                          Fase 9 (submissão)
+   ├──> Fase 1 (polaridade 0x12, designação CS)  FECHADA  ──┐
+   ├──> Fase 2 (RMW das chip settings)           FECHADA  ──┤
+   ├──> Fase 3 (correlação de resposta)          FECHADA  ──┼─> Fase 7  FECHADA
+   ├──> Fase 4 (recuperação: 0x11, 0x10, limite) FECHADA  ──┤   (testes de host)
+   └──> Fase 5 (contrato SPI)                    FECHADA  ──┘         │
+                                                                      │
+Fase 6 (forma mainline) ── mecânicos feitos; contador e topologia abertos
+   │
+   ├──> Fase 6A (NVRAM + senha)
+   ├──> Fase 6B (EEPROM, protocolo)
+   └──> Fase 6C (EEPROM, interface Linux)
+                     │
+                     v
+              Fase 8 (bancada, §8-B)  ──>  Fase 9 (submissão)
 ```
+
+**Por que 6A-6C entram antes da submissão.** Submeter um driver que
+deliberadamente não implementa EEPROM, NVRAM e senha contradiz o objetivo
+declarado no §4.3. Submeter um que ainda não as implementou é outra coisa, e é
+defensável — mas então a carta de apresentação tem de dizer isso, e a série
+precisa de um caminho crível até lá. A ordem acima é esse caminho.
 
 Relação com os outros planos:
 
@@ -1091,4 +1210,56 @@ do que ele pediu é exatamente a falha que o atraso existia para evitar.
 dois parágrafos vizinhos dizendo o oposto: "PROTOCOL CONSTANTS ARE UNVERIFIED" e
 "Paid". Fundidos num só. Documentação que se contradiz é pior que documentação
 ausente, porque as duas metades parecem deliberadas.
+
+### 2026-09-27 — O escopo inverteu: cobertura total, faseada
+
+Decisão do orientador, e ela muda a redação de três documentos e a ordem do
+roadmap. O driver deixa de ter EEPROM, NVRAM e senha como **omissões
+deliberadas** e passa a ter **cobertura funcional completa do MCP2210** como
+objetivo, implementada em fases. "Ainda não implementado" e "fora de escopo"
+são palavras diferentes e os documentos passam a usá-las como tais.
+
+Commits: `c60cb08f79d7` (bloco de cobertura, `hid-ids.h`, URL do datasheet) e
+`43d0c2e` (`MAINTAINERS`) em `linux-med` — os quatro mecânicos da Fase 6, com o
+bloco de escopo já reescrito antes de entrar, para que o histórico não registre
+uma decisão que durou um commit.
+
+**A mudança colidia com dois argumentos que este repositório carregava, e os
+dois sobrevivem — um deles mais forte do que era.**
+
+O primeiro é a razão de este driver ter sido escrito em vez de adotado. Ela
+estava redigida de um jeito que se lia como argumento de escopo: o
+`daniel-santos/mcp2210-linux` carrega "an ioctl/configfs ABI [...] none of
+which this path needs". O que foi recusado ali é **aquela ABI**, aquele formato
+binário auto-declarado instável e aquela lista de 28 anomalias — não a
+funcionalidade do integrado. Um comando de protocolo não é superfície; uma
+interface de usuário sem limites é. Reescrito no cabeçalho, com a consequência
+operacional junto: **um comando sem interface de subsistema decidida fica na
+camada de transporte.**
+
+O segundo é o teste negativo mais importante do `afe_bench` §8-B, que se
+apoiava em o driver **não ter** a função de escrever NVRAM. Essa garantia
+acaba, e a substituta é melhor: "o caminho de aquisição nunca escreve NVRAM" é
+uma propriedade do runtime, verificável, e a suíte de host já a checa ao fim de
+cada grupo. Medir a ausência de uma função sempre foi mais fraco do que medir
+que ela não é alcançada.
+
+**O dividendo inesperado das Fases 3 e 4.** Todos os comandos do MCP2210
+compartilham a mesma máquina comando/resposta, então a camada de transporte que
+aquelas duas fases construíram — correlação por eco, tradução de estado em
+`errno`, recuperação — serve NVRAM, EEPROM e senha sem uma linha nova de
+infraestrutura. O §4.4 desenha as quatro camadas.
+
+**O que a cobertura total NÃO pode virar**, e está escrito nos dois lugares:
+um `ioctl` por comando HID, ou a EEPROM como coleção arbitrária de atributos
+sysfs. Por isso a Fase 6C existe separada da 6B — o protocolo pode ser
+implementado antes da interface, mas a interface é uma decisão de revisão e não
+de implementação. O mesmo vale para VID/PID e descritores de string, que a
+§1.4.1 do documento diz serem configuráveis.
+
+**E uma consequência para a Fase 9.** Submeter um driver que *deliberadamente*
+não implementa essas funções contradiz o objetivo agora declarado. Submeter um
+que ainda não as implementou é defensável — mas a carta de apresentação tem de
+dizer isso, e a série precisa de um caminho crível até lá. As Fases 6A, 6B e 6C
+são esse caminho, e entram antes da bancada no roadmap.
 
