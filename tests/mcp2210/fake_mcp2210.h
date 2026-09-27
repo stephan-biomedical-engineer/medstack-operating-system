@@ -84,6 +84,7 @@ struct fake_mcp2210 {
 	bool nvram_touched;
 	bool eeprom_touched;
 	unsigned int set_chip_settings_writes;
+	u8 last_engine_status;
 	u8 last_chip_settings_request[64];
 
 	/* --- internal: the one-deep reply queue that models lag --- */

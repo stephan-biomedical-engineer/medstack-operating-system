@@ -289,6 +289,8 @@ static void test_fragmentation(void)
 		}
 		CHECK_MSG(memcmp(tx, rx, s) == 0,
 			  "o laco de retorno devolveu exatamente o que foi enviado");
+		CHECK_MSG(fake.last_engine_status == 0x10,
+			  "a ultima resposta trouxe o estado 'concluido' da Tabela 3-63");
 	}
 
 	/* C2 - above the declared maximum, and the bridge is never contacted */
@@ -544,8 +546,9 @@ int main(void)
 	       "  - nada sobre deslocamentos, opcodes ou bits de modo. O dispositivo\n"
 	       "    falso foi escrito a partir da mesma transcricao que o driver, entao\n"
 	       "    os dois concordarem prova consistencia, nao correcao.\n"
-	       "  - nada sobre silicio. Nenhum modulo foi carregado, nenhuma amostra\n"
-	       "    foi adquirida, nenhuma constante foi verificada contra o datasheet.\n"
+	       "  - nada sobre silicio. Nenhum modulo foi carregado e nenhuma amostra\n"
+	       "    foi adquirida. As constantes foram conferidas contra uma TRANSCRICAO\n"
+	       "    do datasheet - que nao e o datasheet, e nao e a peca.\n"
 	       "  - nada sobre concorrencia, tempo real ou memoria: o shim nao tem\n"
 	       "    threads, nao dorme e nao falha ao alocar.\n"
 	       "  - nada sobre o contrato do nucleo SPI que a Fase 5 cobre: atrasos,\n"

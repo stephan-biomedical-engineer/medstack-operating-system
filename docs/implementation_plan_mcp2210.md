@@ -191,21 +191,38 @@ uma e escrever o porquê no código.
 Depois da correção, o probe recusa (ou corrige) e diz qual pino; antes, ele
 anuncia "USB-SPI bridge ready" e a primeira transferência devolve `0xFF`.
 
-### 3.5 Os códigos de estado do motor SPI não batem com a tabela
+### 3.5 Os três códigos de estado do motor SPI estão errados — **corrigido**
 
-**Evidência.** Tabela 3-60, byte 3: `0x20` = "SPI transfer started – no data to
-receive".
+**Evidência.** As três tabelas, uma por estrutura de resposta do `0x42`:
 
-**Código.** `:97-99`: `MCP2210_SPI_STARTED_NO_DATA` = `0x10`,
-`MCP2210_SPI_NOT_FINISHED` = `0x20`, `MCP2210_SPI_FINISHED` = `0x30`.
+| Código | Tabela | Significado |
+| :--- | :--- | :--- |
+| `0x20` | 3-60, Resposta 2 | transferência iniciada — sem dados a receber |
+| `0x30` | 3-62, Resposta 4 | transferência **não** concluída; dados disponíveis |
+| `0x10` | 3-63, Resposta 5 | transferência **concluída** — não há mais dados |
 
-**Efeito.** Hoje, quase nenhum: o laço de `mcp2210_do_transaction()` (`:335`) é
-conduzido por contagem de bytes e só usa `0x30` para sair mais cedo, com
-`received >= len` já garantido. É uma constante errada à espera de ser usada —
-e o `MCP2210_SPI_STARTED_NO_DATA` não é usado em lugar nenhum, o que é como ela
-sobreviveu.
+**Código, antes.** `MCP2210_SPI_STARTED_NO_DATA` = `0x10`,
+`MCP2210_SPI_NOT_FINISHED` = `0x20`, `MCP2210_SPI_FINISHED` = `0x30`. Os três,
+numa rotação: `FINISHED` valia o código de "não concluída", e
+`STARTED_NO_DATA` valia o de "concluída".
 
-**Correção.** Depende da Fase 0: ver §3.7.
+**Como isso acontece.** Um campo com três valores, documentado em três tabelas
+distintas, cada uma dentro de uma estrutura de resposta diferente. Não há um
+lugar no documento onde os três apareçam lado a lado, e é exatamente essa a
+forma de um erro de leitura que sobrevive à revisão.
+
+**Efeito: nenhum, e isso foi medido e não deduzido.** O laço de
+`mcp2210_do_transaction()` é conduzido por contagem de bytes; o único lugar que
+lê o estado é uma saída antecipada já protegida por `received >= len`. Com as
+constantes erradas de volta, a suíte de host fica em 130 verificações, 0 falhas
+e os mesmos 5 defeitos. A Fase 7 já tinha antecipado isso por outro caminho: a
+transferência completa mesmo quando o dispositivo devolve um byte de estado que
+não está em tabela nenhuma.
+
+**Correção.** Feita. E a única aplicação natural do `FINISHED` corrigido —
+detectar um dispositivo que se declara concluído devendo bytes, que é vizinha
+do defeito da contagem inflada — pertence à Fase 4, junto do caminho de
+recuperação que ainda não existe.
 
 ### 3.6 Os atrasos e o `cs_change` do `spi_message` são descartados
 
@@ -233,17 +250,19 @@ sabe exprimir menos. (b) Recusar explicitamente o que não se sabe honrar: um
 recusa é um defeito visível; uma fusão silenciosa é um defeito que só aparece
 no sinal.
 
-### 3.7 E uma lacuna no próprio documento
+### 3.7 A lacuna no próprio documento — **fechada**
 
-`docs/Register_Map_MCP2210.md` não contém as Tabelas 3-62 e 3-63, que a Figura
-3-23 referencia como Respostas 4 e 5 do comando `0x42` — precisamente as duas
-que definiriam os códigos `0x10` e `0x30` do motor SPI. Também faltam a Tabela
-3-2 e a 3-22. O documento é uma transcrição parcial, e o §3.5 acima só pode ser
-resolvido contra o datasheet original.
+`docs/Register_Map_MCP2210.md` não continha as Tabelas 3-62 e 3-63, que a
+Figura 3-23 referencia como Respostas 4 e 5 do `0x42` — precisamente as duas
+que definiriam dois dos três códigos do motor SPI. Elas foram acrescentadas em
+2026-09-27, e o §3.5 acima é o resultado imediato disso.
 
-**Ação:** extrair as tabelas faltantes para o documento antes da Fase 0. É
-barato e converte três constantes de "suposição" em "verificado", que é a
-diferença entre as duas categorias que este repositório inteiro usa.
+O que a lacuna custou vale registrar, porque é barato e se repete: durante uma
+análise inteira, três constantes erradas ficaram classificadas como "não
+verificável contra a transcrição" em vez de "erradas". **Uma transcrição
+incompleta não é uma fonte parcial, é uma fonte que produz a categoria errada**
+— e a categoria errada é mais cara que a ausência, porque parece uma decisão
+tomada.
 
 ---
 
@@ -462,17 +481,27 @@ Cada fase tem um critério numérico e uma injeção de falha. Uma fase sem a
 injeção executada não está feita — é uma alegação, no sentido exato que o
 `CLAUDE.md` dá à palavra.
 
-### Fase 0 — Verificar as constantes (bloqueia 1–5)
+### Fase 0 — Verificar as constantes — **quase fechada**
 
-Delegada ao `implementation_plan_afe_bench.md` §8-B Fase 0, com dois acréscimos
-que saíram desta análise:
+Delegada ao `implementation_plan_afe_bench.md` §8-B Fase 0. Ela deixou de
+bloquear as Fases 1 a 5 em 2026-09-27, quando as tabelas faltantes entraram na
+transcrição (§3.7) e a varredura pôde ser feita contra ela.
 
-- Extrair as Tabelas 3-62, 3-63, 3-2 e 3-22 para `Register_Map_MCP2210.md` (§3.7).
-- Verificar o PID `0x00de` (§5.2).
+Feito: os doze opcodes, os valores do byte de estado, os deslocamentos de
+campo, o layout das configurações de transferência, as designações de pino e os
+três estados do motor foram lidos contra as tabelas e cada um cita a tabela de
+onde veio. Quatro estavam errados e foram corrigidos: o byte de reposição do
+`0x12` (§3.1) e os três do motor SPI (§3.5).
 
-**Critério:** zero marcadores `[DS20005176?]` restantes no arquivo.
-**Injeção:** nenhuma aplicável — é uma leitura. Mas cada constante corrigida
-durante a varredura é um registro, e a contagem delas é um resultado.
+**O que falta, e é exatamente um item:** o PID `0x00de`. A documentação de
+protocolo não o contém — ela diz que VID e PID são configuráveis e nunca dá os
+valores de fábrica. Só o datasheet completo ou uma enumeração real resolvem.
+
+**Critério, revisado:** um marcador `[DS20005176?]` restante, no PID, e cada
+outra constante citando a tabela de onde veio. *Zero* marcadores continua sendo
+o critério, mas ele agora depende de uma fonte que a transcrição não é.
+**Injeção:** nenhuma aplicável — é uma leitura. A contagem de constantes
+corrigidas durante a varredura é o resultado, e ela foi quatro.
 
 ### Fase 1 — Os dois defeitos que impedem o arranque
 
@@ -633,7 +662,8 @@ lista; um que mora em `files/` de uma receita é uma conversão manual toda vez.
 
 Um plano fechado é este conjunto verdadeiro ao mesmo tempo:
 
-1. Zero marcadores `[DS20005176?]` no arquivo. *(Fase 0)*
+1. Zero marcadores `[DS20005176?]` no arquivo. *(Fase 0 — hoje resta **um**, no
+   PID, e a transcrição não pode fechá-lo: ver a Fase 0)*
 2. `checkpatch --no-tree --file --strict` em 0/0/0. *(Fase 6; já verdadeiro hoje,
    e o ponto é que continue depois de ~200 linhas de mudança)*
 3. Compilação arm64 `W=1` sem avisos contra o kernel da placa. *(hoje verdadeiro)*
@@ -800,7 +830,9 @@ executadas. Pelo critério do §7 as duas fases estavam escritas, não fechadas.
 
 **Em aberto, e por que cada uma parou onde parou.** A Fase 0 continua bloqueada
 pelo datasheet original: o §3.5 (códigos do motor SPI) não é resolvível contra
-a transcrição, porque as Tabelas 3-62 e 3-63 não estão nela. As Fases 3 e 4 —
+a transcrição, porque as Tabelas 3-62 e 3-63 não estão nela. *(Deixou de valer
+no mesmo dia: as tabelas entraram, o §3.5 foi resolvido e a Fase 0 está quase
+fechada. Ver a terceira entrada abaixo.)* As Fases 3 e 4 —
 correlação de resposta e recuperação, que incluem o travamento permanente após
 um `-ETIMEDOUT` — não foram tocadas e são o maior item restante. A Fase 7
 (testes de host) é o que torna as injeções das Fases 3 e 4 executáveis sem
@@ -810,7 +842,8 @@ hardware, e é a próxima coisa a fazer se a bancada continuar distante.
 
 `tests/mcp2210/`, ~1400 linhas. Roda em segundos por `make test` na raiz, ao
 lado das verificações do MedFramework. **124 verificações, 0 falhas, 5 defeitos
-confirmados.**
+confirmados** — 130 depois das seis asserções que a entrada seguinte
+acrescentou.
 
 **A decisão de arquitetura, e por que não foi KUnit.** O driver é compilado
 byte a byte como embarca — sem macro de teste, sem `#ifdef`, sem costura
@@ -863,7 +896,8 @@ com `cmd_count[0x11] == 0` como causa nomeada.
 Vale registrar uma verificação que virou evidência por acaso: a transferência
 completa corretamente mesmo quando o dispositivo devolve um byte de estado do
 motor que **não está em tabela nenhuma**. Isso prova que o laço é conduzido por
-contagem de bytes e não pelas constantes em disputa do §3.5 — ou seja, aquele
+contagem de bytes e não pelas constantes então em disputa do §3.5 (resolvidas
+na entrada seguinte, e as três estavam erradas) — ou seja, aquele
 defeito é hoje cosmético, e agora isso é medido em vez de raciocinado.
 
 **O que isto NÃO diz**, impresso a cada execução inclusive numa verde: nada
@@ -873,3 +907,41 @@ transcrição que o driver e os dois concordarem prova consistência e não corr
 memória do kernel, porque o shim não tem threads, não dorme e não falha ao
 alocar; e nada sobre o contrato do núcleo SPI da Fase 5, que continua
 descartando `delay` e `cs_change` em silêncio sem que esta suíte cobre.
+
+### 2026-09-27 — As tabelas que faltavam, e o que elas revelaram
+
+`Register_Map_MCP2210.md` recebeu as Tabelas 3-62 e 3-63 (+25 linhas). São as
+Respostas 4 e 5 do `0x42`, e com elas os três valores do byte de estado do
+motor SPI passam a estar documentados. Consequência imediata: **os três
+estavam errados no driver**, numa rotação — `FINISHED` valia o código de "não
+concluída" e `STARTED_NO_DATA` valia o de "concluída". Corrigido em
+`1dd73f4854b4`.
+
+**O efeito é nulo, e isso é medida e não dedução.** Com as constantes erradas
+reinjetadas, a suíte de host fica em 130 verificações, 0 falhas e os mesmos 5
+defeitos. O laço é conduzido por contagem de bytes e o único uso do estado é
+uma saída antecipada já protegida por `received >= len`. A Fase 7 tinha
+antecipado isso por outro caminho — a transferência completa sob um byte de
+estado que não está em tabela nenhuma — e agora há as duas evidências.
+
+**A Fase 0 saiu do bloqueio.** Com a transcrição completa, a varredura foi
+feita: doze opcodes, valores do byte de estado, deslocamentos de campo, layout
+das configurações de transferência, designações de pino e os três estados do
+motor, cada um citando agora a tabela de onde veio. Os marcadores
+`[DS20005176?]` caíram de 8 para 1. O que resta é o PID `0x00de`, e ele resta
+porque a documentação de protocolo **não o contém**: ela diz que VID e PID são
+configuráveis e nunca dá os valores de fábrica. Só o datasheet completo ou uma
+enumeração real fecham esse.
+
+**A lição, e ela é barata de repetir.** Durante uma análise inteira essas três
+constantes ficaram classificadas como "não verificáveis contra a transcrição"
+em vez de "erradas". Uma transcrição incompleta não é uma fonte parcial — é uma
+fonte que produz a **categoria errada**, e a categoria errada custa mais que a
+ausência, porque parece uma decisão tomada em vez de uma pergunta em aberto. O
+campo ajudou a esconder: três valores de um byte, documentados em três tabelas
+diferentes, sem nenhum lugar onde apareçam lado a lado.
+
+Uma nota de processo, porque custou trabalho: as correções foram perdidas uma
+vez por um `git checkout --` usado para desfazer uma injeção de falha, num
+arquivo cujas correções ainda não estavam commitadas. Injetar falha em código
+não commitado apaga o código. Commitar antes de injetar.

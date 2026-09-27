@@ -77,15 +77,19 @@ void fake_reset(void)
 #define ST_UNKNOWN_COMMAND	0xf9
 
 /*
- * The SPI engine status byte. The document defines exactly one value for it,
- * Table 3-60: 0x20 means "transfer started, no data to receive". Tables 3-62
- * and 3-63, which would define the other two, are not in the transcription -
- * so this fake emits the one documented value and, when a test asks, a value
- * that is in no table at all. A transfer loop that still works under the
- * second one is a loop that does not depend on the disputed constants.
+ * The SPI engine status byte. All three values are documented, one per
+ * response structure: Table 3-60 gives 0x20, Table 3-62 gives 0x30 and Table
+ * 3-63 gives 0x10. Spreading three values of one field across three tables is
+ * how the driver came to have all three assigned to the wrong name.
+ *
+ * ENG_UNDOCUMENTED is in no table at all, and a test uses it: a transfer loop
+ * that still completes under a status byte it cannot interpret is a loop that
+ * does not depend on this field, which is what made those wrong names
+ * harmless.
  */
-#define ENG_STARTED_NO_DATA	0x20
-#define ENG_DATA_READY		0x30
+#define ENG_FINISHED		0x10	/* finished, no more data to send */
+#define ENG_STARTED_NO_DATA	0x20	/* started, no data to receive */
+#define ENG_NOT_FINISHED	0x30	/* not finished, data available */
 #define ENG_UNDOCUMENTED	0x77
 
 static void engine_reset(void)
@@ -251,10 +255,13 @@ static void build_reply(const u8 *req, u8 *rep)
 
 		if (fake.weird_engine_status)
 			rep[3] = ENG_UNDOCUMENTED;
+		else if (fake.engine_out >= fake.xfer_bytes)
+			rep[3] = ENG_FINISHED;
 		else if (!give)
 			rep[3] = ENG_STARTED_NO_DATA;
 		else
-			rep[3] = ENG_DATA_READY;
+			rep[3] = ENG_NOT_FINISHED;
+		fake.last_engine_status = rep[3];
 
 		if (fake.engine_out >= fake.xfer_bytes)
 			engine_reset();
