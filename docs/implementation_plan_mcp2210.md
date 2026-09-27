@@ -786,13 +786,17 @@ comparação foi feita contra uma árvore limpa com `git stash`, que não guardo
 nada, e portanto comparou o binário consigo mesmo — o número acima é o da
 segunda tentativa, contra o commit base.
 
-**O que isto NÃO significa.** Nenhuma das três correções foi executada. O módulo
-continua nunca tendo sido carregado, nenhuma transferência foi feita, e as
-injeções de falha das Fases 1 e 2 — duas leituras consecutivas de
+**O que isto NÃO significava, no dia.** Nenhuma das três correções tinha sido
+executada. O módulo nunca tinha sido carregado, nenhuma transferência tinha sido
+feita, e as injeções de falha das Fases 1 e 2 — duas leituras consecutivas de
 `interrupt_count` em repouso; os bytes 13–16 de um `0x20` antes e depois do
-probe; um `spi_chip_select` apontado para um pino GPIO — **não foram
-executadas**. Pelo critério do §7 as duas fases estão escritas, não fechadas.
-Uma correção que compila é uma correção que compila.
+probe; um `spi_chip_select` apontado para um pino GPIO — não tinham sido
+executadas. Pelo critério do §7 as duas fases estavam escritas, não fechadas.
+
+> **Atualizado no mesmo dia pela Fase 7**: as três injeções foram executadas, no
+> host, e passam. Ver a entrada seguinte. O que continua verdadeiro é a segunda
+> metade: nenhum módulo foi carregado em silício e nenhuma constante foi
+> verificada contra o datasheet.
 
 **Em aberto, e por que cada uma parou onde parou.** A Fase 0 continua bloqueada
 pelo datasheet original: o §3.5 (códigos do motor SPI) não é resolvível contra
@@ -801,3 +805,71 @@ correlação de resposta e recuperação, que incluem o travamento permanente ap
 um `-ETIMEDOUT` — não foram tocadas e são o maior item restante. A Fase 7
 (testes de host) é o que torna as injeções das Fases 3 e 4 executáveis sem
 hardware, e é a próxima coisa a fazer se a bancada continuar distante.
+
+### 2026-09-27 — Fase 7, os testes de host
+
+`tests/mcp2210/`, ~1400 linhas. Roda em segundos por `make test` na raiz, ao
+lado das verificações do MedFramework. **124 verificações, 0 falhas, 5 defeitos
+confirmados.**
+
+**A decisão de arquitetura, e por que não foi KUnit.** O driver é compilado
+byte a byte como embarca — sem macro de teste, sem `#ifdef`, sem costura
+própria. Os `#include <linux/...>` resolvem para stubs que apontam para um shim
+de kernel, e a substituição acontece um nível **abaixo** do driver, em
+`hid_hw_output_report()`: o dispositivo falso recebe o relatório de 64 bytes que
+sai, monta a resposta e a entrega chamando o `.raw_event` do próprio driver, que
+é o caminho que o núcleo HID usa. Consequência — `mcp2210_command()`, a
+decodificação do byte de estado e `mcp2210_raw_event()` ficam **sob teste** em
+vez de substituídos, que é exatamente onde moram os defeitos da Fase 3. KUnit
+foi recusado porque a costura de que a suíte precisa teria de virar um ponteiro
+de função ou um `#ifdef` dentro de um arquivo destinado à `linux-input`, e
+andaime de teste num patch de mainline é o que um revisor pede para remover.
+Isto custa menos ao driver do que o §13.1 do `afe_bench` previa: aquele plano
+declarava a refatoração como custo inevitável, e ela não foi necessária.
+
+**O que fechou.** As três injeções que as Fases 1 e 2 deviam e a do corte de
+recepção, cada uma revertida no driver isoladamente:
+
+| Injeção | O que a suíte fez |
+| :--- | :--- |
+| polaridade do byte de reposição do `0x12` | 3 falhas, todas no grupo B |
+| os bytes 13–16 das *chip settings* | 2 falhas, ambas em A2 |
+| a reivindicação do pino de chip select | 4 falhas, em A3 e A4 |
+| o corte em `received + got > len` | `heap-buffer-overflow`, `WRITE of size 60`, `hid-mcp2210.c:414` |
+
+Cada uma falha **só** as verificações que lhe dizem respeito — o que prova as
+duas coisas que importam: que a suíte enxerga o defeito, e que as outras
+verificações não o enxergam por acidente. **As Fases 1 e 2 estão fechadas pelo
+critério do §7.** O AddressSanitizer está ligado por padrão e é o que transforma
+a quarta injeção de um `free(): invalid pointer` do glibc, em ponto posterior e
+não relacionado, numa linha de arquivo.
+
+**O que a suíte achou e o plano não tinha.** Um quinto defeito, que saiu de
+escrever o dispositivo falso e não de ler o driver: **o driver confia no byte 2
+da resposta sem nunca compará-lo com o que ainda deve**, então um dispositivo
+que infla a contagem de recepção faz a transferência parar cedo e **devolver
+`0`** com dados incompletos. Um erro de transporte vira um valor plausível, que
+é a forma de defeito contra a qual todo o resto deste repositório é construído.
+Não tem seção no plano; a correção natural é junto da Fase 4.
+
+Os outros quatro defeitos confirmados são os que já estavam previstos: `0xF7`
+repetido como se fosse `0xF8` (§4.2), o eco divergente aceito (Fase 3), a
+resposta atrasada virando a contagem de bordas (Fase 3) e o travamento
+permanente após um `-ETIMEDOUT` (§4.1, Fase 4). **O travamento deixou de ser uma
+leitura e passou a ser uma observação**: a suíte força o timeout, verifica que a
+ponte ficou no meio de uma transação, e mostra a transferência seguinte falhando
+com `cmd_count[0x11] == 0` como causa nomeada.
+
+Vale registrar uma verificação que virou evidência por acaso: a transferência
+completa corretamente mesmo quando o dispositivo devolve um byte de estado do
+motor que **não está em tabela nenhuma**. Isso prova que o laço é conduzido por
+contagem de bytes e não pelas constantes em disputa do §3.5 — ou seja, aquele
+defeito é hoje cosmético, e agora isso é medido em vez de raciocinado.
+
+**O que isto NÃO diz**, impresso a cada execução inclusive numa verde: nada
+sobre deslocamentos e opcodes, porque o dispositivo falso saiu da mesma
+transcrição que o driver e os dois concordarem prova consistência e não correção
+(`afe_bench` §13.1); nada sobre silício; nada sobre concorrência, tempo real ou
+memória do kernel, porque o shim não tem threads, não dorme e não falha ao
+alocar; e nada sobre o contrato do núcleo SPI da Fase 5, que continua
+descartando `delay` e `cs_change` em silêncio sem que esta suíte cobre.

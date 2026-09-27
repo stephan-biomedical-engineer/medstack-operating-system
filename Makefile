@@ -284,16 +284,27 @@ runqemu: $(TOOL)
 check: $(TOOL)
 	python3 scripts/med-check.py eeg
 
-# The host-side functional tests of the MedFramework. No kas, no container, no
-# image: they compile the library's own sources for the host and run in
-# seconds, which is what makes them the inner loop `check` cannot be.
+# The host-side functional tests. No kas, no container, no image: they compile
+# the sources under test for the host and run in seconds, which is what makes
+# them the inner loop `check` cannot be.
 #
-# The two suites are complementary and neither substitutes for the other.
-# `test` sees a wrong LSB, a path that escapes its namespace and an option
-# silently dropped; `check` sees a service that is active while losing 62% of
-# its samples. Nothing a host test can do would have caught that one.
+# Two suites, and the second one is not more of the first. `tests/framework`
+# compiles the MedFramework, which is our C++ and runs in userspace.
+# `tests/mcp2210` compiles a KERNEL driver for the host, against a shim that
+# supplies the kernel APIs it calls and a fake MCP2210 that answers 64-byte
+# reports - so the bridge's transfer state machine, its stall bound and its
+# reply handling are exercised with no board, no USB and no cross toolchain.
+# It is the only thing in this repository that can see a defect in kernel code
+# before the hardware exists.
+#
+# All three suites are complementary and none substitutes for another. `test`
+# sees a wrong LSB, a path that escapes its namespace, an option silently
+# dropped and a driver that trusts a byte count it should not; `check` sees a
+# service that is active while losing 62% of its samples. Nothing a host test
+# can do would have caught that one.
 test:
 	@$(MAKE) --no-print-directory -C tests/framework check
+	@$(MAKE) --no-print-directory -C tests/mcp2210 check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform
