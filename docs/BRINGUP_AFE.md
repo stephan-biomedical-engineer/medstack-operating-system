@@ -24,8 +24,11 @@
 | Hardware do front-end | **não chegou.** Nada nas §2 a §10 pôde ser executado |
 | Mapa de registradores | **transcrito** do SBAS499 (`Register_Map_ADS1299.md`) |
 | Passada de datasheet (Fase 0) | **parcial**: 9 marcas viraram citação de tabela, 1 continua aberta |
-| Defeitos achados por ela | **quatro**, mais uma ambiguidade e três lacunas (§11) |
-| Drivers na árvore do kernel | **migrados**, compilando para arm64 (§12) |
+| Defeitos achados por ela | **quatro** (D1 a D4), mais uma ambiguidade e três lacunas (§11) |
+| Driver do AFE na árvore do kernel | **migrado**, in-tree, compilando para arm64 pelo caminho do Yocto (§12.6) |
+| Driver da ponte MCP2210 | **não migrado**; a receita out-of-tree continua na camada adjunta |
+| Defeitos achados ao migrar | **quatro** (D5 a D8), dois deles invisíveis a qualquer build |
+| Imagem `spi` ou `usb` construída | **nenhuma**. A ligação que usa o driver está resolvida e não compilada |
 | Amostra real adquirida | **nenhuma**, por nenhuma das quatro ligações |
 
 Nenhuma constante deste front-end foi conferida contra **silício**. Conferido contra o datasheet e
@@ -189,6 +192,75 @@ tolerância, então nenhum dos dois jamais pegaria o outro.
 duas leituras e a consequência escritas no fonte. Um palpite que faz um autoteste passar é pior que
 um que o faz falhar.
 
+### D5 — `CONFIG_TI_ADS1299` no fragmento do distro
+
+**O que era.** Ao migrar o driver para a árvore do kernel, o símbolo foi declarado em
+`meta-med-distro/.../med-kernel-features.cfg`, que é aplicado a **todo** kernel que o distro constrói.
+
+**O que teria causado.** Nada no STM32 e um silêncio no QEMU: o `linux-yocto` do poky não tem a
+entrada `TI_ADS1299` no seu `Kconfig`, então o `merge_config.sh` descarta o pedido sem dizer nada. A
+imagem sairia sem o driver e sem erro em lugar nenhum.
+
+**O que o pegou.** A guarda `do_med_check_kernel_config`, na **primeira execução real**, falhando o
+build com `asked for and not present: CONFIG_TI_ADS1299`. Ela nasceu paga.
+
+**A fronteira que isso revelou**, e é o valor real do defeito: aquele fragmento declara
+**capacidades** que qualquer kernel tem — cgroups, verity, IIO, SPI. O símbolo de um driver nosso é
+**conteúdo** de uma árvore específica, e mora onde a árvore é conhecida.
+
+### D6 — o driver do conversor na imagem de produto, puxado por um metapacote
+
+**O que era.** Com o driver in-tree e `CONFIG_TI_ADS1299=m`, ele passou a ser um módulo do kernel
+como qualquer outro. A imagem instala o metapacote `kernel-modules`, e o `kernel.bbclass` faz esse
+metapacote **depender de todos os ~1040 módulos** que o kernel constrói.
+
+**O que teria causado — e causou, num `.wic` que existiu.** O driver do conversor foi instalado no
+perfil `amp`, cujo argumento inteiro é que o conversor vive no coprocessador e o lado Linux **não
+carrega código de conversor**. É a propriedade que sustenta o argumento de particionamento da
+IEC 62304 §5.3, e ela morreu sem que nada reclamasse: build verde, 5596 tarefas, zero erros.
+
+**O que o pegou.** Ler o manifesto da imagem em vez de acreditar no código de saída. Literalmente a
+regra da casa — *"compila e boota não é evidência"* — aplicada a quem a escreveu.
+
+**Conserto**, e ele é a montante do empacotamento: a camada adjunta passou a declarar
+`MED_AFE_KCONFIG` por ligação, ao lado do `MED_AFE_INSTALL` que já tinha. Uma ligação que não usa o
+driver não habilita o símbolo, então **não existe módulo para o metapacote puxar**. Remover depois
+seria tratar o sintoma; o `BAD_RECOMMENDATIONS` não alcança um `RDEPENDS`.
+
+**A generalização, que é o que importa**: a migração para in-tree custou, em silêncio, duas
+propriedades que o módulo *out-of-tree* dava de graça — compilar contra qualquer kernel (D5) e não ser
+arrastado por um metapacote (D6). Nenhuma das duas estava escrita em lugar nenhum como propriedade, e
+por isso nenhuma delas falhou ao desaparecer.
+
+### D7 — um filtro de `SRC_URI` escrito como deny-list
+
+**O que era.** O bbappend que aponta o kernel para o fork descartava as entradas `http://`, `https://`
+e `ftp://` do `SRC_URI` da ST e mantinha o resto. A entrada da ST para a variante `devupstream` é
+`git://github.com/STMicroelectronics/linux.git;protocol=https` — que **começa com `git://`** e
+passava.
+
+**O que causou.** Dois SCMs no `SRC_URI` e falha de parse, na variante `class-devupstream`, que o
+`BBCLASSEXTEND` faz o bitbake parsear independentemente de a gente selecioná-la.
+
+**O que o pegou.** Um `bitbake -e` com as variáveis do fork **setadas**. E aqui está a parte
+transferível: o `make parse` tinha passado verde minutos antes, porque sem as variáveis a função
+retorna na primeira linha — **o parse verde testou o ramo vazio**. Virou allow-list: só `file://`, e
+desses não os `.patch`.
+
+### D8 — prosa que começa com `# CONFIG_` num fragmento `.cfg`
+
+**O que era.** Duas linhas de comentário no `med-kernel-features.cfg` começavam com `# CONFIG_DM_VERITY`
+e `# CONFIG_TI_ADS1299`.
+
+**O que causou.** O `do_kernel_configcheck` do próprio `linux-yocto` as reportou como
+*"badly formatted configuration options"*. Num fragmento `.cfg`, `# CONFIG_X is not set` é **sintaxe**,
+não comentário — então prosa que comece assim é lida como opção malformada.
+
+**O que o pegou.** O aviso do fornecedor, num build que passou. Note que a nossa guarda **não** tinha
+esse falso positivo, porque a regex dela exige o sufixo `is not set` exato; o avaliador da ST é mais
+frouxo e, neste caso, estava certo em reclamar. A regra ficou escrita no próprio fragmento: nomeie um
+símbolo no meio da frase, nunca no começo de uma linha de comentário.
+
 ### L1 a L3 — lacunas, não defeitos
 
 - **L1, `BIAS_STAT` (CONFIG3 bit 0) não é reportado.** É o *lead-off* do eletrodo de BIAS: 0
@@ -337,6 +409,52 @@ custou **zero linhas de API**, medido. O que se sabe que precisará de retrabalh
 
 ---
 
+### 12.6 O Yocto consumindo a árvore do kernel · **2026-09-27**
+
+O passo 5 do arranjo: as receitas de módulo saem, o kernel passa a vir do fork, e a configuração
+volta a ser conferida.
+
+| Peça | Onde |
+|---|---|
+| Receita do módulo removida | `meta-med-afe-ads1299/recipes-kernel/ads1299/` — receita, `Makefile` e as 1549 linhas do driver |
+| Ponteiro do fork | `MED_KERNEL_GIT` / `MED_KERNEL_SRCREV`, parâmetros de build com default nulo, no `kas-base.yml` |
+| Quem consome | `meta-med-bsp/dynamic-layers/stm-st-stm32mp/recipes-kernel/linux/linux-stm32mp_%.bbappend` |
+| Símbolo do driver | `med-stm32mp-drivers.cfg`, no BSP, aplicado sob **duas** condições (§11 D5, D6) |
+| Qual ligação precisa dele | `MED_AFE_KCONFIG_<link>` na camada adjunta, ao lado do `MED_AFE_INSTALL_<link>` |
+| A guarda | `do_med_check_kernel_config` no `linux-%.bbappend` do distro, sobre `MED_KERNEL_REQUIRED_CFG` |
+
+#### O que foi medido
+
+| Build | Resultado |
+|---|---|
+| `make qemu` | 5653 tarefas, todas bem-sucedidas; guarda executou e **passou** no `linux-yocto`; nenhum `ti-ads1299.ko` produzido, que é o correto — aquele kernel não tem o driver |
+| `make stm32` com o fork | 5596 tarefas, todas bem-sucedidas; `PV = 6.6.129-stm32mp-r3.1+medda723f985714`, `S` terminando em `/git`, `SRCREV` fixo; `CONFIG_TI_ADS1299=m` no `.config` final e `kernel-module-ti-ads1299` empacotado |
+| `amp`, depois do conserto do D6 | **0** linhas com `ads1299` no manifesto da imagem, e **0** ocorrências de `CONFIG_TI_ADS1299` no `.config` |
+| `spi`, por `bitbake -e` | `MED_AFE_KCONFIG=CONFIG_TI_ADS1299` e os **dois** fragmentos em `MED_KERNEL_REQUIRED_CFG` |
+
+Uma confirmação que não estava planejada: o kernel se identifica pelo commit sozinho. O arquivo de
+configuração entregue chama-se `config-6.6.129-gda723f985714`, porque o `setlocalversion` do kernel lê
+o git da árvore. Nenhum artefato desse build pode ser confundido com o release da ST.
+
+#### E o `S:class-devupstream` deixou de ser pendência
+
+A leitura era que a variante `devupstream` da ST ajusta `SRC_URI`, `SRCREV` e `PV` e nunca o `S`.
+Sobrescrever a receita **normal** em vez de selecionar aquela variante torna a questão **irrelevante
+em vez de respondida**: `S` é definido explicitamente pelo nosso bbappend, e o `do_configure` real da
+ST o usou. Uma pendência que deixa de importar é melhor que uma resolvida.
+
+#### O que continua não medido
+
+- **Nenhuma imagem `spi` ou `usb` foi construída.** A ligação que de fato usa o driver está resolvida
+  corretamente e não compilada. E na `spi` o `do_derive_device_options` recusa duas prescrições
+  (`afe.bias_drive = true`, `lead_off_detection = false`), o que nunca foi exercitado.
+- **A guarda nunca falhou no perfil do STM32.** É a terceira linha do modelo que ela implementa —
+  fork esperado, símbolo ausente — e é observável de propósito, quebrando o `Kconfig` do fork uma vez.
+- **O `mcp2210-spi.c` não migrou.** A receita dele continua na camada adjunta, e com ela o
+  `static char *spi_device = "ads1299"`, que é a dependência real entre os dois drivers.
+
+---
+
 ## 13. As regras que este trabalho acrescenta
 
 1. **Um defeito de posição de campo que preserva o valor de reset é invisível a toda verificação de
@@ -356,3 +474,18 @@ custou **zero linhas de API**, medido. O que se sabe que precisará de retrabalh
    passar. (§12.2)
 7. **Antes de aceitar "nenhuma diferença", conferir que algo foi comparado.** Uma comparação vazia
    devolve o mesmo resultado que uma comparação bem-sucedida. (§12.2)
+8. **Um recurso parametrizado precisa ser exercitado com o parâmetro ligado.** Um build verde com a
+   variável vazia testou o ramo que retorna na primeira linha, e não diz nada sobre o código. (D7)
+9. **Trocar um mecanismo por outro custa propriedades que ninguém escreveu.** Sair de módulo
+   *out-of-tree* para driver in-tree perdeu duas — compilar contra qualquer kernel, e não ser
+   arrastado por um metapacote — e nenhuma falhou ao desaparecer, porque nenhuma estava declarada.
+   Ao substituir um mecanismo, listar o que o antigo garantia **de graça**. (D5, D6)
+10. **Um metapacote pode desfazer uma política de instalação por perfil.** `kernel-modules` depende de
+    todos os módulos que o kernel constrói, então a decisão de "o que entra na imagem" sobe para "o
+    que o kernel compila". (D6)
+11. **Num fragmento `.cfg`, `# CONFIG_X is not set` é sintaxe.** Nomear um símbolo no começo de uma
+    linha de comentário faz a ferramenta lê-la como opção malformada. (D8)
+12. **Um erro de configuração de kernel é de duas espécies, e confundi-las custa uma investigação.**
+    Um símbolo sem prompt no `Kconfig` não pode ser ligado por fragmento nenhum; um símbolo que **não
+    existe** naquela árvore é descartado em silêncio. A primeira é um mecanismo errado, a segunda é
+    conteúdo no lugar errado. (D5)
