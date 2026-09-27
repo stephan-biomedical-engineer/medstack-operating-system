@@ -914,6 +914,121 @@ silenciosamente o arquivo de projeto.
 
 ---
 
+### Resultado — a árvore do kernel como fonte de verdade (2026-09-27)
+
+Os drivers do front-end saíram das receitas *out-of-tree* e passaram a viver numa árvore Linux que é
+a única fonte do código deles; este repositório integra e configura. O registro de engenharia é o
+`BRINGUP_AFE.md` §12; aqui ficam os números.
+
+#### A equivalência, provada antes de migrar
+
+Trocar a aquisição do kernel só é seguro se a árvore Git for demonstravelmente a mesma que o build já
+usava. `scripts/med-kernel-fingerprint.sh` compara **conteúdo** e nunca metadados — modo, mtime e
+diretórios vazios divergem legitimamente entre tarball desempacotado e checkout git, e nenhum deles
+muda o kernel compilado.
+
+```sh
+scripts/med-kernel-fingerprint.sh build/tmp-glibc/work-shared/stm32mp25-disco/kernel-source
+scripts/med-kernel-fingerprint.sh linux-med      # checkout em v6.6-stm32mp-r3.1
+```
+
+| | |
+|---|---|
+| Base | 6.6.129 + patch `r3.1` da ST (4,9 MB, 162.253 linhas, **749 arquivos**) |
+| sha256 do tarball | confere com o `SRC_URI[kernel.sha256sum]` da receita |
+| Ponto Git | `v6.6-stm32mp-r3.1` → `548f960c059bc4b9165cb69895fd67551f6061ca`, conferido por `git tag --points-at` |
+| Arquivos, cada lado | 81889 |
+| Comuns **efetivamente comparados** | 81889 |
+| Com hash divergente | **0** |
+| Digest das duas árvores | `35e19311ab288cf56345ea6396d47d0cc071dab2dfe7ed028c575f2202b3bf50` |
+
+**O que isso não significa**: não é uma afirmação sobre o driver nem sobre a placa. É só a prova de
+que adotar a árvore Git não muda uma linha do kernel que a placa já executou.
+
+#### Os dois builds
+
+| Build | Resultado |
+|---|---|
+| `make qemu` | 5653 tarefas, todas bem-sucedidas. Nenhum `ti-ads1299.ko` produzido, que é o correto: o `linux-yocto` não tem o driver |
+| `make stm32` com `MED_KERNEL_GIT`/`MED_KERNEL_SRCREV` | 5596 tarefas, todas bem-sucedidas. `PV = 6.6.129-stm32mp-r3.1+medda723f985714`, `S` terminando em `/git`, `SRCREV` fixo; `CONFIG_TI_ADS1299=m` no `.config` final e `kernel-module-ti-ads1299` empacotado |
+
+O kernel se identifica pelo commit sem ninguém pedir: o arquivo de configuração entregue chama-se
+`config-6.6.129-gda723f985714`, porque o `setlocalversion` lê o git da árvore. Nenhum artefato desse
+build pode ser confundido com o release da ST.
+
+#### O particionamento de software, medido no manifesto e não no argumento
+
+Esta é a medida que importa para a §4, e ela **reprovou antes de passar**.
+
+```sh
+grep -E 'ads1299|^kernel-modules ' \
+  build/tmp-glibc/deploy/images/stm32mp25-disco/med-image-eeg-stm32mp25-disco.rootfs.manifest
+grep -c '^CONFIG_TI_ADS1299' \
+  build/tmp-glibc/deploy/images/stm32mp25-disco/kernel/config-6.6.129-g*
+```
+
+| | antes | depois |
+|---|---|---|
+| Linhas com `ads1299` no manifesto (perfil `amp`) | **1** — `kernel-module-ti-ads1299` | **0** |
+| `CONFIG_TI_ADS1299` no `.config` | `=m` | **ausente** |
+| Tarefas do build | 5596, todas bem-sucedidas | 5596, todas bem-sucedidas |
+
+A linha de baixo é o ponto: **os dois builds foram verdes.** O driver do conversor estava na imagem
+de produto — cujo argumento inteiro é que o conversor vive no coprocessador e o lado Linux não carrega
+código de conversor — e nada reclamou. A causa é o metapacote `kernel-modules`, de que a imagem
+depende e que o `kernel.bbclass` faz depender dos ~1040 módulos que o kernel constrói. Ler o
+manifesto é o que achou; o código de saída não diria nunca.
+
+**O que isso significa para a §4**: a afirmação de particionamento do perfil de produto passa a ter
+uma medida de manifesto por trás, e não só o desenho das camadas. **O que não significa**: nada sobre
+execução — nenhum módulo foi carregado, nenhuma amostra adquirida.
+
+#### A guarda de configuração de kernel
+
+Substitui uma verificação que a migração destruiu: um módulo *out-of-tree* falha ao compilar contra
+um kernel que não tem o que ele precisa, e esse acidente acabou. `do_med_check_kernel_config` lê o
+`.config` **final** e o compara com os fragmentos que o MedOS declara como requisito seu.
+
+| Execução | Resultado |
+|---|---|
+| Lógica, contra o `.config` da placa já construído | 63 símbolos pedidos, **63 satisfeitos** |
+| Primeira execução real (`make qemu`, símbolo no fragmento errado) | **reprovou**, nomeando `CONFIG_TI_ADS1299` |
+| `make qemu` depois da correção | passou, nos dois kernels |
+| `make stm32` com o fork, ligação `amp` | passou; o fragmento do driver não é aplicado nesse perfil |
+| **Injeção de falha** no perfil STM32, ligação `spi` | **reprovou** |
+
+A linha do meio é o primeiro resultado: a guarda **viu a falha que procura na primeira vez que
+rodou**, o que pela regra da §10 é a diferença entre verificação e afirmação. E o que ela encontrou
+não era o esperado — era a fronteira entre capacidade de distro e conteúdo de uma árvore de kernel
+específica (`BRINGUP_AFE.md` §11 D5).
+
+A última linha é a injeção de falha deliberada, e ela fecha o modelo. Um commit temporário no fork
+removeu a entrada `config TI_ADS1299` do `drivers/iio/adc/Kconfig`, e o build do kernel com
+`MED_EEG_LINK = "spi"` deu:
+
+```
+do_med_check_kernel_config: Failed
+  CONFIG_TI_ADS1299: asked for by med-stm32mp-drivers.cfg, not in the final .config
+Tasks Summary: Attempted 1277 tasks of which 1266 didn't need to be rerun and 1 failed.
+```
+
+Ela prova **duas** coisas de uma vez, e isso era o desenho do teste: o fragmento do BSP *é* aplicado
+na ligação que usa o driver — senão aquele símbolo não estaria sendo conferido — e a ausência dele *é*
+detectada no perfil do alvo físico. A mensagem nomeia o fragmento que pediu, que é o que separa "falta
+um símbolo" de "qual arquivo deste repositório mentiu". O commit temporário foi descartado depois
+(`git reset --hard`), e a branch voltou a `da723f985714`.
+
+O modelo que isso congela, as três linhas medidas:
+
+| Perfil | Fragmento do driver | Guarda | Build |
+|---|---|---|---|
+| QEMU / `linux-yocto` | não aplicado | não exige o símbolo | passa |
+| STM32 / fork, `amp` | não aplicado | não exige o símbolo | passa |
+| STM32 / fork, `spi` | aplicado | exige, e o símbolo existe | passa |
+| STM32 / fork, `spi`, `Kconfig` quebrado | aplicado | exige, e o símbolo falta | **falha, nomeando o fragmento** |
+
+---
+
 ## 9. O que **não** foi medido
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
@@ -959,9 +1074,21 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   um desencontro apareceria em tempo de carga de módulo e não em tempo de boot.
 - **Perfil `med-image-prod`** — nunca construído. Rootfs read-only não foi exercitado.
 - **Perfil tomógrafo no STM32MP257** — nunca construído; a §2 é inteira sobre `qemux86-64`.
-- **O front-end analógico, em qualquer das quatro ligações.** Desde 2026-09-07 existem os dois
-  drivers de kernel, a camada adjunta e o driver `iio` do framework, e o que foi medido deles é
-  **de build e de host**: os dois módulos compilam e linkam limpos para arm64 contra o kernel real
+- **O front-end analógico, em qualquer das quatro ligações.** Desde 2026-09-27 o driver do AFE é
+  **in-tree**, numa árvore Linux que é a fonte única do código dele, compilado pelo caminho do Yocto
+  e empacotado como `kernel-module-ti-ads1299` (§8). Isso é build, não aquisição. Continuam **não
+  medidos**, e são novos ou permanecem:
+  - **nenhuma imagem `spi` ou `usb` foi construída.** A ligação que de fato usa o driver está
+    resolvida corretamente (`bitbake -e`) e não compilada. E a `spi` tem um obstáculo de projeto e não
+    de ferramenta: o `do_derive_device_options` **recusa** a prescrição `afe.bias_drive = true` nessa
+    ligação, porque o driver de kernel deixa o amplificador de bias desligado — então uma imagem
+    `spi` deste dispositivo exige mudar a prescrição ou o driver, e a recusa nunca foi exercitada;
+  - **o driver da ponte MCP2210 não migrou.** A receita *out-of-tree* dele continua na camada
+    adjunta, e com ela o `static char *spi_device = "ads1299"`, que é a dependência real entre os dois
+    drivers — logo os dois só *parecem* independentes;
+  - **as 8 marcas `[DS20005176?]`** do MCP2210 continuam intactas: aquele datasheet não foi aberto.
+
+  E do que foi medido antes, continua valendo que era **de build e de host**: os dois módulos compilam e linkam limpos para arm64 contra o kernel real
   da placa (`W=1`, sem avisos), o *backport* 6.9→6.6 custou zero linhas de API, e 80 verificações
   funcionais do comportamento novo passam no host. Nada disso é uma medida de aquisição. Continuam
   **não medidos**, e são exatamente o que os dois planos pedem:
@@ -999,7 +1126,22 @@ make check            # 23 asserções: plataforma + perfil EEG
 python3 scripts/med-check.py tomograph   # 11 asserções: só as de plataforma
 make stm32                      # §8: o alvo físico, configuração de produto
 make stm32 KEY=development      # §8: a configuração que foi executada na placa
+
+# §8, a árvore do kernel como fonte de verdade. O digest de referência é
+# 35e19311ab288cf56345ea6396d47d0cc071dab2dfe7ed028c575f2202b3bf50
+scripts/med-kernel-fingerprint.sh build/tmp-glibc/work-shared/stm32mp25-disco/kernel-source
+scripts/med-kernel-fingerprint.sh linux-med
+
+# e o build a partir do fork. MED_KERNEL_GIT/MED_KERNEL_SRCREV são parâmetros de
+# default nulo: sem eles o build é exatamente o da ST.
+./.kas-container/kas-container-5.2 --runtime-args \
+  "-e MED_KERNEL_GIT=git:///work/linux-med;protocol=file;branch=<branch> \
+   -e MED_KERNEL_SRCREV=<sha>" build kas/project-eeg-stm32mp2.yml
 ```
+
+Duas ressalvas sobre esses dois últimos. O caminho do fork **difere entre o contêiner e o host** —
+dentro dele o repositório está em `/work` —, e um `SRCREV` fixo é o que torna a medida citável:
+`${AUTOREV}` busca a ponta da branch a cada build e um número medido sobre ele não é reproduzível.
 
 As medidas de execução na placa (§8, "Resultado — execução na placa") não são reproduzidas por
 `make`: exigem gravar o `.wic` num cartão, alimentar a STM32MP257F-DK e um console serial. Cada uma

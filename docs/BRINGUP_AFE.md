@@ -28,6 +28,7 @@
 | Driver do AFE na árvore do kernel | **migrado**, in-tree, compilando para arm64 pelo caminho do Yocto (§12.6) |
 | Driver da ponte MCP2210 | **não migrado**; a receita out-of-tree continua na camada adjunta |
 | Defeitos achados ao migrar | **quatro** (D5 a D8), dois deles invisíveis a qualquer build |
+| Guarda de configuração de kernel | **verificada por injeção de falha** nos dois kernels (§12.6) |
 | Imagem `spi` ou `usb` construída | **nenhuma**. A ligação que usa o driver está resolvida e não compilada |
 | Amostra real adquirida | **nenhuma**, por nenhuma das quatro ligações |
 
@@ -448,8 +449,12 @@ ST o usou. Uma pendência que deixa de importar é melhor que uma resolvida.
 - **Nenhuma imagem `spi` ou `usb` foi construída.** A ligação que de fato usa o driver está resolvida
   corretamente e não compilada. E na `spi` o `do_derive_device_options` recusa duas prescrições
   (`afe.bias_drive = true`, `lead_off_detection = false`), o que nunca foi exercitado.
-- **A guarda nunca falhou no perfil do STM32.** É a terceira linha do modelo que ela implementa —
-  fork esperado, símbolo ausente — e é observável de propósito, quebrando o `Kconfig` do fork uma vez.
+- ~~A guarda nunca falhou no perfil do STM32.~~ **Medido em 2026-09-27.** Um commit temporário no
+  fork removeu a entrada `config TI_ADS1299` do `drivers/iio/adc/Kconfig` e o kernel foi construído
+  com `MED_EEG_LINK = "spi"`: a guarda reprovou com
+  `CONFIG_TI_ADS1299: asked for by med-stm32mp-drivers.cfg, not in the final .config`, e o commit foi
+  descartado depois. Prova as duas metades de uma vez — o fragmento do BSP **é** aplicado na ligação
+  que usa o driver, e a ausência do símbolo **é** detectada no alvo físico. Ver `RESULTS.md` §8.
 - **O `mcp2210-spi.c` não migrou.** A receita dele continua na camada adjunta, e com ela o
   `static char *spi_device = "ads1299"`, que é a dependência real entre os dois drivers.
 
