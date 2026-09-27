@@ -50,7 +50,7 @@ do driver seja uma consulta neste repositório e não num PDF que mais ninguém 
 | `CONFIG1` (0x01) | 13 / Fig. 51 | **defeito D2** — faltava o segundo campo reservado (4:3 = 2h) |
 | `CONFIG2` (0x02) | 14 / Fig. 52 | **defeito D1** — todos os campos uma posição acima |
 | `CONFIG3` (0x03) | 15 / Fig. 53 | **confere**; e a falta de `BIAS_STAT` virou lacuna L1 |
-| `LOFF` (0x04) | 16 / Fig. 54 | **confere**; nunca escrito, então a peça fica no reset — escolha por omissão |
+| `LOFF` (0x04) | 16 / Fig. 54 | **confere**; nunca escrito, então a peça fica no reset — escolha de configuração feita por deixar o registrador como veio |
 | `CHnSET` (0x05–0x0C) | 17 / Fig. 55 | **confere** — `PD` 7, `PGA` 6:4, `SRB2` 3, `MUX` 2:0 |
 | Tabela de ganhos do PGA | 17 | **confere** — `{1,2,4,6,8,12,24}`, sete entradas porque 111 é "do not use" |
 | Valores de `MUX` | 17 | **conferem**, os oito |
@@ -191,10 +191,13 @@ um que o faz falhar.
 
 ### L1 a L3 — lacunas, não defeitos
 
-- **L1, `BIAS_STAT` (CONFIG3 bit 0) não é reportado.** É o status de conexão do eletrodo de bias, e um
-  eletrodo de referência que se solta corrompe **todos** os canais ao mesmo tempo, diferente de um
-  eletrodo de sinal. Expor exige pôr `CONFIG3` na tabela de voláteis do `regmap` na mesma mudança —
-  o registrador é cacheado, e um atributo que o lesse reportaria "conectado" para sempre.
+- **L1, `BIAS_STAT` (CONFIG3 bit 0) não é reportado.** É o *lead-off* do eletrodo de BIAS: 0
+  conectado, 1 não conectado. Expor exige pôr `CONFIG3` na tabela de voláteis do `regmap` na mesma
+  mudança — o registrador é cacheado, e um atributo que o lesse reportaria "conectado" para sempre.
+  (A redação anterior desta linha afirmava que um eletrodo de referência solto corrompe todos os
+  canais ao mesmo tempo. É mais forte do que a folha de dados do registrador sustenta, e foi
+  suavizada aqui e no comentário do driver — o efeito elétrico é hipótese, o estado é o que o bit
+  reporta.)
 - **L2, `SRB1` (MISC1 bit 5) não tem controle.** É a montagem de referência comum, que é como um
   gorro de EEG normalmente se liga. Decisão de hardware pendente: a chave da PCB alterna GND e o
   eletrodo do canal, e **o software não consegue ler a posição dela** — então o registro não pode
@@ -251,24 +254,60 @@ devolve "nenhuma diferença".
 Clone `linux-med`, branch `feature/ads1299-mcp2210-driver` a partir do commit validado — digest
 inalterado, o que prova que a branch parte da árvore provada.
 
-| Commit | O quê |
-|---|---|
-| `f38399ec6832` | `dt-bindings: iio: adc: add TI ADS1299 biopotential AFE` |
-| `efc4220f6c3a` | `iio: adc: ti-ads1299: add TI ADS1299 biopotential AFE driver` + `Kconfig` + `Makefile` |
+| # | Commit | O quê |
+|---|---|---|
+| 1 | `8ad9d41cda64` | `dt-bindings: iio: adc: add TI ADS1299 biopotential AFE` |
+| 2 | `2b605504d251` | `iio: adc: ti-ads1299: add TI ADS1299 biopotential AFE driver` + `Kconfig` + `Makefile` + `MAINTAINERS` |
+| 3 | `0c09dda8f323` | **A** — `fix the CONFIG2 field positions` (defeito D1) |
+| 4 | `1aece8814b26` | **B** — `write both reserved fields of CONFIG1` (defeito D2) |
+| 5 | `bf2119c02d99` | **C** — `spell out the CONFIG3 reserved value` |
+| 6 | `55c319262d75` | **D** — `do not report lead-off status that is not valid` (defeito D3) |
+| 7 | `da723f985714` | **E** — `cite the datasheet tables that were checked` |
 
-Medido nesses dois:
+A ordem não é arbitrária. **A antes de B** porque é A que introduz o idioma `_RESERVED_VALUE`, e é
+esse idioma que torna o `CONFIG1` perigoso — a justificativa de B não existiria antes de A. E **E por
+último** porque anotar o que foi conferido só faz sentido depois de os consertos terem entrado.
+
+Dois commits anteriores, `f38399ec6832` e `efc4220f6c3a`, foram reescritos para os hashes 1 e 2 acima:
+autoria e `Signed-off-by` passaram a trazer nome legal, que é o que a DCO do kernel certifica, e o
+`MODULE_AUTHOR` e a entrada de `MAINTAINERS` foram para dentro do commit que adiciona o driver, onde
+pertencem. Nada foi fundido.
+
+**O congelamento vai dobrar A a E no commit 2**, e isso é esperado: uma série enviada ao kernel
+apresenta o driver já correto, e não a sequência "introduz / acha defeito / corrige". O valor
+histórico dessas cinco mensagens fica aqui, na §11, que é fora do git.
+
+Medido na série:
 
 - **compila para arm64 com `W=1`, zero avisos** (`CC [M] drivers/iio/adc/ti-ads1299.o`, ELF aarch64);
 - `allmodconfig` resolve `CONFIG_TI_ADS1299=m` sozinho, o que prova que o `Kconfig` expressa
   dependência de verdade e não decoração;
 - `make dt_binding_check` limpo, com o esquema **observado recusando** uma propriedade inesperada
   (`spi-cpha`, antes de ser declarada) — que é o que faz "o exemplo valida" significar algo;
-- `checkpatch --strict`: **0 erros**, e os quatro itens restantes justificados um a um (o nome
-  `CHnSET` do datasheet, um argumento de macro que o script acha reusado, e duas vezes o mesmo falso
-  positivo sobre um membro `__aligned(8)`).
+- `checkpatch --strict --git` sobre os sete commits: **0 erros em todos**. Os cinco de correção
+  saem `0/0/0` — *"no obvious style problems and is ready for submission"*. O ruído está só nos dois
+  de introdução: o advisório de `MAINTAINERS`, que dispara em todo arquivo novo, um `CHECK` sobre um
+  argumento de macro, e duas vezes o mesmo falso positivo sobre um membro declarado `__aligned(8)`;
+- e o `spdxcheck` só passou a rodar depois de `ply` e `GitPython` existirem no ambiente. Antes disso
+  ele abortava com `ModuleNotFoundError` **e o `checkpatch` seguia adiante** — ou seja, uma
+  verificação que não acontecia parecia uma verificação que passava.
 
-O arquivo que entrou é **byte a byte** o que estava committado no repositório do projeto, com uma
-única alteração: o `*/` de um comentário de banner na própria linha.
+### 12.3.1 O arquivo in-tree **não** é idêntico ao do repositório do projeto
+
+A verificação que eu tinha proposto era comparar os dois arquivos e exigir igualdade. Ela está errada,
+e a correta é outra: comparar o **código**, com os comentários removidos. Assim ele é **byte a byte
+idêntico** — zero diferença.
+
+O que difere são comentários, e as diferenças são deliberadas, para o arquivo servir a uma submissão:
+
+- saíram os selos `- CHECKED 2026-09-26`: a data de uma leitura mora no git, não no fonte;
+- saíram as referências a `BRINGUP_STM32MP2.md` e ao plano de bancada — documento de repositório
+  privado não pertence a um arquivo do kernel;
+- e saíram as duas afirmações suavizadas, que estavam **também no fonte** e não só nas mensagens
+  (ver L1 na §11).
+
+Mais uma alteração mecânica: o `*/` de um comentário de banner passou para a própria linha, que era o
+único achado real do `checkpatch` no arquivo original.
 
 ### 12.4 O que ficou pendente
 
