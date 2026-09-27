@@ -167,3 +167,10 @@ env:
   # the substituted script, not by anything failing. ":forcevariable" fixed that
   # instance and left the ordering trap in place for the next one.
   MED_DATA_KEY_SOURCE:
+
+  # Where the kernel comes from, for the machine whose BSP honours it. Null
+  # defaults, same mechanism as above: unset, the build is ST's release; set,
+  # it is a pinned revision of the tree that owns the front-end drivers. See
+  # meta-med-bsp/dynamic-layers/stm-st-stm32mp/recipes-kernel/linux/.
+  MED_KERNEL_GIT:
+  MED_KERNEL_SRCREV:
