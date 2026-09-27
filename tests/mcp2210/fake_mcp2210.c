@@ -55,6 +55,9 @@ void fake_reset(void)
 	 * in the driver worth having - the default is not GP0.
 	 */
 	fake.pin_designation[1] = FAKE_PIN_CS;
+	/* The power-up copy the RAM one was loaded from, and unprotected. */
+	fake.nvram_designation[1] = FAKE_PIN_CS;
+	fake.nvram_access_control = 0x00;
 	fake.bitrate = 1000000;
 	fake.xfer_bytes = 4;
 	fake.idle_cs = 0x01ff;
@@ -274,10 +277,27 @@ static void build_reply(const u8 *req, u8 *rep)
 		fake.eeprom_touched = true;
 		break;
 
-	case 0x60:
-	case 0x61:
-	case 0x70:	/* NVRAM settings and the access password */
-		fake.nvram_touched = true;
+	case 0x61:	/* Get NVRAM settings, Tables 3-17 to 3-26 */
+		fake.nvram_read = true;
+		rep[2] = req[1];	/* the sub-command echo, byte 2 */
+		switch (req[1]) {
+		case 0x20:	/* power-up chip settings, Table 3-20 */
+			memcpy(rep + 4, fake.nvram_designation, FAKE_NGPIO);
+			rep[18] = fake.nvram_access_control;
+			break;
+		case 0x10:	/* power-up SPI transfer settings, Table 3-18 */
+			rep[3] = 17;
+			put_unaligned_le32(fake.bitrate, rep + 5);
+			break;
+		default:
+			break;
+		}
+		break;
+
+	case 0x60:	/* Set NVRAM settings */
+	case 0x70:	/* Send access password */
+		fake.nvram_written = true;
+		rep[2] = req[1];
 		break;
 
 	default:	/* Table 3-72 */
@@ -287,6 +307,8 @@ static void build_reply(const u8 *req, u8 *rep)
 
 	if (fake.echo_wrong_command)
 		rep[0] = (u8)(cmd ^ 0xff);
+	if (fake.wrong_subcmd_echo && (cmd == 0x60 || cmd == 0x61))
+		rep[2] = (u8)(rep[2] ^ 0xff);
 }
 
 /* ------------------------------------------------------------- the seam */

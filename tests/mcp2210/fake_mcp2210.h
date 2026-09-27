@@ -37,6 +37,10 @@
 #define FAKE_PIN_DEDICATED	0x02
 
 struct fake_mcp2210 {
+	/* --- power-up settings in NVRAM, Tables 3-19 and 3-20 --- */
+	u8 nvram_designation[FAKE_NGPIO];
+	u8 nvram_access_control;
+
 	/* --- volatile chip settings, Tables 3-39 and 3-40 --- */
 	u8 pin_designation[FAKE_NGPIO];
 	u16 gpio_default_value;
@@ -72,6 +76,7 @@ struct fake_mcp2210 {
 	int drop_count;		 /* discard the reply: nothing is delivered */
 	int hold_count;		 /* queue the reply: it arrives one exchange late */
 	bool echo_wrong_command; /* corrupt byte 0 of every reply */
+	bool wrong_subcmd_echo;	 /* corrupt byte 2 of an NVRAM reply */
 	unsigned int max_chunk_out;	/* cap bytes returned per 0x42, 0 = no cap */
 	int extra_return_bytes;	 /* claim this many MORE bytes than are available */
 	bool inflate_last_reply; /* claim a full 60 on the reply that finishes */
@@ -82,7 +87,14 @@ struct fake_mcp2210 {
 	unsigned int exchanges;
 	u8 chunk_len[FAKE_MAX_CHUNKS];	/* the sequence of 0x42 payload lengths */
 	unsigned int chunks;
-	bool nvram_touched;
+	/*
+	 * Read and written are different events and the suite needs them
+	 * apart: since the driver's goal became full coverage, reading NVRAM
+	 * is expected and writing it from the acquisition path is the thing
+	 * the negative test exists to catch.
+	 */
+	bool nvram_read;
+	bool nvram_written;
 	bool eeprom_touched;
 	unsigned int set_chip_settings_writes;
 	u8 last_engine_status;

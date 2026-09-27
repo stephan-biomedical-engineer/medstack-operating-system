@@ -128,13 +128,21 @@ static int reset_interrupt_count(void)
 	return n < 0 ? (int)n : 0;
 }
 
-static void check_no_nvram_or_eeprom(void)
+/*
+ * The negative test, in the form it took when the driver's goal became full
+ * coverage. It used to be "no NVRAM command was ever sent", which was
+ * guaranteed by the driver not knowing how. Reading the power-up settings is
+ * now something the driver does at probe and should. What must never happen is
+ * a WRITE, and that is a property of the path rather than of the codebase -
+ * which is the stronger claim of the two.
+ */
+static void check_nvram_not_written(void)
 {
-	CHECK_MSG(!fake.nvram_touched, "nenhum comando de NVRAM foi emitido");
+	CHECK_MSG(!fake.nvram_written,
+		  "nenhuma escrita de NVRAM nem envio de senha");
 	CHECK_MSG(!fake.eeprom_touched, "nenhum comando de EEPROM foi emitido");
-	CHECK_EQ(fake.cmd_count[0x60] + fake.cmd_count[0x61] +
-		 fake.cmd_count[0x70] + fake.cmd_count[0x50] +
-		 fake.cmd_count[0x51], 0);
+	CHECK_EQ(fake.cmd_count[0x60] + fake.cmd_count[0x70] +
+		 fake.cmd_count[0x50] + fake.cmd_count[0x51], 0);
 }
 
 /* ============================================================== A. probe */
@@ -155,7 +163,7 @@ static void test_probe(void)
 	CHECK_EQ(fake.pin_designation[1], FAKE_PIN_CS);
 	CHECK_MSG(fake.set_chip_settings_writes == 0,
 		  "nada foi reescrito: o pino ja era chip select e GP6 nao e dedicado");
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 
 	/*
@@ -177,7 +185,7 @@ static void test_probe(void)
 	CHECK_MSG((fake.other_settings & MCP2210_MASK_INT_MODE) ==
 		  FIELD_PREP(MCP2210_MASK_INT_MODE, MCP2210_INT_MODE_FALLING),
 		  "a contagem de bordas de descida foi programada");
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 
 	/* A3 - the Phase 3.4 injection: the asked-for pin is a plain GPIO */
@@ -187,7 +195,7 @@ static void test_probe(void)
 	CHECK_EQ(fake.pin_designation[0], FAKE_PIN_CS);
 	CHECK_MSG(shim_log_contains("GP0"),
 		  "a mensagem nomeia o pino que foi reivindicado");
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 
 	/* A4 - a pin with a dedicated function is refused, and named */
@@ -249,7 +257,7 @@ static void test_interrupt_counter(void)
 	CHECK_EQ(read_interrupt_count(), 65535);
 	CHECK_EQ(read_interrupt_count(), 65535);
 
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 }
 
@@ -375,7 +383,75 @@ static void test_fragmentation(void)
 		  "o laco nao depende do byte de estado do motor");
 	fake.weird_engine_status = false;
 
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
+	do_release();
+}
+
+/* ================================ G. the power-up settings (phase 6A) */
+
+static void test_nvram_read(void)
+{
+	section("G. Os ajustes de arranque em NVRAM (Fase 6A)");
+
+	/* G1 - probe reads the power-up settings, and does not write them */
+	fresh();
+	CHECK_MSG(fake.nvram_read, "o probe leu os ajustes de arranque");
+	CHECK_MSG(!fake.nvram_written, "e nao escreveu nenhum");
+	check_nvram_not_written();
+	do_release();
+
+	/*
+	 * G2 - a part whose NVRAM designates a different pin than the one in
+	 * use. This works, and it means the device depends on this driver
+	 * correcting it on every boot, so it is said out loud.
+	 */
+	fake_reset();
+	fake.nvram_designation[1] = FAKE_PIN_GPIO;	/* RAM still says CS */
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_log_contains("only in RAM"),
+		  "o desacordo entre RAM e NVRAM foi relatado");
+	CHECK_MSG(shim_log_contains("GP1"), "e nomeia o pino");
+	CHECK_MSG(!fake.nvram_written, "relatar nao e consertar: NVRAM intocada");
+	do_release();
+
+	/* G3 - and when they agree, nothing is said */
+	fresh();
+	CHECK_MSG(!shim_log_contains("only in RAM"),
+		  "nada a relatar quando RAM e NVRAM concordam");
+	do_release();
+
+	/* G4 - the access control state reaches the log */
+	fake_reset();
+	fake.nvram_access_control = 0x80;	/* permanently locked */
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_log_contains("permanently locked"),
+		  "uma peca travada de fabrica e anunciada no probe");
+	do_release();
+
+	fake_reset();
+	fake.nvram_access_control = 0x40;	/* password protected */
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_log_contains("password protected"), "idem para senha");
+	do_release();
+
+	/*
+	 * G5 - the sub-command echo. One command code covers five operations,
+	 * so byte 0 alone cannot tell two of them apart; byte 2 is the rest of
+	 * the correlation. A reply carrying the wrong sub-command is a stray.
+	 */
+	fake_reset();
+	fake.wrong_subcmd_echo = true;
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	mcp = hid_get_drvdata(&hdev);
+	CHECK_MSG(mcp->stray_replies >= 1,
+		  "uma resposta com o sub-comando errado foi descartada");
+	CHECK_MSG(!shim_log_contains("only in RAM"),
+		  "e nada foi concluido a partir dela");
+	fake.wrong_subcmd_echo = false;
 	do_release();
 }
 
@@ -460,7 +536,7 @@ static void test_spi_contract(void)
 	CHECK_EQ(mcp->gc.direction_output(&mcp->gc, 3, 1), 0);
 	CHECK_EQ(mcp->gc.get_direction(&mcp->gc, 3), GPIO_LINE_DIRECTION_OUT);
 
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 }
 
@@ -533,7 +609,7 @@ static void test_stall_bound(void)
 		fake.busy_before_accept = 0;
 	}
 
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 }
 
@@ -661,7 +737,7 @@ static void test_unimplemented_phases(void)
 	CHECK_MSG(shim_log_contains("held by"), "e disse quem era no log");
 	fake.bus_unavailable = false;
 
-	check_no_nvram_or_eeprom();
+	check_nvram_not_written();
 	do_release();
 }
 
@@ -676,6 +752,7 @@ int main(void)
 	test_fragmentation();
 	test_stall_bound();
 	test_spi_contract();
+	test_nvram_read();
 	test_unimplemented_phases();
 
 	int status = report();

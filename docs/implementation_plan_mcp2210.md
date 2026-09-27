@@ -281,8 +281,10 @@ tomada.
 | `0x41` | Get (VM) SPI Transfer Settings | implementado (taxa real, uma vez), Fase 4 | §4.1 |
 | `0x80` | Request SPI Bus Release | **pendente** | §4.2 |
 | `0x50` `0x51` | Read / Write EEPROM | **pendente**, Fases 6B e 6C | §4.3 |
-| `0x60` `0x61` | Set / Get NVRAM (5 sub-comandos cada) | **pendente**, Fase 6A | §4.3 |
-| `0x70` | Send Access Password | **pendente**, Fase 6A | §4.3 |
+| `0x61` | Get NVRAM (sub-comando `0x20`) | implementado, Fase 6A.1 | §4.3 |
+| `0x61` | Get NVRAM (sub-comandos `0x10` `0x30` `0x40` `0x50`) | **pendente** | §4.3 |
+| `0x60` | Set NVRAM (5 sub-comandos) | **pendente**, Fase 6A.2 | §4.3 |
+| `0x70` | Send Access Password | **pendente**, Fase 6A.2 | §4.3 |
 
 As quatro últimas **eram** escopo declarado e deixaram de ser: o objetivo agora
 é cobertura total, faseada. O §4.3 registra a inversão e o que ela custa aos
@@ -707,25 +709,56 @@ precisando da Fase 0.
 **Critério:** os casos passam; e cada um falha quando a correção correspondente
 é revertida.
 
-### Fase 6A — NVRAM e controle de acesso
+### Fase 6A.1 — NVRAM, o lado de leitura — **fechada**
 
-Os comandos `0x60`, `0x61` e `0x70`, sobre a camada de transporte que as Fases
-3 e 4 já construíram, com a separação semântica do §4.4:
-`get_nvram_settings()` / `set_nvram_settings()` distintas das de RAM, e
-`send_password()`.
+`0x61` sub-comando `0x20`, com a separação semântica do §4.4:
+`mcp2210_read_nvram_chip_settings()` é uma função distinta das de RAM e o nome
+diz qual cópia ela lê.
 
-O que precisa de decisão antes do código: **qual interface Linux**. Ajustes de
-*power-up* de um dispositivo são configuração persistente, e nenhuma das
-respostas óbvias é boa por si — sysfs vira um atributo por campo, debugfs não é
-ABI, e um `ioctl` por comando é exatamente o que se recusou no §4.3. Decidir e
-registrar antes de escrever.
+**E com um consumidor real, que é o que a manteve fora da categoria "constante
+morta".** No probe, duas coisas vão para o log e nenhuma tinha outro jeito de
+ser sabida: se os ajustes de arranque ainda podem ser alterados (descobrir que
+uma peça está travada de fábrica na hora de reconfigurá-la é descobrir tarde
+demais), e se o chip select em uso é chip select **também** na NVRAM — porque
+`mcp2210_claim_chip_select()` corrige só a cópia em RAM, então um desacordo
+significa que a correção acontece de novo a cada boot e o aparelho depende
+deste driver para funcionar.
 
-**Critério:** os ajustes de NVRAM podem ser lidos; a escrita existe e é
-exercitada contra o dispositivo falso; o caminho de aquisição continua sem
-tocá-la (`check_no_nvram_or_eeprom()` continua passando em todos os grupos).
-**Injeção:** provocar a escrita a partir do caminho de aquisição e confirmar
-que a suíte a vê — o teste negativo reformulado do §4.3 só vale se já tiver
-visto a falha que procura.
+O transporte também cresceu o que a família exige: a correlação passou a
+incluir o **sub-comando**, que volta no byte 2 e não no byte 1 em que foi
+enviado — um código de comando cobre cinco operações, e casar só pelo byte 0
+deixaria a resposta de uma satisfazer a espera de outra. E o vocabulário de
+estado foi completado (`0xFA`, `0xFB`, `0xFC`, `0xFD`), porque esta família é
+o que torna o resto dele alcançável.
+
+**Critério, cumprido.** **Injeções, executadas** — três, cada uma localizada:
+desligar a correlação por sub-comando dá 1 falha (G5), o aviso de desacordo
+RAM/NVRAM dá 2 (G2), e o relato do controle de acesso dá 1 (G4).
+
+### Fase 6A.2 — NVRAM, escrita e senha — **bloqueada na interface**
+
+`0x60` e `0x70`. Deliberadamente **não** implementados junto com a leitura, e o
+motivo é de método: eles não têm chamador enquanto não houver uma interface
+Linux por onde um operador os alcance, e **um caminho de escrita sem chamador é
+uma constante morta com passos a mais** — o padrão que já custou caro aqui
+(§4.1, as três constantes que eram o caminho de recuperação).
+
+Nem poderia haver um consumidor interno legítimo: o candidato óbvio seria
+gravar na NVRAM a designação de chip select que hoje é corrigida a cada boot, e
+isso é exatamente a mutação de um aparelho em campo que não pode ser
+automática.
+
+**A decisão que destrava:** qual interface Linux para configuração persistente
+de dispositivo. Nenhuma resposta óbvia serve sozinha — sysfs vira um atributo
+por campo, debugfs não é ABI, e um `ioctl` por comando é o que o §4.3 recusa. É
+**a mesma pergunta que a Fase 6C faz sobre a EEPROM**, e deve ser respondida
+uma vez só para as duas.
+
+**Critério, quando existir:** a escrita é exercitada contra o dispositivo
+falso, e o caminho de aquisição continua sem alcançá-la.
+**Injeção obrigatória:** provocar a escrita a partir do caminho de aquisição e
+confirmar que `check_nvram_not_written()` a vê. O teste negativo reformulado
+do §4.3 só vale depois de ter visto a falha que procura.
 
 ### Fase 6B — EEPROM, o protocolo
 
@@ -855,9 +888,11 @@ Fase 0 (constantes + tabelas faltantes)          FECHADA
                                                                       │
 Fase 6 (forma mainline) ── mecânicos feitos; contador e topologia abertos
    │
-   ├──> Fase 6A (NVRAM + senha)
+   ├──> Fase 6A.1 (NVRAM leitura)   FECHADA
+   ├──> Fase 6A.2 (NVRAM escrita + senha) ─┐ mesma decisão de interface
+   │                                       │
    ├──> Fase 6B (EEPROM, protocolo)
-   └──> Fase 6C (EEPROM, interface Linux)
+   └──> Fase 6C (EEPROM, interface Linux) ─┘
                      │
                      v
               Fase 8 (bancada, §8-B)  ──>  Fase 9 (submissão)
@@ -1262,4 +1297,56 @@ não implementa essas funções contradiz o objetivo agora declarado. Submeter u
 que ainda não as implementou é defensável — mas a carta de apresentação tem de
 dizer isso, e a série precisa de um caminho crível até lá. As Fases 6A, 6B e 6C
 são esse caminho, e entram antes da bancada no roadmap.
+
+### 2026-09-27 — Fase 6A.1: a NVRAM se lê; escrever espera a interface
+
+`013e9b1ab0f2` em `linux-med`. Suíte de host de 176 para **195 verificações, 0
+falhas**.
+
+**A 6A saiu dividida, e a divisão é o conteúdo.** O lado de leitura entrou; o
+de escrita (`0x60`) e a senha (`0x70`) não, e o motivo não é falta de tempo:
+eles não têm chamador enquanto não houver interface Linux, e um caminho de
+escrita sem chamador é **uma constante morta com passos a mais**. Este driver
+já pagou por esse padrão uma vez — o §4.1 registra as três constantes que eram
+o caminho de recuperação e ficaram anos definidas sem serem emitidas. Repetir
+com um comando que grava memória não volátil de um aparelho em campo seria
+pior.
+
+Verifiquei se havia consumidor interno legítimo antes de decidir: o candidato
+óbvio é gravar na NVRAM a designação de chip select que hoje é corrigida a cada
+boot, e isso é exatamente a mutação automática de um dispositivo em campo que
+não pode acontecer. Não há.
+
+**O que manteve a leitura fora da mesma armadilha** foi encontrar um consumidor
+de verdade. No probe, duas coisas vão para o log e nenhuma tinha outro jeito de
+ser sabida: se os ajustes de arranque ainda podem ser alterados, e se o chip
+select em uso é chip select **também** na NVRAM. A segunda é a mais útil —
+`mcp2210_claim_chip_select()` corrige só a cópia em RAM, de propósito, então um
+desacordo significa que o aparelho depende deste driver a cada boot para ser
+usável. Isso é um fato sobre a placa, não sobre o driver, e vale estar no log
+de uma máquina que guarda registros.
+
+**Dois crescimentos no transporte, e os dois eram dívida silenciosa.** A
+correlação por eco da Fase 3 casava só o byte 0 — mas `0x60`/`0x61` cobrem
+cinco operações cada, e o sub-comando volta **no byte 2, não no byte 1 em que
+foi enviado**, então a resposta de uma sub-operação satisfaria a espera de
+outra. E o vocabulário de estado estava pela metade: `0xFA`, `0xFB`, `0xFC` e
+`0xFD` só ficaram alcançáveis com esta família. Os três últimos significam
+"não permitido" e **não significam a mesma coisa** — senha errada com
+tentativas restantes é recuperável, mecanismo bloqueado precisa de ciclo de
+energia, e rejeição é uma peça travada de fábrica. O `errno` não carrega a
+diferença; o log carrega.
+
+**O teste negativo mudou de forma no código, não só no texto.**
+`check_no_nvram_or_eeprom()` virou `check_nvram_not_written()`: ler a NVRAM
+agora é esperado, escrever é o que nunca pode acontecer. É a reformulação do
+§4.3 encarnada — de "o driver não sabe" para "o caminho não alcança".
+
+Três injeções, cada uma localizada: correlação por sub-comando (1 falha, G5),
+aviso de desacordo RAM/NVRAM (2, G2), relato do controle de acesso (1, G4).
+
+**O que 6A.2 e 6C compartilham** e por isso devem ser decididas juntas: as
+duas perguntam qual interface Linux serve para configuração persistente de um
+dispositivo. Nenhuma resposta óbvia serve sozinha, e responder duas vezes
+produziria duas ABIs para o mesmo tipo de coisa.
 
