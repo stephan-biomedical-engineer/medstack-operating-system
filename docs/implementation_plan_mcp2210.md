@@ -371,13 +371,28 @@ porque o núcleo I²C tem `new_device` em sysfs e sondagem por endereço; o núc
 SPI não tem equivalente, e é justamente por isso que a pergunta é difícil e que
 a resposta precisa estar certa.
 
-O caminho canônico existe e está disponível no kernel que construímos:
+**O mecanismo não é o problema, e este plano errou ao sugerir que fosse.** O
+kerneldoc de `spi_new_device()` está na nossa própria 6.6
+(`drivers/spi/spi.c:727-731`) e diz textualmente que a função é exportada
+"so that for example a USB or parport based adapter driver could add devices
+(which it would learn about out-of-band)". Há dois precedentes nessa mesma
+árvore — `spi-butterfly.c:266` e `spi-lm70llp.c:267`, adaptadores parport
+hot-plug que registram um filho fixo com `spi_board_info` — e a mainline atual
+acrescentou um terceiro que é USB: `drivers/spi/spi-ch341.c`. A evidência
+estava na árvore o tempo todo e não foi lida.
+
+O que resta é mais estreito e mais interessante: **quem fornece a topologia.**
 `struct spi_board_info` tem o campo `swnode` (verificado em
-`include/linux/spi/spi.h` na árvore 6.6), de modo que um `software_node`
-estático descreve o filho — modalias, `max-speed`, modo, propriedades — e
-`spi_new_device()` o consome. A escolha entre nós de software passa a ser feita
-por uma tabela indexada pelo PID, ou por um único parâmetro de topologia, em vez
-de quatro parâmetros soltos que qualquer um pode combinar de forma inválida.
+`include/linux/spi/spi.h` na 6.6), então um `software_node` estático descreve o
+filho — modalias, `max-speed`, modo, propriedades. O que ele não responde é
+qual nó escolher, porque um dispositivo USB não tem nó de firmware: sem DT, sem
+companion ACPI, e o núcleo SPI não tem o `new_device` em sysfs que o I²C tem.
+
+A pergunta de RFC, portanto, não é "pode um adaptador USB criar um filho SPI?"
+— já sabemos que pode. É: **como descrever, em mainline, um periférico SPI fixo
+atrás de um controlador USB hot-plug que não tem DT nem ACPI e cuja topologia é
+conhecida fora do firmware?** Isso é modelagem de topologia, não legitimidade
+de mecanismo, e é uma pergunta de revisão muito melhor.
 
 **Nota de fronteira.** Isto tem consequência para a regra 9 do `CLAUDE.md`. O
 nome `ads1299` como valor padrão de um parâmetro de módulo é aceitável dentro da
@@ -415,15 +430,23 @@ sysfs que nenhum outro driver tem. Isso levanta três exigências em mainline:
    forte. `drivers/counter/` existe, tem `devm_counter_alloc()`/`devm_counter_add()`
    na 6.6, e tem inclusive um precedente quase idêntico em
    `drivers/counter/interrupt-cnt.c`. Contar bordas num pino é literalmente o
-   que o subsistema faz, e ele resolve de graça o problema de largura
-   (`COUNTER_COMP_COUNT_U64`).
+   que o subsistema faz.
+
+   **Uma ressalva, para não prometer ao mantenedor o que a ponte não dá:** o
+   Counter **não resolve o wrap de 16 bits no hardware**. Ele oferece a
+   representação certa em userspace, e `COUNTER_COMP_COUNT_U64` permite que o
+   driver acumule — mas a leitura do MCP2210 continua sendo de 16 bits e a
+   semântica de ler-e-repor continua sendo do dispositivo. Acumular exige ler
+   com frequência suficiente para não perder uma volta, e a que frequência isso
+   é depende da ODR. A regra do `afe_bench` §5 — somar janelas curtas, nunca
+   uma subtração — continua valendo.
 
 **Recomendação:** expor o contador via `counter`, sob `IS_REACHABLE(CONFIG_COUNTER)`,
 no mesmo padrão em que o 2221 expõe o ADC via `IS_REACHABLE(CONFIG_IIO)`. Isso
-resolve os três pontos de uma vez, elimina a ABI customizada, e o `wrap` de 16
-bits deixa de ser um problema do consumidor. O custo é que o `afe_bench` §5
-passa a ler de `/sys/bus/counter/` em vez de um atributo do dispositivo HID —
-uma mudança de caminho no roteiro, não de método.
+resolve os dois primeiros pontos, elimina a ABI customizada e dá ao terceiro a
+resposta que o mantenedor espera. O custo é que o `afe_bench` §5 passa a ler de
+`/sys/bus/counter/` em vez de um atributo do dispositivo HID — uma mudança de
+caminho no roteiro, não de método.
 
 O custo real, e ele deve ser declarado: um terceiro subsistema no mesmo módulo.
 O precedente do 2221 (i2c + gpio + iio) cobre isso, mas não gratuitamente.
@@ -446,10 +469,13 @@ O precedente do 2221 (i2c + gpio + iio) cobre isso, mas não gratuitamente.
 
 `gpio_chip.set` devolve `void` na 6.6 (`include/linux/gpio/driver.h:437`), que é
 a assinatura que o driver usa, e ela mudou em kernels posteriores. Verificar
-contra a árvore do dia da postagem, não contra esta. O mesmo vale para
-`init_valid_mask` (`:451`), que é o mecanismo correto para marcar o GP8 como
-não-saída em vez de deixar `mcp2210_gpio_set()` escrever silenciosamente num bit
-*don't care* (§3.3).
+contra a árvore do dia da postagem, não contra esta. **E uma correção a este plano:** `init_valid_mask` (`:451`) **não** é o
+mecanismo para marcar o GP8 como não-saída. O `valid_mask` diz se uma linha
+existe para ser usada — e o GP8 existe, como entrada. "Só entrada" é uma
+propriedade de direção, e o gpiolib da 6.6 não tem facilidade para ela, então a
+restrição vai onde a direção é escolhida: `direction_output()` recusa,
+`get_direction()` responde sempre `IN`, e `set()` não gasta uma troca.
+Implementado assim na Fase 5.
 
 ---
 
@@ -489,7 +515,7 @@ Cada fase tem um critério numérico e uma injeção de falha. Uma fase sem a
 injeção executada não está feita — é uma alegação, no sentido exato que o
 `CLAUDE.md` dá à palavra.
 
-### Fase 0 — Verificar as constantes — **quase fechada**
+### Fase 0 — Verificar as constantes — **fechada**
 
 Delegada ao `implementation_plan_afe_bench.md` §8-B Fase 0. Ela deixou de
 bloquear as Fases 1 a 5 em 2026-09-27, quando as tabelas faltantes entraram na
@@ -501,13 +527,19 @@ três estados do motor foram lidos contra as tabelas e cada um cita a tabela de
 onde veio. Quatro estavam errados e foram corrigidos: o byte de reposição do
 `0x12` (§3.1) e os três do motor SPI (§3.5).
 
-**O que falta, e é exatamente um item:** o PID `0x00de`. A documentação de
-protocolo não o contém — ela diz que VID e PID são configuráveis e nunca dá os
-valores de fábrica. Só o datasheet completo ou uma enumeração real resolvem.
+**O PID `0x00de`, que a documentação de protocolo não contém** — ela diz que
+VID e PID são configuráveis e nunca dá os valores de fábrica — está
+**corroborado por três fontes externas a este projeto**: o `mcp2210.c` do
+bfgminer, os defaults da biblioteca `mcp2210-python`, e uma captura publicada
+de `lsusb -v` que lê `ID 04d8:00de Microchip Technology, Inc. MCP2210 USB to
+SPI Master`. A última é uma observação de uma peça, feita por outra pessoa.
 
-**Critério, revisado:** um marcador `[DS20005176?]` restante, no PID, e cada
-outra constante citando a tabela de onde veio. *Zero* marcadores continua sendo
-o critério, mas ele agora depende de uma fonte que a transcrição não é.
+**Corroborado não é verificado**, e a distinção fica no código. Mas é também a
+constante mais segura de errar em todo o arquivo: um ID errado não produz dado
+ruim, produz ausência de *bind*, e o `hid-generic` leva o dispositivo no
+primeiro segundo da primeira sessão de bancada. Não bloqueia nada.
+
+**Critério:** zero marcadores `[DS20005176?]` no arquivo. **Cumprido.**
 **Injeção:** nenhuma aplicável — é uma leitura. A contagem de constantes
 corrigidas durante a varredura é o resultado, e ela foi quatro.
 
@@ -560,15 +592,19 @@ e voltar o limite de estagnação ao 100 fixo dá 3, em D4. **O travamento era
 real**, e não uma leitura pessimista: a suíte o observou antes de a correção
 existir.
 
-### Fase 5 — O contrato SPI
+### Fase 5 — O contrato SPI — **fechada**
 
 `MCP2210_NCS` = 8 e `init_valid_mask` para o GP8 (§3.3). Traduzir `xfer->delay`
 para o quantum de 100 µs e recusar `cs_change` no meio da mensagem (§3.6).
 
-**Critério:** uma mensagem com `cs_change` devolve `-EINVAL`; um `cs` = 8 é
-recusado no probe; um `gpiod` de saída no GP8 é recusado pelo gpiolib.
-**Injeção:** os três acima são a própria injeção, desde que o caso positivo
-correspondente continue passando.
+**Critério, cumprido:** um `cs_change` ou um `delay` no meio da mensagem
+devolvem `-EINVAL` sem gastar uma troca; um `delay` de 250 µs na última
+transferência vira 3 quanta e um de 2 µs vira 1, sempre para cima; um `cs` = 8
+é recusado no probe; `direction_output(8)` devolve `-EIO` e `get_direction(8)`
+responde `IN`, enquanto o GP3 continua podendo ser saída.
+**Injeções, executadas** — quatro, cada uma localizada: desligar a recusa de
+`cs_change` dá 2 falhas (F5), a de `delay` intermediário dá 2 (F4), trocar o
+arredondamento para baixo dá 2 (F1 e F2), e desligar a regra do GP8 dá 3 (F7).
 
 ### Fase 6 — A forma mainline (paralelizável)
 
@@ -674,8 +710,8 @@ lista; um que mora em `files/` de uma receita é uma conversão manual toda vez.
 
 Um plano fechado é este conjunto verdadeiro ao mesmo tempo:
 
-1. Zero marcadores `[DS20005176?]` no arquivo. *(Fase 0 — hoje resta **um**, no
-   PID, e a transcrição não pode fechá-lo: ver a Fase 0)*
+1. Zero marcadores `[DS20005176?]` no arquivo. *(Fase 0 — **cumprido**; o PID
+   é corroboração de terceiros e não verificação, e a Fase 0 diz por quê)*
 2. `checkpatch --no-tree --file --strict` em 0/0/0. *(Fase 6; já verdadeiro hoje,
    e o ponto é que continue depois de ~200 linhas de mudança)*
 3. Compilação arm64 `W=1` sem avisos contra o kernel da placa. *(hoje verdadeiro)*
@@ -1003,4 +1039,56 @@ de ver a falha que procura sem que nada fique vermelho.
 `delay`, `cs_change`, `init_valid_mask` do GP8), 6 (forma mainline) e 8 (bancada)
 seguem abertas, e o §8 de integração de build também — o driver ainda existe em
 duas cópias.
+
+### 2026-09-27 — Fase 0 fechada, Fase 5 implementada, e três correções a este plano
+
+`e4da301c0e3f` (PID) e `4b8185e4f988` (Fase 5) em `linux-med`. A suíte de host
+foi de 150 para **176 verificações, 0 falhas, 0 defeitos**.
+
+**Fase 0 fechada.** Zero marcadores `[DS20005176?]`. O PID entrou como
+corroboração de três fontes externas, e a redação no código mantém a hierarquia
+que este repositório usa: corroborado por terceiros fica entre "conferido contra
+uma transcrição" e "conferido contra a peça". A bancada continua sendo o
+encerramento mais forte; deixou de ser um bloqueio.
+
+**Fase 5 implementada** — atrasos, `cs_change` e GP8, todos sob a regra "honrar
+ou recusar, nunca ignorar em silêncio". A parte que exigiu decisão nova: num
+`spi_message` achatado em uma transação, **só o `delay` da última transferência
+tem para onde ir**. Um intermediário não é acumulado nem movido para o fim — um
+atraso que acontece em outro lugar não é o atraso que foi pedido — e vira
+`-EINVAL`. O arredondamento é para cima, porque dar a um dispositivo menos tempo
+do que ele pediu é exatamente a falha que o atraso existia para evitar.
+
+**Três correções a este plano, todas vindas de evidência que já existia.**
+
+1. **O `init_valid_mask` era a ferramenta errada** para "GP8 só entrada".
+   `valid_mask` diz se uma linha existe para ser usada, e o GP8 existe — como
+   entrada. Direção não é validade. Corrigido no §5.5 e implementado onde a
+   direção é escolhida.
+
+2. **"Não existe outra ponte USB-SPI na árvore" era falso**, e de duas formas. A
+   mainline atual tem `drivers/spi/spi-ch341.c`. Mas pior: o kerneldoc de
+   `spi_new_device()` **na nossa própria 6.6** (`drivers/spi/spi.c:727-731`) já
+   dizia que a função é exportada para que "a USB or parport based adapter
+   driver could add devices (which it would learn about out-of-band)", e
+   `spi-butterfly.c` e `spi-lm70llp.c` são dois precedentes nessa mesma árvore.
+   A evidência estava local e não foi lida — que é o mesmo erro de método que o
+   `implementation_plan_iio_afe.md` já registra sobre ter concluído "escrever do
+   zero" a partir de uma busca limitada a este repositório.
+
+   A consequência é boa: a pergunta de RFC encolheu de "pode um adaptador USB
+   criar um filho SPI?" para "como descrever um periférico SPI fixo atrás de um
+   controlador USB hot-plug sem DT nem ACPI?". Modelagem de topologia, não
+   legitimidade de mecanismo.
+
+3. **O Counter não resolve o wrap de 16 bits**, como o §5.3 chegou a afirmar. Ele
+   dá a representação certa em userspace e permite acumular; a leitura da ponte
+   continua de 16 bits e a semântica de ler-e-repor continua do dispositivo.
+   Acumular exige ler rápido o bastante para não perder uma volta, e a regra do
+   `afe_bench` §5 — somar janelas curtas — continua valendo.
+
+**E uma nota sobre o cabeçalho do driver.** Depois da varredura ele ficou com
+dois parágrafos vizinhos dizendo o oposto: "PROTOCOL CONSTANTS ARE UNVERIFIED" e
+"Paid". Fundidos num só. Documentação que se contradiz é pior que documentação
+ausente, porque as duas metades parecem deliberadas.
 

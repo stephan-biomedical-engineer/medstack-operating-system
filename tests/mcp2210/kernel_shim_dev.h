@@ -233,6 +233,25 @@ struct spi_board_info {
 	u32 mode;
 };
 
+#define SPI_DELAY_UNIT_USECS	0
+#define SPI_DELAY_UNIT_NSECS	1
+
+/* The subset the driver uses: microseconds and nanoseconds. */
+static inline int spi_delay_to_ns(const void *_d, struct spi_transfer *xfer)
+{
+	const struct { u16 value; u8 unit; } *d = _d;
+
+	(void)xfer;
+	switch (d->unit) {
+	case SPI_DELAY_UNIT_USECS:
+		return (int)d->value * 1000;
+	case SPI_DELAY_UNIT_NSECS:
+		return (int)d->value;
+	default:
+		return -EINVAL;
+	}
+}
+
 static inline u8 spi_get_chipselect(struct spi_device *spi, u8 idx)
 {
 	(void)idx;

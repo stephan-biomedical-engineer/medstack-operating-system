@@ -50,7 +50,7 @@ trabalhados do próprio DS20005176, o driver GPLv2 de terceiros lido como orácu
 
 ## O que a suíte diz hoje
 
-**150 verificações, 0 falhas, 0 defeitos confirmados.**
+**176 verificações, 0 falhas, 0 defeitos confirmados.**
 
 Os cinco defeitos que esta suíte demonstrou foram corrigidos pelas Fases 3 e 4
 do plano, e as verificações que os documentavam foram promovidas para `CHECK`.
@@ -94,6 +94,10 @@ Fases 1, 2 e 3.4 foi revertida no driver, uma de cada vez, e a suíte rodada:
 | a recuperação de uma ponte já ocupada (Fase 4) | 3 falhas, todas em E5 |
 | a recusa de uma contagem impossível (Fase 4) | 4 falhas |
 | o orçamento derivado de `len`/`speed_hz` (Fase 4) | 3 falhas, em D4 |
+| a recusa de `cs_change` intermediário (Fase 5) | 2 falhas, em F5 |
+| a recusa de `delay` intermediário (Fase 5) | 2 falhas, em F4 |
+| o arredondamento do `delay` para cima (Fase 5) | 2 falhas, em F1 e F2 |
+| GP8 só-entrada (Fase 5) | 3 falhas, em F7 |
 
 Cada injeção falha **só** as verificações que lhe dizem respeito, o que prova as
 duas coisas que interessam: que a suíte enxerga o defeito, e que as outras
@@ -117,8 +121,9 @@ já pagou uma vez.
 - Nada sobre concorrência, tempo real ou memória do kernel: o shim não tem
   threads, não dorme e não falha ao alocar. Qualquer afirmação sobre travamento
   ou corrida saída daqui vale zero.
-- Nada sobre o contrato do núcleo SPI que a Fase 5 cobre: `delay`, `cs_change` e
-  `bits_per_word` continuam descartados em silêncio, e esta suíte não os cobra.
+- Nada sobre o que o hardware faz com o atraso programado. A suíte verifica que
+  250 µs viram 3 quanta no comando `0x40`; que a ponte então segure o chip
+  select por 300 µs é uma afirmação sobre silício, e ninguém a mediu.
 - Nada sobre a bancada. Isto antecipa a classe de defeito que ela encontraria do
   jeito caro, com um conversor no meio e duas explicações possíveis para cada
   sintoma.

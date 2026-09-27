@@ -379,6 +379,91 @@ static void test_fragmentation(void)
 	do_release();
 }
 
+/* ============================ F. the SPI core contract (phase 5) */
+
+static void test_spi_contract(void)
+{
+	u8 a_tx[10], b_tx[20], a_rx[10], b_rx[20];
+	struct spi_transfer xs[2];
+
+	section("F. O contrato do nucleo SPI (Fase 5)");
+
+	fresh();
+	fill_pattern(a_tx, 10);
+	fill_pattern(b_tx, 20);
+
+	/* F1 - a delay on the last transfer becomes the CS hold, rounded up */
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	xs[0].delay.value = 250;
+	xs[0].delay.unit = SPI_DELAY_UNIT_USECS;
+	CHECK_EQ(run_message(xs, 1), 0);
+	CHECK_MSG(fake.last_cs_hold_quanta == 3,
+		  "250 us viram 3 quanta de 100 us: arredondado PARA CIMA");
+
+	/* F2 - and 2 us, which the hardware cannot express, costs one quantum */
+	fresh();
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	xs[0].delay.value = 2;
+	xs[0].delay.unit = SPI_DELAY_UNIT_USECS;
+	CHECK_EQ(run_message(xs, 1), 0);
+	CHECK_EQ(fake.last_cs_hold_quanta, 1);
+
+	/* F3 - no delay asked for is no delay programmed */
+	fresh();
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	CHECK_EQ(run_message(xs, 1), 0);
+	CHECK_EQ(fake.last_cs_hold_quanta, 0);
+
+	/*
+	 * F4 - a delay in the MIDDLE of a flattened message has nowhere to go,
+	 * and is refused rather than accumulated or moved to the end. A delay
+	 * that happens somewhere else is not the delay that was asked for.
+	 */
+	fresh();
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	xs[0].delay.value = 100;
+	xs[0].delay.unit = SPI_DELAY_UNIT_USECS;
+	xs[1].tx_buf = b_tx; xs[1].rx_buf = b_rx; xs[1].len = 20;
+	CHECK_EQ(run_message(xs, 2), -EINVAL);
+	CHECK_EQ(fake.exchanges, 0);
+
+	/* F5 - cs_change mid-message is the opposite of one transaction */
+	fresh();
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	xs[0].cs_change = 1;
+	xs[1].tx_buf = b_tx; xs[1].rx_buf = b_rx; xs[1].len = 20;
+	CHECK_EQ(run_message(xs, 2), -EINVAL);
+	CHECK_EQ(fake.exchanges, 0);
+
+	/* F6 - but cs_change on the LAST transfer is what every message means */
+	fresh();
+	memset(xs, 0, sizeof(xs));
+	xs[0].tx_buf = a_tx; xs[0].rx_buf = a_rx; xs[0].len = 10;
+	xs[0].cs_change = 1;
+	CHECK_EQ(run_message(xs, 1), 0);
+
+	/* F7 - GP8 is an input, permanently, and says so */
+	CHECK_EQ(mcp->gc.direction_output(&mcp->gc, 8, 1), -EIO);
+	CHECK_EQ(mcp->gc.get_direction(&mcp->gc, 8), GPIO_LINE_DIRECTION_IN);
+	CHECK_EQ(mcp->gc.direction_input(&mcp->gc, 8), 0);
+	clear_obs();
+	mcp->gc.set(&mcp->gc, 8, 1);
+	CHECK_MSG(fake.exchanges == 0,
+		  "e escrever nele nao fala com a ponte: o byte alto e don't care");
+
+	/* F8 - the other eight can still be outputs */
+	CHECK_EQ(mcp->gc.direction_output(&mcp->gc, 3, 1), 0);
+	CHECK_EQ(mcp->gc.get_direction(&mcp->gc, 3), GPIO_LINE_DIRECTION_OUT);
+
+	check_no_nvram_or_eeprom();
+	do_release();
+}
+
 /* ==================================================== D. the stall bound */
 
 static void test_stall_bound(void)
@@ -590,6 +675,7 @@ int main(void)
 	test_interrupt_counter();
 	test_fragmentation();
 	test_stall_bound();
+	test_spi_contract();
 	test_unimplemented_phases();
 
 	int status = report();
@@ -609,8 +695,9 @@ int main(void)
 	       "    do datasheet - que nao e o datasheet, e nao e a peca.\n"
 	       "  - nada sobre concorrencia, tempo real ou memoria: o shim nao tem\n"
 	       "    threads, nao dorme e nao falha ao alocar.\n"
-	       "  - nada sobre o contrato do nucleo SPI que a Fase 5 cobre: atrasos,\n"
-	       "    cs_change e bits_per_word continuam descartados em silencio.\n"
+	       "  - nada sobre o que o hardware faz com o atraso programado. Verifica-se\n"
+	       "    que 250 us viram 3 quanta no comando 0x40; que a ponte segure o chip\n"
+	       "    select por 300 us e uma afirmacao sobre silicio, e ninguem a mediu.\n"
 	       "  - nada sobre a bancada. Isto antecipa a classe de defeito que ela\n"
 	       "    encontraria do jeito caro, com um conversor no meio.\n");
 

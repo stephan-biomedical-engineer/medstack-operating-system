@@ -51,6 +51,8 @@ typedef int32_t s32;
 #define GENMASK(h, l)		(((~0UL) - (1UL << (l)) + 1) & (~0UL >> (64 - 1 - (h))))
 #define ARRAY_SIZE(a)		(sizeof(a) / sizeof((a)[0]))
 
+#define DIV_ROUND_UP(n, d)	(((n) + (d) - 1) / (d))
+#define NSEC_PER_USEC		1000L
 #define min(a, b)		((a) < (b) ? (a) : (b))
 #define max(a, b)		((a) > (b) ? (a) : (b))
 #define min_t(t, a, b)		((t)(a) < (t)(b) ? (t)(a) : (t)(b))

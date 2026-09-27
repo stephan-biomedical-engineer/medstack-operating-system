@@ -191,6 +191,7 @@ static void build_reply(const u8 *req, u8 *rep)
 		fake.active_cs = get_unaligned_le16(req + 10);
 		fake.cs_to_data = get_unaligned_le16(req + 12);
 		fake.data_to_cs = get_unaligned_le16(req + 14);
+		fake.last_cs_hold_quanta = fake.data_to_cs;
 		fake.data_to_data = get_unaligned_le16(req + 16);
 		fake.xfer_bytes = get_unaligned_le16(req + 18);
 		fake.spi_mode = req[20];
