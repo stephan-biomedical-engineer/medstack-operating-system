@@ -1220,7 +1220,7 @@ objetivo, implementada em fases. "Ainda não implementado" e "fora de escopo"
 são palavras diferentes e os documentos passam a usá-las como tais.
 
 Commits: `c60cb08f79d7` (bloco de cobertura, `hid-ids.h`, URL do datasheet) e
-`43d0c2e` (`MAINTAINERS`) em `linux-med` — os quatro mecânicos da Fase 6, com o
+`82f79b477cb8` (`MAINTAINERS`) em `linux-med` — os quatro mecânicos da Fase 6, com o
 bloco de escopo já reescrito antes de entrar, para que o histórico não registre
 uma decisão que durou um commit.
 
