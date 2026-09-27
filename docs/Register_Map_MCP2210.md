@@ -1584,6 +1584,31 @@ O conjunto de comandos e respostas descritos nesta secção diz respeito à func
  
 
 
+#### Tabela 3-62: Estrutura da Resposta 4 (*RESPONSE 4 STRUCTURE*)
+
+
+
+| Índice do Byte | Significado / Descrição |
+| --- | --- |
+| **0** | `0x42` – Confirmação/eco do código de comando (*Transfer SPI Data*) |
+| **1** | `0x00` – Dados SPI aceites – Comando concluído com sucesso – dados SPI aceites (*SPI Data accepted – Command Completed Successfully – SPI data accepted*) |
+| **2** | Quantidade de bytes de dados SPI recebidos que o integrado está a enviar de volta ao anfitrião (*How many SPI received data bytes the chip is sending back to the host*) |
+| **3** | **Estado do Motor de Transferência SPI** (*SPI Transfer Engine Status*): `0x30` – Transferência SPI não concluída; dados recebidos disponíveis (*SPI transfer not finished; received data available*) |
+| **4–63** | **Bytes de Dados SPI Recebidos** (*SPI received data bytes*). O número de bytes de dados é especificado no índice de byte 2. |
+
+#### Tabela 3-63: Estrutura da Resposta 5 (*RESPONSE 5 STRUCTURE*)
+
+
+
+| Índice do Byte | Significado / Descrição |
+| --- | --- |
+| **0** | `0x42` – Confirmação/eco do código de comando (*Transfer SPI Data*) |
+| **1** | `0x00` – Dados SPI aceites – Comando concluído com sucesso – dados SPI aceites (*SPI Data accepted – Command Completed Successfully – SPI data accepted*) |
+| **2** | Quantidade de bytes de dados SPI recebidos que o integrado está a enviar de volta ao anfitrião (*How many SPI received data bytes the chip is sending back to the host*) |
+| **3** | **Estado do Motor de Transferência SPI** (*SPI Transfer Engine Status*): `0x10` – Transferência SPI concluída – não há mais dados a enviar (*SPI transfer finished – no more data to send*) |
+| **4–63** | **Bytes de Dados SPI Recebidos** (*SPI received data bytes*). O número de bytes de dados é especificado no índice de byte 2. |
+ 
+
 ### 3.5.2 Cancelamento da Transferência SPI Atual (*CANCEL THE CURRENT SPI TRANSFER*)
 
 
