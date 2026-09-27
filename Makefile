@@ -98,6 +98,7 @@ ifeq ($(NATIVE),1)
   TOOL         :=
   KEY_ENV      := $(if $(KEY),MED_DATA_KEY_SOURCE=$(KEY),)
   KEY_ARGS     :=
+  KERNEL_ARGS  :=
 else
   KAS  := $(KAS_CONTAINER)
   TOOL := $(KAS_CONTAINER)
@@ -108,6 +109,27 @@ else
   endif
   KEY_ENV  :=
   KEY_ARGS := $(if $(KEY),--runtime-args "-e MED_DATA_KEY_SOURCE=$(KEY)",)
+  # Same gap as KEY_ARGS closes, for the pair that says where the kernel comes
+  # from, and it had been left open. kas-base.yml lists MED_KERNEL_GIT and
+  # MED_KERNEL_SRCREV under "env:", which makes kas forward them into bitbake -
+  # but only once they are inside the container, and the whitelist above does
+  # not carry them there. So the documented invocation,
+  #
+  #     MED_KERNEL_GIT=... MED_KERNEL_SRCREV=... make stm32
+  #
+  # dropped both, the bbappend's anonymous function returned early on an empty
+  # MED_KERNEL_GIT, and the build produced ST's stock kernel with neither
+  # front-end driver in it. Green, and wrong, which is the failure the comment
+  # above this block warns about - written for the key and not applied here.
+  #
+  # The path is translated as well, because the tree is bind-mounted at /work:
+  # a host path in that URL points at nothing inside the container, and the
+  # fetch would fail at do_fetch rather than silently, but there is no reason
+  # to make a person discover that.
+  # --runtime-args accumulates (kas-container:395), so this composes with the
+  # key above instead of replacing it.
+  KERNEL_GIT_IN_CTR := $(subst $(CURDIR),/work,$(MED_KERNEL_GIT))
+  KERNEL_ARGS := $(if $(MED_KERNEL_GIT),--runtime-args "-e MED_KERNEL_GIT=$(KERNEL_GIT_IN_CTR) -e MED_KERNEL_SRCREV=$(MED_KERNEL_SRCREV)",)
 endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \
@@ -185,8 +207,10 @@ risks: $(TOOL)
 	@grep -H LAYERSERIES_COMPAT layers/meta-qt6/conf/layer.conf
 
 parse: $(TOOL)
-	$(KAS) shell $(BOARD_CFG) -c "bitbake -p"
-	$(KAS) shell $(BOARD_CFG) -c "bitbake -n $(IMAGE)"
+	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -p"
+	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -n $(IMAGE)"
+	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c \
+	  "bitbake -e virtual/kernel | grep -E '^(PV|MED_AFE_KCONFIG|KERNEL_MODULE_AUTOLOAD)=' || true"
 
 framework: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake med-framework-api"
@@ -195,13 +219,13 @@ service: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake eeg-acquisition-service"
 
 qemu: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(QEMU_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(QEMU_CFG)
 
 stm32: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(STM32_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)
 
 tomograph: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) build $(TOMO_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(TOMO_CFG)
 
 # Cheapest test of the update path: no image boot, no bootloader, no slots -
 # just the signature, the keyring, the codeSigning purpose and the CRL.
