@@ -113,4 +113,20 @@ python () {
     d.appendVar('SRC_URI', ' file://med-stm32mp-drivers.cfg')
     d.appendVar('KERNEL_CONFIG_FRAGMENTS', ' ${WORKDIR}/med-stm32mp-drivers.cfg')
     d.appendVar('MED_KERNEL_REQUIRED_CFG', ' ${WORKDIR}/med-stm32mp-drivers.cfg')
+
+    # The bridge is loaded at boot, and that is not a convenience.
+    #
+    # hid_generic_match() declines any device that some other registered HID
+    # driver matches (drivers/hid/hid-generic.c:37-57), so winning the bind
+    # needs no quirk - but "registered" is the operative word. If the bridge
+    # enumerates before this module is loaded, hid-generic, which is built in
+    # and always present, binds it first, and nothing hands it over afterwards
+    # without a manual unbind. Autoloading removes the race instead of
+    # documenting it.
+    #
+    # This travelled here from the recipe that used to build the module
+    # out-of-tree, deleted on 2026-09-27. A module changing where it is built
+    # must not change whether it loads.
+    if 'CONFIG_HID_MCP2210' in symbols:
+        d.appendVar('KERNEL_MODULE_AUTOLOAD', ' hid-mcp2210')
 }
