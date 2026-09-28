@@ -1369,3 +1369,26 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
     diferença nasce em execução. Ao projetar A/B, faça a lista do que o dispositivo cria sozinho na
     primeira vez e decida, item a item, se aquilo é identidade (tem de ser único e estável),
     conteúdo (pode ser duplicado) ou histórico (tem de ficar fora dos slots).
+17. **Compilar o objeto não é linkar o módulo.** `make drivers/hid/hid-mcp2210.o` passou limpo e o
+    build do Yocto quebrou em `do_compile_kernelmodules` com
+    `uses symbol counter_priv from namespace COUNTER, but does not import it` — um
+    `MODULE_IMPORT_NS` que falta só aparece no `modpost`, que é o estágio de *link* e que o alvo do
+    `.o` nunca alcança. A suíte de host também não linka nada, então ela era igualmente cega. A
+    validação original destes drivers incluía "`modpost` resolvendo tudo"; esse passo caiu sem que
+    nada ficasse vermelho. Um driver de módulo só está verificado depois de um `.ko` que linka.
+18. **Um `git commit --amend -a` varre o que estiver na árvore.** Uma correção de uma linha num
+    arquivo levou 183 linhas de outro assunto, em outro subsistema, para dentro do commit errado —
+    numa série destinada ao mainline, onde "uma mudança lógica por patch" é a regra mais dura de
+    todas. Foi desfeito com `reset --soft` e dois `git add` por caminho, conferindo que a árvore
+    resultante era byte a byte a mesma. Antes de emendar, `git status`; e para emendar só um
+    arquivo, `git add <caminho>` e `--amend` sem `-a`.
+19. **Um comando composto reporta o exit code do último elemento.**
+    `make stm32 > log 2>&1; echo $?; tail log` devolveu 0 num build que falhou, porque o 0 era do
+    `tail`. A notificação de fim de tarefa dizia sucesso. A regra é pôr o comando que importa por
+    último, ou capturar o código antes de qualquer coisa que rode depois dele — e, de todo modo,
+    abrir o log em vez de acreditar no código de saída.
+20. **`bitbake -e` imprime o corpo das funções python anônimas.** Um `grep` por nome de arquivo casa
+    com o texto do código-fonte e não com o valor de uma variável, o que transformou um
+    não-achado em achado por alguns minutos. Ancorar em `^VARIAVEL=` é a diferença entre ler o
+    datastore e ler o recipe.
+

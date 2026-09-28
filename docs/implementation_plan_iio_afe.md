@@ -719,9 +719,10 @@ driver; são dois valores de reset que ninguém programou.
 
 ### 15.2 As duas resoluções, e a escolha é clínica
 
-**Não decidida.** É a única coisa em toda esta série de trabalho que muda o que
-um registro de sessão afirma sobre um paciente, e por isso não foi resolvida por
-conveniência de build.
+**Decidida em 2026-09-28: a opção 1.** O controle de bias foi implementado no
+driver (`6d8d5f7eeff9`), e o §15.4 registra o que isso produziu. As duas
+alternativas ficam abaixo como estavam, porque a razão de ter escolhido a
+primeira é o que a comparação mostra.
 
 1. **Implementar o controle de bias no `ti-ads1299`.** É uma lacuna real do
    driver: o ADS1299 tem o amplificador de bias e os registradores `BIAS_SENSP`/
@@ -742,11 +743,83 @@ transforma o link numa diferença clínica — o que ele já é para o *timestam
 (§1), e o custo de estendê-la ao bias é que a lista de "o que difere por link"
 deixa de ter um item e passa a ter dois.
 
-### 15.3 O que isso bloqueia hoje
+### 15.3 O que isso bloqueava
 
-O perfil `usb` (e o `spi`) não produzem imagem. **Não bloqueia** o driver da
+O perfil `usb` (e o `spi`) não produziam imagem. **Não bloqueava** o driver da
 ponte, o do conversor, nem a §8: o `bitbake virtual/kernel` constrói os dois
 módulos com os símbolos no `.config` final, que é o que aquelas afirmações
-precisam. Bloqueia a bancada — a Fase 6 do `afe_bench` ("o framework, a
-aplicação e a suíte") precisa de uma imagem para rodar.
+precisam. Bloqueava a bancada — a Fase 6 do `afe_bench` ("o framework, a
+aplicação e a suíte") precisa de uma imagem para rodar. **Desbloqueado**: ver
+o §15.4.
+
+### 15.4 Como ficou (2026-09-28)
+
+O amplificador de bias tem agora três configurações, e elas são **nomeadas**,
+porque um booleano não as distingue e elas são clinicamente diferentes:
+
+| Valor | O que o amplificador faz |
+| :--- | :--- |
+| `off` | desligado. Estado de reset, e o que este driver fazia. |
+| `reference` | dirige BIASREF, gerado internamente como `(AVDD + AVSS) / 2`. Um bias DC para o sujeito e **nenhuma** rejeição ativa de modo comum: nada do que é medido realimenta. |
+| `derived` | dirige o inverso da média de todos os canais habilitados — o arranjo de eletrodo dirigido que de fato rejeita modo comum. |
+
+**A tradução clínica ficou na receita, não no driver.** `afe.bias_drive = true`
+vira `derived`, e o raciocínio está escrito em `do_derive_device_options`: quem
+prescreve *bias drive* está pedindo a rejeição de modo comum, não um mid-supply
+fixo. Se uma montagem quiser `reference`, isso precisa de uma prescrição capaz
+de dizê-lo — não de um default diferente no driver. Essa separação é a mesma que
+o §14 estabeleceu: o driver possui o vocabulário do seu transporte, a aplicação
+prescreve, e a tradução é explícita e por link.
+
+**Detalhes de implementação que valem saber antes de mexer.** A máscara de
+`BIAS_SENSP`/`BIAS_SENSN` vem de `num_adc_channels`, que vem do registrador ID,
+então os bits que uma variante não tem (`[5:4]` no -4, `[7:6]` no -4 e no -6)
+saem 0 sem tabela de variante — que é o que o datasheet pede. A **ordem de
+escrita** é carregada: `PD_BIAS` vai por último ao ligar e primeiro ao desligar,
+para que os registradores de derivação nunca descrevam algo diferente do que o
+amplificador está dirigindo. E a escrita é **recusada durante aquisição**
+(`iio_device_claim_direct_mode`): mudar o que é injetado no sujeito no meio de
+uma gravação poria duas configurações num registro sem nada dizendo onde é a
+fronteira.
+
+#### 15.4.1 Dois defeitos encontrados no caminho
+
+**`BIASREF_INT` estava acoplado à referência do ADC.** O probe escrevia
+`PWR_REFBUF | BIASREF_INT` juntos, condicionados a existir um regulador de VREF
+externo. São referências diferentes — o bit 7 é o buffer de referência do
+*conversor*, o bit 3 é a referência do *amplificador de bias* — e um VREF
+externo não diz nada sobre como BIASREF é alimentado. Com o amplificador
+desligado o bit não fazia efeito, então **nada estava errado em nenhuma placa**;
+passaria a estar no momento em que o bias fosse ligado. Agora viaja com a
+configuração de bias.
+
+**Um comentário no lugar errado, citando o registrador errado.** O bloco acima
+de `BIAS_SENSP` citava `SBAS499 Tables 20, 21 / Figures 58, 59`, que são as
+tabelas de `LOFF_SENSP`/`LOFF_SENSN`. O comentário *descrevia* os registradores
+de lead-off e estava fisicamente acima dos de bias — foi assim que os números
+errados entraram. Movido para os registradores que ele descreve; os de bias
+ganharam o próprio, com Tabelas 18, 19 e Figuras 56, 57, conferidas no
+documento.
+
+O commit que introduziu aquelas citações chamava-se *"cite the datasheet tables
+that were checked"*. A lição é estreita e vale: **uma citação só é evidência
+depois de a própria citação ser conferida** — e um comentário que migra de lugar
+leva as citações dele para um registrador que não é o seu.
+
+#### 15.4.2 O que isso NÃO mediu
+
+Nenhum amplificador foi energizado, nenhuma corrente foi injetada num eletrodo,
+e nenhum eletrodo mediu nada. O que está verificado é que compila limpo para
+arm64 com `W=1`, que o `checkpatch --strict` reporta as mesmas quatro
+observações pré-existentes, e que o perfil `usb` agora **produz uma imagem**
+(5615 tarefas, todas com sucesso, `.wic` de 2.761.966.592 bytes) cujo `eeg.conf`
+entregue carrega `device.option.bias_drive = derived` ao lado do `.sha256`. A
+validação clínica é a Fase 4 do `implementation_plan_afe_bench.md`.
+
+**E a recusa simétrica continua de pé.** O driver liga os comparadores de
+lead-off no probe e não oferece como desligá-los, então
+`afe.lead_off_detection = false` ainda quebraria o build pelo mesmo mecanismo.
+Hoje não dispara porque a prescrição diz `true` — com o qual o silício concorda
+**por sorte**, não por desenho (§15.1). Essa metade da colisão não foi
+resolvida.
 

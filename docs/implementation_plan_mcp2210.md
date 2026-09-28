@@ -1483,3 +1483,14 @@ toda máquina tem, e esta não é uma.
 Três injeções, cada uma localizada no grupo B: a soma virando atribuição falha
 6, não repor o hardware falha 9, aceitar escrita não-zero falha 2.
 
+**E um defeito que essas três injeções não podiam ver.** Faltava
+`MODULE_IMPORT_NS(COUNTER)`: o núcleo do Counter exporta num namespace de
+símbolos próprio e o `modpost` recusa linkar um módulo que não declare o import.
+O `make drivers/hid/hid-mcp2210.o` passou limpo, a suíte de host passou em
+209/0/0, e o build do Yocto quebrou em `do_compile_kernelmodules`. **Compilar o
+objeto não é linkar o módulo** — o erro aparece no estágio de link, que o alvo do
+`.o` nunca alcança e que a suíte de host não exercita. A validação original
+destes drivers incluía "`modpost` resolvendo tudo"; o passo caiu sem nada ficar
+vermelho. Registrado como regra 17 em `BRINGUP_STM32MP2.md` §11, e a partir daqui
+um driver de módulo só conta como verificado depois de um `.ko` que linka.
+
