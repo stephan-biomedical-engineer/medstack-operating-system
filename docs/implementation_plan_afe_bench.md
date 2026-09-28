@@ -190,38 +190,47 @@ de 64 bytes fecha ida e volta.
 isto: `mcp2210_spi.spi_device=""` (o comentário em `mcp2210-spi.c:140-148` diz que essa é a razão de
 ele ser parâmetro).
 
-**Procedimento**:
+**Procedimento**: `scripts/afe-phase1.sh`, que roda **na placa**.
 
 ```sh
-# 1. O dispositivo bruto, antes de qualquer driver nosso
-lsusb -d 04d8: -v | head -40          # VID/PID, classe HID, endpoints, bInterval
-cat /sys/kernel/debug/usb/devices      # confirma full-speed e o endpoint de interrupção
-
-# 2. Carregar o nosso driver sem nada atrás da ponte
-insmod /lib/modules/$(uname -r)/extra/mcp2210-spi.ko spi_device=""
-dmesg | tail -20
-
-# 3. Quem ganhou o bind
-ls -l /sys/bus/hid/drivers/mcp2210/
-ls -l /sys/bus/hid/drivers/hid-generic/ | grep 04D8
-
-# 4. O gpiochip e o contador
-gpiodetect | grep mcp2210
-gpioinfo $(gpiodetect | grep mcp2210 | cut -d' ' -f1)
-D=/sys/bus/hid/devices/*04D8*
-cat $D/interrupt_count
-echo 1 > $D/interrupt_count_reset && cat $D/interrupt_count
+scp scripts/afe-phase1.sh root@<placa>:/tmp/
+ssh root@<placa> /tmp/afe-phase1.sh | tee fase1-$(date +%F).log
 ```
+
+Ele confere os critérios 1 a 5 sozinho, imprime um `PASS`/`FAIL` por critério com
+o valor observado ao lado, e termina com um bloco pronto para colar no §2 do
+registro. O critério 6 e as duas injeções de falha restantes são manuais — pedem
+gerador de sinais e uma pessoa — e o script prepara cada um e diz o que medir.
+
+Ele não interpreta uma falha: o que cada critério derruba está escrito abaixo, e
+adivinhar seria pior que reportar o observado.
+
+> **O procedimento que estava aqui foi reescrito em 2026-09-28**, porque tinha
+> envelhecido em quatro pontos e cada um teria falhado na bancada por motivo
+> nenhum de hardware:
+>
+> | O que dizia | Por que não vale mais |
+> | :--- | :--- |
+> | `insmod .../extra/mcp2210-spi.ko` | o módulo é *in-tree* desde a §8 do plano do MCP2210: chama-se `hid-mcp2210`, mora em `kernel/drivers/hid/` e é autocarregado. O parâmetro agora é `hid_mcp2210.spi_device=` |
+> | `interrupt_count` / `interrupt_count_reset` | os dois atributos sysfs **não existem**: o contador virou um `counter_device`, e o caminho é `/sys/bus/counter/devices/counterX/count0/count` |
+> | `gpiodetect` / `gpioinfo` | **libgpiod não está na imagem**. O script lê `/sys/kernel/debug/gpio` e `/sys/bus/gpio/devices/`, que estão (`CONFIG_GPIO_CDEV=y`, `CONFIG_DEBUG_FS=y`, e `CONFIG_GPIO_SYSFS` **não**) |
+> | `9 chip selects` na linha do probe | são **oito**. A mensagem dizia nove porque imprimia `MCP2210_NGPIO`, e isso foi corrigido — ela agora diz `9 GPIOs, 8 chip selects`. O critério 2 abaixo acompanhou |
+>
+> A quarta é a que vale reter: **o critério conferia um número que o driver já
+> tinha deixado de significar.** Um roteiro de bancada envelhece junto com o
+> código que ele mede, e ninguém percebe até o dia caro.
 
 **Critérios**:
 
 1. `lsusb` mostra o VID/PID que a Fase 0 confirmou, como dispositivo HID *full-speed*;
-2. `dmesg` traz exatamente `USB-SPI bridge ready, 9 chip selects, nothing attached`;
+2. `dmesg` traz exatamente `USB-SPI bridge ready, 9 GPIOs, 8 chip selects, nothing attached`;
 3. `/sys/bus/hid/drivers/mcp2210/` contém o dispositivo, e `hid-generic` **não**;
 4. `gpiodetect` lista um `gpiochip` de rótulo `mcp2210` com **9** linhas;
-5. `interrupt_count` lê um número e `interrupt_count_reset` o zera — o que prova que os opcodes
-   `GET_CHIP_SETTINGS` / `SET_CHIP_SETTINGS` / `GET_INT_COUNT` e seus deslocamentos estão certos,
-   isto é, **a primeira confirmação empírica das constantes `[DS20005176?]`**;
+5. em `/sys/bus/counter/devices/counterX/count0/`: `count` lê o mesmo número duas vezes seguidas
+   em repouso, escrever `0` o zera, e escrever qualquer outro valor é recusado. Isso prova que os
+   opcodes `GET_CHIP_SETTINGS` / `SET_CHIP_SETTINGS` / `GET_INT_COUNT` e seus deslocamentos estão
+   certos, isto é, **a primeira confirmação empírica das constantes `[DS20005176?]`** — que até
+   hoje só foram conferidas contra uma *transcrição* do datasheet;
 6. injetando pulsos no GP6 com o gerador (1 kHz, 1000 pulsos, porta habilitada), o contador avança
    de 1000 ± 0 — *não* "avança".
 
