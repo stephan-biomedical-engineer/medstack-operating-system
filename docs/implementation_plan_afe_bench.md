@@ -276,19 +276,29 @@ nome dizendo isso (`med-kernel-bench.cfg`, aplicado por uma variável, nunca por
 sem `spidev`: fazer o *loopback* com o próprio `ti-ads1299` lendo o registrador ID e comparando com
 o eco — mas aí já há duas variáveis de novo, que é o que esta fase existe para evitar.
 
-**Procedimento**:
+**Procedimento**: `scripts/afe-phase2.sh`, que roda **na placa**.
+
+Ele confere o critério 1 (o eco nos sete tamanhos) sozinho, tabula o tempo por
+transação para o critério 2, e prepara os critérios 3, 4 e 5 — que só um
+osciloscópio ou analisador lógico enxerga, e que nenhum script pode observar de
+dentro da placa.
+
+**O fragmento de bancada agora existe**, que é o que esta fase pedia e não
+tinha: `MED_BENCH = "1"` aplica `meta-med-distro/.../med-kernel-bench.cfg`, hoje
+com `CONFIG_SPI_SPIDEV=m` e nada mais. Nenhum perfil o liga por padrão, ele é
+repassado ao container pelo mesmo mecanismo do `MED_KERNEL_GIT`, e o bbappend
+emite um `bb.warn` sempre que está ligado — porque o erro que acontece de
+verdade não é alguém ligar o bench de propósito, é alguém esquecer de desligar.
 
 ```sh
-rmmod mcp2210-spi
-insmod mcp2210-spi.ko spi_device="spidev" spi_max_speed_hz=1000000
-ls -l /dev/spidev*
-
-# Padrão conhecido, nos tamanhos que importam
-for n in 1 2 59 60 61 120 512; do
-    head -c $n /dev/urandom > /tmp/tx.$n
-    spidev_test -D /dev/spidev0.0 -s 1000000 -I /tmp/tx.$n -v
-done
+MED_KERNEL_GIT=... MED_KERNEL_SRCREV=... MED_BENCH=1 make stm32
 ```
+
+O `spidev_test` vem de `spidev-test.bb`, que já existe no `meta-openembedded`
+que este projeto usa — `bitbake spidev-test` e copiar o binário para a placa. Ele
+deliberadamente **não** foi acrescentado à imagem: um binário que fala com o
+barramento do conversor não pertence a uma lista de pacotes, e copiá-lo para
+`/tmp` numa sessão de bancada deixa a exceção visível em vez de instalada.
 
 **Critérios**:
 
@@ -849,6 +859,24 @@ Três razões, e nenhuma é simetria de documento:
    continua sendo uma alegação até que alguém leia a NVRAM antes e depois de uma sessão inteira e
    compare. O risco não mudou em nada: um driver que escrevesse NVRAM por engano poderia mudar o
    VID/PID de um aparelho em campo — falha permanente, num componente soldado.
+
+**Procedimento**: `scripts/afe-phase8b.sh`, que roda **na placa**, e as
+subseções abaixo são o que ele percorre.
+
+Ele confere o que é observável de dentro da placa — o `spi_master`, o
+`gpiochip` e suas nove linhas, o `counter` e sua descrição, e grava o snapshot
+de identidade que o teste negativo compara ao final. O resto ele prepara e
+nomeia, porque precisa de gerador, de analisador USB ou de uma pessoa puxando o
+cabo.
+
+**Uma limitação que o script diz na cara, e que vale registrar aqui.** O
+snapshot negativo alcança os descritores USB — VID, PID, strings —, que é o que
+a NVRAM produz na enumeração. Ele **não** lê os ajustes de *power-up* (`0x61`)
+nem a EEPROM (`0x50`), porque o driver ainda não expõe nenhum dos dois a
+userspace: a Fase 6A.1 do `implementation_plan_mcp2210.md` leu a NVRAM apenas
+para o log, e a EEPROM é a 6B/6C. Então o teste negativo desta fase cobre a
+identidade e não o conteúdo inteiro, e dizer isso é melhor que um snapshot que
+parece cobrir tudo. Ele fecha quando a decisão de interface da 6A.2/6C existir.
 
 ### 13.1 O que dá para testar **sem hardware nenhum**, e o que isso não prova
 

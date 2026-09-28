@@ -99,6 +99,7 @@ ifeq ($(NATIVE),1)
   KEY_ENV      := $(if $(KEY),MED_DATA_KEY_SOURCE=$(KEY),)
   KEY_ARGS     :=
   KERNEL_ARGS  :=
+  # native: kas reads MED_BENCH from the environment directly
 else
   KAS  := $(KAS_CONTAINER)
   TOOL := $(KAS_CONTAINER)
@@ -130,6 +131,8 @@ else
   # key above instead of replacing it.
   KERNEL_GIT_IN_CTR := $(subst $(CURDIR),/work,$(MED_KERNEL_GIT))
   KERNEL_ARGS := $(if $(MED_KERNEL_GIT),--runtime-args "-e MED_KERNEL_GIT=$(KERNEL_GIT_IN_CTR) -e MED_KERNEL_SRCREV=$(MED_KERNEL_SRCREV)",)
+  # Same gap, same fix, for the bench-only kernel symbols.
+  KERNEL_ARGS += $(if $(MED_BENCH),--runtime-args "-e MED_BENCH=$(MED_BENCH)",)
 endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \

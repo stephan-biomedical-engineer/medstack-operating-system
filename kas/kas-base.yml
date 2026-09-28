@@ -174,3 +174,10 @@ env:
   # meta-med-bsp/dynamic-layers/stm-st-stm32mp/recipes-kernel/linux/.
   MED_KERNEL_GIT:
   MED_KERNEL_SRCREV:
+
+  # Bench-only kernel symbols, same null-default mechanism. MED_BENCH=1 adds
+  # med-kernel-bench.cfg, which today means CONFIG_SPI_SPIDEV - a userspace path
+  # to the converter's SPI bus, which phase 2 of the bench plan needs and which
+  # must never reach a shipped device. The distro bbappend warns loudly when it
+  # is on, because the mistake that happens is forgetting to turn it off.
+  MED_BENCH:

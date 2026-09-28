@@ -58,6 +58,34 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 # when that tree is what is being built.
 MED_KERNEL_REQUIRED_CFG ?= ""
 
+# --- O fragmento de bancada, e o guarda que o mantém fora do produto.
+#
+# MED_BENCH = "1" acrescenta símbolos que existem para medir a placa e que não
+# pertencem a um aparelho entregue - hoje CONFIG_SPI_SPIDEV, que a Fase 2 do
+# plano de bancada exige e que é um caminho de userspace para o barramento do
+# conversor.
+#
+# Declarado com "?=" e vazio: um perfil que não pede não ganha. E a recusa
+# abaixo é o que impede o erro que realmente acontece, que não é alguém ligar o
+# bench de propósito - é alguém esquecer de desligar.
+MED_BENCH ?= ""
+
+python () {
+    if not bb.data.inherits_class('kernel', d):
+        return
+    if (d.getVar('MED_BENCH') or '').strip() != '1':
+        return
+
+    d.appendVar('SRC_URI', ' file://med-kernel-bench.cfg')
+    d.appendVar('KERNEL_CONFIG_FRAGMENTS', ' ${WORKDIR}/med-kernel-bench.cfg')
+    d.appendVar('MED_KERNEL_REQUIRED_CFG', ' ${WORKDIR}/med-kernel-bench.cfg')
+
+    bb.warn("MED_BENCH = 1: the kernel gains bench-only symbols "
+            "(med-kernel-bench.cfg). This image opens a userspace path to the "
+            "converter's SPI bus and must not be shipped.")
+}
+
+
 python do_med_check_kernel_config() {
     import os
     import re
