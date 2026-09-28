@@ -313,6 +313,44 @@ um número.
 
 ## 7. Fase 3 — o conversor responde, e a identidade vem do silício
 
+> **Esta fase mistura duas coisas, e o conserto é de ordem e não de critério.**
+> Registrado em 2026-09-28, ao revisar a cadeia completa antes da bancada.
+>
+> `ads1299_self_test()` roda **dentro do probe** e é o que decide se
+> `devm_iio_device_register()` acontece (`ti-ads1299.c`, o `dev_err_probe` de
+> "self test failed, front-end not registered"). Então os critérios abaixo — o
+> probe fechando sem erro, `iio:device0/name`, `/dev/med-afe-eeg0` — não medem
+> "o ADS1299 respondeu pelo registrador de ID". Medem **isso e mais o caminho
+> analógico ter passado num teste**.
+>
+> Isso importa porque a §11 deste registro documenta um **fator de dois** que
+> pode reprovar aquele autoteste em silício bom: a Tabela 14 não diz se a
+> amplitude do gerador é pico ou pico a pico, e se a leitura certa for VREF/2400
+> o teste espera o dobro da oscilação real. O risco está escrito na Fase 4, e
+> **ele morde aqui** — com o sintoma "nenhum dispositivo IIO aparece", que é
+> indistinguível de a ponte USB→SPI não funcionar.
+>
+> A decomposição que separa as duas, e ela usa costuras que já existem:
+>
+> | Ordem | O que prova | Como |
+> | :--- | :--- | :--- |
+> | 1 | USB → HID → `spi_controller` | Fase 1, com `mcp2210_spi.spi_device=""`: a ponte sozinha, nada analógico no quadro |
+> | 2 | `spi_controller` → bytes | Fase 2, jumper MOSI/MISO |
+> | 3 | o conversor responde | **`dmesg`**, não sysfs: a leitura do ID acontece dentro do probe, antes do autoteste |
+> | 4 | o caminho analógico | o autoteste, que é um critério da Fase 4 disfarçado de pré-requisito desta |
+> | 5 | a plataforma vê o front-end | `/dev/med-afe-eeg0` |
+>
+> O marco 5 é mais forte do que parece e vale usar como tal: a regra udev casa em
+> `ATTR{name}=="ads1299-*"`, e esse nome o driver deriva do registrador de ID que
+> a peça respondeu. **O symlink existir é, ele mesmo, a prova de que houve
+> silício do outro lado** — não é preciso um `cat` separado para isso.
+>
+> E um cuidado de sessão: com `MED_EEG_LINK=usb` o `eeg-acquisition-service` abre
+> o dispositivo IIO, e se ele não existir o serviço falha e reinicia sem
+> `StartLimitBurst` — inundando exatamente o log que se está lendo. Mascarar o
+> serviço antes de começar (`systemctl mask eeg-acquisition.service`) e desmascarar
+> na Fase 6.
+
 **Objetivo**: o ADS1299 é reconhecido pelo registrador de ID, e o caminho `iio` existe com o nome
 estável que a plataforma usa.
 
