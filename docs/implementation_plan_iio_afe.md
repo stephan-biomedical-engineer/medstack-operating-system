@@ -670,3 +670,83 @@ bitbake nos quatro links e nas recusas.
 dívida `[SBAS499?]` inteira — com um agravante: se uma constante estiver errada, o driver recusa o
 dispositivo e a bancada perde o acesso ao `in_voltageN_raw` que usaria para descobrir qual. A Fase 0
 do `implementation_plan_afe_bench.md` continua bloqueando, agora com mais razão.
+
+---
+
+## 15. Achado (2026-09-27): o perfil `usb` nunca foi construível de ponta a ponta
+
+Descoberto ao tentar provar a integração single-source do driver da ponte
+(`implementation_plan_mcp2210.md` §8): com `MED_EEG_LINK = "usb"`, a imagem
+**não constrói**, e para antes do kernel, em
+`eeg-acquisition-service:do_derive_device_options`:
+
+```
+afe.bias_drive = true cannot be honoured on link 'usb': the kernel driver
+leaves the bias amplifier powered down and offers no control to enable it.
+```
+
+**Isto é a plataforma funcionando, não um defeito dela.** É o `do_derive_device_options`
+— o mecanismo do §14 que traduz a prescrição `afe.*` por link — recusando-se a
+selar uma configuração que promete ao registro de sessão um *bias drive* que o
+link não entrega. Exatamente o que ele existe para fazer, e a mensagem dispensa
+investigação.
+
+O que o achado revela é outra coisa: **ninguém tinha tentado**. O perfil de
+produto é `amp`, o `make stm32` o constrói, e os links `spi` e `usb` nunca
+passaram de um `bitbake -p`. A recusa é pré-existente e independe de qualquer
+trabalho da ponte.
+
+### 15.1 A colisão, nos dois sentidos
+
+`eeg.conf` prescreve, nas linhas 53 e 55:
+
+```
+afe.lead_off_detection = true
+afe.bias_drive = true
+```
+
+E `ti-ads1299.c` tem comportamento fixo nos dois, em direções opostas:
+
+| Prescrição | O que o driver faz | Resultado |
+| :--- | :--- | :--- |
+| `lead_off_detection = true` | liga os comparadores no probe, sem controle para desligar | coincide **por sorte** — a recusa simétrica existe e não dispara |
+| `bias_drive = true` | deixa o amplificador de bias desligado, sem controle para ligar | **recusa, e o build para** |
+
+A primeira linha é a mais inquietante das duas: a prescrição e o silício
+concordam por acidente, e um `eeg.conf` que pedisse `lead_off_detection = false`
+quebraria o build pelo mesmo mecanismo. Nenhuma das duas é uma escolha do
+driver; são dois valores de reset que ninguém programou.
+
+### 15.2 As duas resoluções, e a escolha é clínica
+
+**Não decidida.** É a única coisa em toda esta série de trabalho que muda o que
+um registro de sessão afirma sobre um paciente, e por isso não foi resolvida por
+conveniência de build.
+
+1. **Implementar o controle de bias no `ti-ads1299`.** É uma lacuna real do
+   driver: o ADS1299 tem o amplificador de bias e os registradores `BIAS_SENSP`/
+   `BIAS_SENSN` para roteá-lo, e o driver não os escreve. Cai na Fase 4 do
+   `implementation_plan_afe_bench.md` ("o caminho analógico, estático"), que é
+   onde o bias seria medido de qualquer forma. Mais trabalho, e resolve a
+   prescrição em vez de renegociá-la.
+
+2. **A prescrição passar a ser por link.** O `amp` entrega bias porque o
+   firmware do M33 o programa; o `spi` e o `usb` passariam a declarar que não
+   entregam. Isso é honesto e é barato — mas é uma afirmação clínica de que uma
+   aquisição sem *bias drive* é aceitável nesses links, e ela precisa de quem a
+   assine, não de quem a compile.
+
+A opção 1 é a que preserva a propriedade que este plano defende: a mesma
+prescrição, a mesma aplicação, e o link como detalhe de transporte. A opção 2
+transforma o link numa diferença clínica — o que ele já é para o *timestamp*
+(§1), e o custo de estendê-la ao bias é que a lista de "o que difere por link"
+deixa de ter um item e passa a ter dois.
+
+### 15.3 O que isso bloqueia hoje
+
+O perfil `usb` (e o `spi`) não produzem imagem. **Não bloqueia** o driver da
+ponte, o do conversor, nem a §8: o `bitbake virtual/kernel` constrói os dois
+módulos com os símbolos no `.config` final, que é o que aquelas afirmações
+precisam. Bloqueia a bancada — a Fase 6 do `afe_bench` ("o framework, a
+aplicação e a suíte") precisa de uma imagem para rodar.
+

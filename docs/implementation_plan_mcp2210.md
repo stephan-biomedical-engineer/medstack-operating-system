@@ -1350,3 +1350,76 @@ duas perguntam qual interface Linux serve para configuração persistente de um
 dispositivo. Nenhuma resposta óbvia serve sozinha, e responder duas vezes
 produziria duas ABIs para o mesmo tipo de coisa.
 
+### 2026-09-27 — §8: uma origem, provada num build cruzado
+
+`db8861a` (Makefile), `7bc1f22` (single-source) e o conserto de versionamento
+que veio depois. O driver da ponte existia em duas cópias que já divergiam numa
+linha; agora existe uma, na árvore do kernel, e a camada adjunta não carrega
+código de kernel nenhum — só a regra udev, o overlay e o mapeamento por link,
+que é a razão de ela existir.
+
+**Medido, num build cruzado de verdade** (`bitbake virtual/kernel`,
+`MACHINE=stm32mp25-disco`, `MED_EEG_LINK=usb`, kernel vindo do fork):
+
+| Verificação | Resultado |
+| :--- | :--- |
+| `hid-mcp2210.ko` e `ti-ads1299.ko` | compilados para aarch64 |
+| `CONFIG_HID_MCP2210=m`, `CONFIG_TI_ADS1299=m` | presentes no `.config` **final** |
+| `do_med_check_kernel_config` | `Succeeded` |
+| Versão do kernel | `6.6.129-g013e9b1ab0f2` |
+| Cópias do driver no repositório | uma |
+
+O `do_med_check_kernel_config` passando é o que sustenta a afirmação do commit
+de que apagar o `do_check_kernel_config` da receita não perdeu capacidade: o
+guard que sobrou lê o `.config` real e teria falhado se o `merge_config` tivesse
+derrubado um dos símbolos por dependência não atendida.
+
+### 2026-09-27 — Dois defeitos de build que a §8 desenterrou
+
+Nenhum dos dois é da §8. Os dois estavam no caminho dela.
+
+**1. O caminho containerizado descartava `MED_KERNEL_GIT`.** `kas-base.yml` lista
+a variável sob `env:`, o que faz o kas entregá-la ao bitbake — mas só depois de
+estar *dentro* do container, e `kas-container:731` repassa uma whitelist fixa que
+não a inclui. A invocação que o próprio cabeçalho do bbappend documenta perdia
+as duas variáveis, a função anônima retornava cedo, e o build produzia o kernel
+padrão da ST **sem nenhum dos dois drivers** — verde e errado. O Makefile já
+resolvia exatamente isso para `MED_DATA_KEY_SOURCE` com `KEY_ARGS`, e o
+comentário acima daquele bloco descreve a falha inteira; nunca foi aplicado a
+este par. `KERNEL_ARGS` é o mesmo conserto, com a tradução do caminho para
+`/work` de brinde.
+
+Uma correção de rota junto: o cabeçalho do bbappend dizia "NOT YET EXERCISED IN
+A BUILD", e isso **já estava desatualizado** antes deste trabalho — o
+`buildhistory` mostra uma imagem completa construída em 27/09 00:45 com o fork
+em `da723f985714`, presumivelmente com `NATIVE=1`, onde o ambiente passa direto.
+Eu repeti a frase do comentário como se fosse fato em vez de checar o
+`buildhistory`. O comentário foi reescrito com o que foi medido.
+
+**2. `version-going-backwards`, e ele dispararia a cada commit.** O
+`do_packagedata` recusou o build: de `+medda723f9857140+da723f9857` para
+`+med013e9b1ab0f20+013e9b1ab0`. A revisão aparecia **duas vezes** na versão do
+pacote e as duas eram hashes — e hash não tem ordem, então avançar o branch
+parece um downgrade.
+
+A metade que este repositório possuía era `d.appendVar('PV', '+med%s' % rev[:12])`.
+Foi removida: a revisão já estava na versão do pacote por outro componente e no
+caminho do módulo (`usr/lib/modules/6.6.129-g013e9b1ab0f2`), então a terceira
+cópia não comprava rastreabilidade — comprava um defeito. O marcador `+med`
+fica, porque a propriedade que ele defende (um build do fork nunca ser
+confundido com o release da ST) não depende do hash.
+
+A outra metade não é removível aqui, e o check foi **rebaixado a aviso, para esta
+receita e só quando se constrói do fork**, com a justificativa escrita no
+código: `version-going-backwards` protege um *package feed* — um cliente
+incremental que recusaria um upgrade cuja versão caiu — e este projeto não tem
+feed. Ele constrói imagens inteiras e as atualiza por bundles RAUC A/B que
+substituem o rootfs. Não existe cliente comparando versões de pacote em lugar
+nenhum do caminho.
+
+A alternativa era o PR service (`PRSERV_HOST`), que é o mecanismo desenhado para
+isto e tornaria a ordenação verdadeira em vez de dispensada. Foi recusado porque
+guarda o contador num sqlite local à máquina, e um build cuja versão depende de
+quantas vezes *este host* já construiu é uma troca pior para um projeto que
+afirma reprodutibilidade.
+

@@ -375,6 +375,16 @@ documental de que o conversor conversa.
 
 ## 8. Fase 4 — o caminho analógico, estático
 
+> **Pré-requisito descoberto em 2026-09-27, e ele é anterior a qualquer energia.**
+> O perfil `usb` **não constrói uma imagem**: `do_derive_device_options` recusa
+> `afe.bias_drive = true` porque o `ti-ads1299` deixa o amplificador de bias
+> desligado e não oferece controle para ligá-lo. A recusa está certa — é o
+> mecanismo que impede um registro de prometer um bias que o hardware não teve.
+> Mas ela significa que esta fase não tem imagem para rodar até que a escolha do
+> `implementation_plan_iio_afe.md` §15.2 seja feita: implementar o controle de
+> bias no driver, ou tornar a prescrição dependente do link. A primeira resolve
+> esta fase de passagem, porque o bias seria medido aqui de qualquer forma.
+
 **Objetivo**: a escala publicada pelo kernel é verdadeira, e cada modo do MUX de entrada faz o que
 diz. Ainda sem *buffer*: tudo por leitura pontual em `in_voltage0_raw`, que é o que o
 `selfTest()` do framework usa.

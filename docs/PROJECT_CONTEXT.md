@@ -88,7 +88,7 @@ keeps that number meaningful. See `implementation_plan_iio_afe.md` §4.
 |            [One analogue front-end's kernel code, quarantined]          |
 |  - ti-ads1299: IIO driver, derived from mainline drivers/iio/adc/       |
 |    ti-ads1298.c (Linux 6.9), backported to 6.6 and adapted              |
-|  - mcp2210-spi: HID driver registering a USB bridge as a real           |
+|  - hid-mcp2210: HID driver registering a USB bridge as a real           |
 |    spi_controller, plus its gpiochip and the GP6 edge counter           |
 |  - udev rule giving the converter a name, not a probe-order number      |
 |  - devicetree overlay for the hat wiring (per machine, dynamic-layers)  |
@@ -106,7 +106,7 @@ computed against — does not carry it at all. What it installs is decided by `M
 | `simulated` | nowhere | nothing |
 | `amp` | on the Cortex-M33, over `rpmsg` | nothing (the firmware is a BSP artefact, via `MED_AMP_FIRMWARE`) |
 | `spi` | on the host's SPI bus, `DRDY` as a real interrupt | `ti-ads1299` |
-| `usb` | behind a USB-SPI bridge, no interrupt possible | `ti-ads1299`, `mcp2210-spi`, the udev rule |
+| `usb` | behind a USB-SPI bridge, no interrupt possible | `ti-ads1299`, `hid-mcp2210`, the udev rule |
 
 That table is the extensibility result the layer exists to produce: a new analogue front-end costs
 one adjunct layer and three variables, and **zero lines in the four platform layers**.
