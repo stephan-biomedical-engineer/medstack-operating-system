@@ -50,7 +50,7 @@ trabalhados do próprio DS20005176, o driver GPLv2 de terceiros lido como orácu
 
 ## O que a suíte diz hoje
 
-**195 verificações, 0 falhas, 0 defeitos confirmados.**
+**209 verificações, 0 falhas, 0 defeitos confirmados.**
 
 Os cinco defeitos que esta suíte demonstrou foram corrigidos pelas Fases 3 e 4
 do plano, e as verificações que os documentavam foram promovidas para `CHECK`.
@@ -101,6 +101,9 @@ Fases 1, 2 e 3.4 foi revertida no driver, uma de cada vez, e a suíte rodada:
 | a correlação pelo sub-comando (Fase 6A.1) | 1 falha, em G5 |
 | o aviso de desacordo RAM/NVRAM (Fase 6A.1) | 2 falhas, em G2 |
 | o relato do controle de acesso (Fase 6A.1) | 1 falha, em G4 |
+| a acumulação do contador (Counter) | 6 falhas, no grupo B |
+| o *read-and-reset* no hardware (Counter) | 9 falhas, no grupo B |
+| a recusa de escrever valor não-zero (Counter) | 2 falhas, em B4 |
 
 Cada injeção falha **só** as verificações que lhe dizem respeito, o que prova as
 duas coisas que interessam: que a suíte enxerga o defeito, e que as outras

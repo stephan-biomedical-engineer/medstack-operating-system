@@ -111,21 +111,25 @@ static void fill_pattern(u8 *b, unsigned int len)
 		b[i] = (u8)(i * 7 + 3);
 }
 
-static int read_interrupt_count(void)
+/*
+ * The edge counter now lives in the counter subsystem, so the tests call its
+ * ops the way the counter core would. read_edges() returns the accumulated
+ * value or a negative errno, which is what the old sysfs helper returned too.
+ */
+static long long read_edges(void)
 {
-	char buf[64] = { 0 };
-	ssize_t n = dev_attr_interrupt_count.show(&hdev.dev,
-						  &dev_attr_interrupt_count, buf);
+	u64 value = 0;
+	int ret = shim_counter->ops->count_read(shim_counter,
+						&shim_counter->counts[0],
+						&value);
 
-	return n < 0 ? (int)n : atoi(buf);
+	return ret ? (long long)ret : (long long)value;
 }
 
-static int reset_interrupt_count(void)
+static int write_edges(u64 value)
 {
-	ssize_t n = dev_attr_interrupt_count_reset.store(&hdev.dev,
-					&dev_attr_interrupt_count_reset, "1", 1);
-
-	return n < 0 ? (int)n : 0;
+	return shim_counter->ops->count_write(shim_counter,
+					      &shim_counter->counts[0], value);
 }
 
 /*
@@ -235,27 +239,58 @@ static void test_interrupt_counter(void)
 	CHECK_EQ(do_probe(), 0);
 
 	/*
-	 * B1 - the injection the plan asks for: two consecutive reads with no
-	 * edges in between must return the same number. Before the fix each
-	 * read consumed the counter and the second returned zero.
+	 * B1 - the property the plan asks for, now reached a different way: two
+	 * consecutive reads with no edges in between return the same number.
+	 * The hardware IS cleared on each read - that is what byte 1 at 0x00
+	 * does - and the accumulator is what makes the exposed value stable.
 	 */
 	fake.int_count = 1234;
-	first = read_interrupt_count();
-	second = read_interrupt_count();
+	first = (int)read_edges();
+	second = (int)read_edges();
 	CHECK_EQ(first, 1234);
 	CHECK_EQ(second, 1234);
-	CHECK_MSG(fake.last_int_count_arg != 0,
-		  "a leitura pede explicitamente para NAO repor");
-
-	/* B2 - and the reset attribute is the one that resets */
-	CHECK_EQ(reset_interrupt_count(), 0);
 	CHECK_EQ(fake.last_int_count_arg, 0);
-	CHECK_EQ(read_interrupt_count(), 0);
+	CHECK_EQ(fake.int_count, 0);
 
-	/* B3 - a counter that keeps counting is still readable twice */
+	/* B2 - edges arriving between reads accumulate instead of replacing */
+	fake.int_count = 100;
+	CHECK_EQ(read_edges(), 1334);
+	fake.int_count = 66;
+	CHECK_EQ(read_edges(), 1400);
+
+	/* B3 - past what 16 bits can hold, which the device alone cannot do */
 	fake.int_count = 65535;
-	CHECK_EQ(read_interrupt_count(), 65535);
-	CHECK_EQ(read_interrupt_count(), 65535);
+	CHECK_EQ(read_edges(), 66935);
+	fake.int_count = 65535;
+	CHECK_EQ(read_edges(), 132470);
+	CHECK_MSG(read_edges() == 132470, "e estavel na leitura seguinte");
+
+	/* B4 - writing zero clears; writing anything else is refused */
+	CHECK_EQ(write_edges(0), 0);
+	CHECK_EQ(read_edges(), 0);
+	CHECK_EQ(write_edges(1), -EINVAL);
+	CHECK_EQ(write_edges(42), -EINVAL);
+
+	/* B5 - and the counter describes itself the way the core expects */
+	{
+		enum counter_function fn = -1;
+		enum counter_synapse_action action = -1;
+
+		CHECK_EQ(shim_counter->num_counts, 1);
+		CHECK_EQ(shim_counter->num_signals, 1);
+		CHECK_EQ(shim_counter->counts[0].num_synapses, 1);
+		CHECK_MSG(strcmp(shim_counter->signals[0].name, "GP6") == 0,
+			  "o sinal e nomeado pelo pino que conta");
+		CHECK_EQ(shim_counter->ops->function_read(shim_counter,
+			 &shim_counter->counts[0], &fn), 0);
+		CHECK_EQ(fn, COUNTER_FUNCTION_INCREASE);
+		CHECK_EQ(shim_counter->ops->action_read(shim_counter,
+			 &shim_counter->counts[0],
+			 &shim_counter->counts[0].synapses[0], &action), 0);
+		CHECK_EQ(action, COUNTER_SYNAPSE_ACTION_FALLING_EDGE);
+		CHECK_MSG(shim_counter->ops->signal_read == NULL,
+			  "nao ha leitura de nivel: GP6 nao e um GPIO");
+	}
 
 	check_nvram_not_written();
 	do_release();
@@ -656,7 +691,7 @@ static void test_unimplemented_phases(void)
 
 	CHECK_MSG(mcp->gc.get(&mcp->gc, 0) < 0,
 		  "a leitura de GPIO sem resposta falha, como deve");
-	count = read_interrupt_count();
+	count = (int)read_edges();
 	CHECK_MSG(count != 0x01ab,
 		  "o valor dos pinos NAO virou a contagem de bordas");
 	CHECK_EQ(count, -ETIMEDOUT);

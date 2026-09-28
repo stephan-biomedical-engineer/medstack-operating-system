@@ -26,6 +26,7 @@
 #define MCP2210_TEST_FAKE_H
 
 #include "kernel_shim_dev.h"
+#include "linux/counter.h"
 
 #define FAKE_NGPIO		9
 #define FAKE_MAX_MESSAGE	1024

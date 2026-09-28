@@ -485,6 +485,20 @@ porque transforma "está quieto" de resultado em artefato.
 
 ## 9. Fase 5 — aquisição contínua, e as quatro medidas que faltam
 
+> **O contador mudou de lugar em 2026-09-27.** A comparação borda-a-borda desta
+> fase não se lê mais em `interrupt_count` no dispositivo HID: o contador é um
+> `counter_device` e o caminho é `/sys/bus/counter/counter*/count0/count`
+> (`implementation_plan_mcp2210.md` §5.3). Duas consequências para o roteiro, e
+> a segunda é boa. O valor agora é um `u64` acumulado pelo driver, então **não é
+> mais preciso somar janelas curtas para escapar do wrap de 16 bits** — a
+> aritmética que a §5.1 descreve deixa de ser necessária. Mas o limite não
+> desapareceu: a ponte continua contando em 16 bits e limpando na leitura, então
+> **ler no máximo a cada 65536 bordas** continua obrigatório — 262 s a 250 SPS,
+> 4,1 s a 16 kSPS. O que mudou é de quem é o cuidado, não que ele exista.
+> Uma leitura também é destrutiva no hardware por construção, e isso é seguro:
+> o total exposto é monotônico e dois leitores não consomem a contagem um do
+> outro.
+
 **Objetivo**: fechar as quatro medições que a §9.4 do `implementation_plan_iio_afe.md` exige e que a
 `RESULTS.md` §9 lista como não medidas: **jitter entre amostras, perda de amostra sob carga,
 granularidade do carimbo de tempo e custo de CPU** — nas duas ligações.

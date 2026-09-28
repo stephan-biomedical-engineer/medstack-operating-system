@@ -483,7 +483,7 @@ exatamente entre o `0x00dd` do 2221 e o `0x00df` do 2200, que são valores
 verificados na árvore. Isso é corroboração, não verificação — vizinhança
 plausível num espaço de PIDs sequencial. Continua sendo uma linha da Fase 0.
 
-### 5.3 O contador de eventos em sysfs é uma ABI nova
+### 5.3 O contador de eventos em sysfs era uma ABI nova — **resolvido**
 
 `interrupt_count` e `interrupt_count_reset` (`:619`, `:648`) criam dois arquivos
 sysfs que nenhum outro driver tem. Isso levanta três exigências em mainline:
@@ -510,12 +510,25 @@ sysfs que nenhum outro driver tem. Isso levanta três exigências em mainline:
    é depende da ODR. A regra do `afe_bench` §5 — somar janelas curtas, nunca
    uma subtração — continua valendo.
 
-**Recomendação:** expor o contador via `counter`, sob `IS_REACHABLE(CONFIG_COUNTER)`,
-no mesmo padrão em que o 2221 expõe o ADC via `IS_REACHABLE(CONFIG_IIO)`. Isso
-resolve os dois primeiros pontos, elimina a ABI customizada e dá ao terceiro a
-resposta que o mantenedor espera. O custo é que o `afe_bench` §5 passa a ler de
-`/sys/bus/counter/` em vez de um atributo do dispositivo HID — uma mudança de
-caminho no roteiro, não de método.
+**Feito.** O contador é um `counter_device` sob `IS_REACHABLE(CONFIG_COUNTER)`,
+no mesmo padrão em que o 2221 expõe o ADC via `IS_REACHABLE(CONFIG_IIO)`: um
+Count, um Signal chamado `GP6`, um Synapse cuja ação é a borda de descida que as
+*chip settings* programam. Os dois atributos sysfs saíram, e com eles a
+exigência de `Documentation/ABI/`.
+
+**E a ressalva ficou escrita no código, não só aqui.** O `u64` é um acumulador
+do driver; a ponte continua contando em 16 bits e continua limpando na leitura,
+então bordas além de 65536 **entre duas leituras** desaparecem antes de o código
+vê-las. O que mudou não é o limite — é de quem é o problema: ler com frequência
+suficiente continua sendo do chamador, mas notar o *wrap* não é mais.
+
+Um efeito colateral que não estava previsto e é o melhor da mudança: o
+acumulador é o que torna seguro fazer *read-and-reset* a cada leitura, coisa que
+o par sysfs não podia. Dois leitores limpam o hardware cada um, os dois recebem
+o mesmo total monotônico, e nenhum consome a contagem do outro.
+
+O `afe_bench` §5 passa a ler de `/sys/bus/counter/` — mudança de caminho no
+roteiro, não de método.
 
 O custo real, e ele deve ser declarado: um terceiro subsistema no mesmo módulo.
 O precedente do 2221 (i2c + gpio + iio) cobre isso, mas não gratuitamente.
@@ -1422,4 +1435,51 @@ isto e tornaria a ordenação verdadeira em vez de dispensada. Foi recusado porq
 guarda o contador num sqlite local à máquina, e um build cuja versão depende de
 quantas vezes *este host* já construiu é uma troca pior para um projeto que
 afirma reprodutibilidade.
+
+### 2026-09-27 — O contador sai do sysfs privado e entra no subsistema
+
+`f6d401b3b892`. Suíte de host de 195 para **209 verificações, 0 falhas**.
+
+Os dois atributos `interrupt_count`/`interrupt_count_reset` eram a única ABI
+customizada do driver, e eram a que este plano mais desconfiava: o §5.3
+registrava que a objeção de um revisor seria forte, porque contar bordas num
+pino é o que `drivers/counter` faz, e que a forma daquele par já se tinha
+mostrado capaz de ser implementada ao contrário (Fase 1). Agora são um
+`counter_device` com um Count, um Signal chamado `GP6` e um Synapse de borda de
+descida, seguindo `drivers/counter/interrupt-cnt.c`.
+
+**O que a mudança resolve** é a ABI e a largura. O que ela **não** resolve está
+escrito no código em maiúsculas, porque seria fácil afirmar o contrário: a ponte
+continua contando em 16 bits e limpando na leitura. O `u64` é um acumulador do
+driver, e bordas além de 65536 entre duas leituras desaparecem antes de este
+código vê-las. Ler com frequência suficiente continua sendo do chamador; notar
+o *wrap*, não.
+
+**O ganho que não estava no plano.** O acumulador é o que torna o
+*read-and-reset* seguro a cada leitura. O par sysfs não podia fazê-lo — era
+justamente o defeito da Fase 1, onde a leitura consumia o contador — e a
+resposta de lá foi ler sem repor, deixando o `wrap` de 16 bits exposto. Aqui as
+duas coisas se resolvem juntas: o hardware é limpo em toda leitura, e o valor
+exposto é um total monotônico que dois leitores podem ler sem consumir um ao
+outro. O caminho "certo" para a ABI acabou sendo também o caminho certo para o
+dado.
+
+**`signal_read` foi deliberadamente omitido.** Ler o nível do GP6 significaria
+o comando de valor de GPIO, e a documentação é explícita em que ele só tem
+efeito sobre pinos designados GPIO — o GP6 aqui é função dedicada. Um acessor
+que devolvesse o nível de um pino que ele não consegue ler é pior que acessor
+nenhum.
+
+E `CONFIG_COUNTER=m` foi escrito no fragmento do BSP, ao lado dos dois símbolos
+de driver. O `.config` construído já o tinha, **por acidente do defconfig da
+ST** — que é exatamente o acidente da regra 3 do `CLAUDE.md`, o mesmo do
+`CONFIG_DM_VERITY` que era grátis num kernel e ausente no outro. O `imply
+COUNTER` no Kconfig do driver é a metade upstream da afirmação; a linha no
+fragmento é a metade que o `do_med_check_kernel_config` verifica contra o
+`.config` final. Não foi para `meta-med-distro` porque o `qemux86-64` não tem
+ponte e não precisa de contador: o fragmento da distro é para capacidades que
+toda máquina tem, e esta não é uma.
+
+Três injeções, cada uma localizada no grupo B: a soma virando atribuição falha
+6, não repor o hardware falha 9, aceitar escrita não-zero falha 2.
 
