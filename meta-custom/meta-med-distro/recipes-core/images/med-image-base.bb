@@ -129,3 +129,45 @@ RuntimeWatchdogSec=30s
 RebootWatchdogSec=2min
 EOF
 }
+
+# --- MED_BENCH nunca entra numa imagem endurecida.
+#
+# MED_BENCH = "1" acrescenta símbolos de kernel que existem para medir a placa.
+# Hoje isso é CONFIG_SPI_SPIDEV, um caminho de userspace para o barramento do
+# conversor — exatamente o que a regra 1 do CLAUDE.md fecha, e o que o
+# MedFramework existe para tornar desnecessário.
+#
+# Isto era um bb.warn no bbappend do kernel, e um aviso num log de milhares de
+# linhas não é uma barreira. Em 2026-09-28 um build de verificação produziu
+# CONFIG_SPI_SPIDEV=m dentro do perfil de PRODUTO sem que nada falhasse — o
+# MED_BENCH é ortogonal ao link e ao tipo de imagem, ele só liga o símbolo.
+# "Nunca por padrão" e "impossível no produto" são coisas diferentes, e só a
+# primeira estava implementada.
+#
+# O teste não é o nome da receita, é o estado de endurecimento: uma imagem sem
+# debug-tweaks é uma imagem que se pretende entregável, seja ela med-image-prod
+# ou qualquer outra que venha depois. Keying no nome erraria na primeira imagem
+# nova, que é a forma que o vazamento de camada já tomou duas vezes neste
+# repositório.
+# A recusa é uma TAREFA e não python anônimo, e a diferença foi medida: como
+# anônimo ela derrubava o parse inteiro, porque `bitbake -p` parseia todas as
+# receitas da árvore e um bb.fatal ali mata a build de qualquer alvo - inclusive
+# de uma imagem de desenvolvimento, que é exatamente o caso permitido. A
+# pergunta não é "existe uma receita endurecida nesta árvore", é "a imagem que
+# está sendo construída agora é endurecida".
+python med_refuse_bench_in_hardened_image() {
+    if (d.getVar('MED_BENCH') or '').strip() != '1':
+        return
+
+    if 'debug-tweaks' in (d.getVar('IMAGE_FEATURES') or '').split():
+        return
+
+    bb.fatal(
+        "MED_BENCH = 1 while building %s, which is hardened (no debug-tweaks).\n"
+        "The bench kernel opens a userspace path to the converter's SPI bus "
+        "and must never be shipped. Either build a development image, or "
+        "unset MED_BENCH - and note that the mistake this catches is not "
+        "turning the bench on, it is forgetting to turn it off."
+        % (d.getVar('PN') or '?'))
+}
+ROOTFS_PREPROCESS_COMMAND += "med_refuse_bench_in_hardened_image; "

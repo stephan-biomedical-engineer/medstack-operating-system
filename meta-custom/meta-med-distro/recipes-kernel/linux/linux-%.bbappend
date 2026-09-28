@@ -76,6 +76,29 @@ python () {
     if (d.getVar('MED_BENCH') or '').strip() != '1':
         return
 
+    # A bancada que estes símbolos servem é a da ponte USB, e só ela. O spidev
+    # existe para a Fase 2 do plano de bancada, que mede a máquina de estados
+    # de transferência do MCP2210 com um jumper - e o MCP2210 só está no
+    # caminho quando MED_EEG_LINK = "usb".
+    #
+    # Sem esta recusa a combinação silenciosa é amp + spidev: um perfil de
+    # produto cujo conversor está no co-processador, carregando um nó de
+    # userspace para um barramento que ele nem usa. Foi exatamente o que um
+    # build de verificação produziu em 2026-09-28, e o que o convidou foi o
+    # MED_BENCH ser ortogonal ao link.
+    #
+    # E a recusa é útil na outra direção também: MED_BENCH sem "usb" não
+    # produz kernel-module-hid-mcp2210 nem CONFIG_HID_MCP2210, então seria uma
+    # imagem de bancada sem a ponte que a bancada mede.
+    link = (d.getVar('MED_EEG_LINK') or '').strip()
+    if link != 'usb':
+        bb.fatal(
+            "MED_BENCH = 1 with MED_EEG_LINK = '%s'.\n"
+            "The bench kernel symbols serve the USB bridge, and the bridge is "
+            "only in the path on the 'usb' link. On any other link this builds "
+            "a spidev node for a bus the profile does not use, and leaves the "
+            "bench without the driver it came to measure." % (link or '(unset)'))
+
     d.appendVar('SRC_URI', ' file://med-kernel-bench.cfg')
     d.appendVar('KERNEL_CONFIG_FRAGMENTS', ' ${WORKDIR}/med-kernel-bench.cfg')
     d.appendVar('MED_KERNEL_REQUIRED_CFG', ' ${WORKDIR}/med-kernel-bench.cfg')
