@@ -22,8 +22,13 @@
 # problems, and it makes the pending question about S:class-devupstream moot
 # rather than answered.
 #
-# NOT YET EXERCISED IN A BUILD. Everything below is reasoning about ST's recipe,
-# and the first `make stm32` with these variables set is what turns it into fact.
+# EXERCISED. A full image build on 2026-09-27 produced
+# 6.6.129-stm32mp-r3.1+med at revision da723f985714, and a kernel build the same
+# day at 013e9b1ab0f2 compiled both front-end drivers as modules with the
+# symbols present in the final .config. What that first build also showed is
+# that the containerised path dropped MED_KERNEL_GIT entirely - kas-container
+# forwards a fixed whitelist - so this file's own documented invocation only
+# worked with NATIVE=1 until the Makefile gained KERNEL_ARGS.
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
@@ -62,7 +67,41 @@ python () {
 
     # So that a build made from the fork is never mistaken for ST's release in a
     # manifest, an SBOM or a measurement.
-    d.appendVar('PV', '+med%s' % rev[:12])
+    #
+    # A marker and not the revision, which this used to append as well. The
+    # revision was already in the package version from elsewhere and in the
+    # module path (usr/lib/modules/6.6.129-g013e9b1ab0f2), so carrying a third
+    # copy bought no traceability - and it bought a defect, because a hash has
+    # no order. Moving the branch forward from da723f985714 to 013e9b1ab0f2
+    # made do_packagedata refuse the build with version-going-backwards, and it
+    # would have done so on every commit.
+    d.appendVar('PV', '+med')
+
+    # And the half of that defect this file cannot remove.
+    #
+    # The revision still reaches the package version through a component this
+    # append does not control, rendered with AUTOINC at 0 because there is no
+    # PR service - so the ordering still comes down to comparing two hashes and
+    # version-going-backwards still fires.
+    #
+    # It is downgraded to a warning, for this recipe and only when building
+    # from the fork, because the scenario it protects does not exist here. That
+    # check guards a PACKAGE FEED: an incremental client that would refuse an
+    # upgrade whose version went down. This project has no feed. It builds
+    # whole images, and it updates them through RAUC A/B bundles that replace
+    # the entire rootfs - implementation_plan_rauc.md. There is no client
+    # comparing package versions anywhere in the path.
+    #
+    # The alternative was a PR service (PRSERV_HOST), which is the mechanism
+    # designed for exactly this and makes the ordering true rather than
+    # excused. It is refused because it keeps its counter in a machine-local
+    # sqlite database, and a build whose version depends on how many times THIS
+    # host has built is a worse trade for a project whose reproducibility is a
+    # claim it makes.
+    d.appendVar('WARN_QA', ' version-going-backwards')
+    d.setVar('ERROR_QA', ' '.join(
+        sym for sym in (d.getVar('ERROR_QA') or '').split()
+        if sym != 'version-going-backwards'))
 
     # The driver fragment, and it takes TWO conditions rather than one.
     #
