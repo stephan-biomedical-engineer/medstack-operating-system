@@ -103,9 +103,26 @@ python () {
     d.appendVar('KERNEL_CONFIG_FRAGMENTS', ' ${WORKDIR}/med-kernel-bench.cfg')
     d.appendVar('MED_KERNEL_REQUIRED_CFG', ' ${WORKDIR}/med-kernel-bench.cfg')
 
-    bb.warn("MED_BENCH = 1: the kernel gains bench-only symbols "
-            "(med-kernel-bench.cfg). This image opens a userspace path to the "
-            "converter's SPI bus and must not be shipped.")
+    d.appendVarFlag('do_configure', 'prefuncs', ' med_announce_bench')
+}
+
+# O aviso é uma TAREFA e não uma linha no python anônimo, e a diferença é
+# medida: como anônimo ele saía ~30 vezes num único build - uma por parse da
+# receita, e o bitbake reparseia nos workers - de um total de 42 avisos. Um
+# aviso repetido trinta vezes não é ênfase, é ruído, e ruído treina a pessoa a
+# ignorar avisos. Aqui ele sai uma vez, quando o kernel é configurado.
+#
+# E ele diz menos do que dizia, de propósito. Antes carregava o peso de ser a
+# única barreira ("must not be shipped"); agora as duas recusas duras carregam
+# isso - uma imagem endurecida com MED_BENCH falha em do_rootfs, e MED_BENCH
+# fora do link usb falha no parse. O que sobra para o aviso é o caso
+# PERMITIDO: uma imagem de desenvolvimento em que a pessoa deve saber o que o
+# kernel ganhou.
+python med_announce_bench() {
+    bb.warn("MED_BENCH = 1: this kernel has bench-only symbols "
+            "(med-kernel-bench.cfg, today CONFIG_SPI_SPIDEV). Allowed here "
+            "because the image is a development one; a hardened image with "
+            "MED_BENCH is refused at do_rootfs.")
 }
 
 
