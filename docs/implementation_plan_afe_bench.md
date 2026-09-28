@@ -285,14 +285,35 @@ dentro da placa.
 
 **O fragmento de bancada agora existe**, que é o que esta fase pedia e não
 tinha: `MED_BENCH = "1"` aplica `meta-med-distro/.../med-kernel-bench.cfg`, hoje
-com `CONFIG_SPI_SPIDEV=m` e nada mais. Nenhum perfil o liga por padrão, ele é
-repassado ao container pelo mesmo mecanismo do `MED_KERNEL_GIT`, e o bbappend
-emite um `bb.warn` sempre que está ligado — porque o erro que acontece de
-verdade não é alguém ligar o bench de propósito, é alguém esquecer de desligar.
+com `CONFIG_SPI_SPIDEV=m` e nada mais, repassado ao container pelo mesmo
+mecanismo do `MED_KERNEL_GIT`.
+
+**A imagem de bancada é uma combinação de três coisas, e nenhuma basta
+sozinha:**
 
 ```sh
 MED_KERNEL_GIT=... MED_KERNEL_SRCREV=... MED_BENCH=1 make stm32
 ```
+
+com o perfil em `MED_EEG_LINK = "usb"`. O `MED_BENCH` traz o `spidev`; é o
+`MED_EEG_LINK` que liga `CONFIG_HID_MCP2210` e põe o pacote do módulo na
+imagem; e é o `MED_KERNEL_GIT` que aponta para a árvore que contém os dois
+drivers. Com `amp` — o perfil de produto, que é o padrão — **não há driver da
+ponte na imagem**, e as Fases 1, 2 e 8-B não têm o que carregar.
+
+**E duas recusas duras impedem as combinações erradas**, verificadas em
+2026-09-28 depois que um build mostrou que o aviso não bastava:
+
+| Combinação | O que acontece |
+| :--- | :--- |
+| `MED_BENCH=1` + imagem sem `debug-tweaks` | **erro** em `do_rootfs` |
+| `MED_BENCH=1` + qualquer link que não `usb` | **erro** no parse |
+| `MED_BENCH=1` + `usb` + imagem de desenvolvimento | permitido |
+
+O teste da primeira não é o nome da receita, é o estado de endurecimento — uma
+imagem sem `debug-tweaks` é uma imagem que se pretende entregável, qualquer que
+seja o nome. Chavear no nome erraria na primeira imagem nova, que é a forma que
+o vazamento de camada já tomou duas vezes neste repositório.
 
 O `spidev_test` vem de `spidev-test.bb`, que já existe no `meta-openembedded`
 que este projeto usa — `bitbake spidev-test` e copiar o binário para a placa. Ele
