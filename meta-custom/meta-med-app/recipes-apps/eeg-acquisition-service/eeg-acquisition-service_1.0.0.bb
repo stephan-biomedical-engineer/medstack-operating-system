@@ -178,19 +178,26 @@ python do_derive_device_options() {
             bb.fatal("afe.lead_off_detection = false cannot be honoured on link '%s': "
                      "the kernel driver enables the lead-off comparators at probe and "
                      "offers no control to switch them off" % link)
-        if bias:
-            bb.fatal("afe.bias_drive = true cannot be honoured on link '%s': the kernel "
-                     "driver leaves the bias amplifier powered down and offers no "
-                     "control to enable it. Until it does, this prescription is not "
-                     "met on this link, and saying so here is better than a record "
-                     "that claims a bias drive the hardware never had." % link)
         if gain != int(gain):
             bb.fatal("eeg.conf: afe.gain = %s is not an integer" % values['afe.gain'])
         internal = test_signal == 'internal'
+        # The prescription is a boolean and the part offers three
+        # configurations, so the translation has to choose - and the choice is
+        # clinical, which is why it is made here and written down rather than
+        # defaulted inside the driver.
+        #
+        # "on" means DERIVED: the amplifier drives the inverse of the average of
+        # every enabled channel, which is the driven-electrode arrangement that
+        # rejects common mode. The other one the driver offers, "reference",
+        # drives a mid-supply with no feedback from anything measured - a DC
+        # bias and no rejection. A prescription asking for bias drive is asking
+        # for the first; if a montage ever wants the second, it needs a
+        # prescription that can say so, not a different default here.
         options = [
             ('hardwaregain', str(int(gain))),
             ('input_mux', 'test_signal' if internal else 'normal'),
             ('test_signal', '1x_slow' if internal else 'off'),
+            ('bias_drive', 'derived' if bias else 'off'),
         ]
 
     else:
