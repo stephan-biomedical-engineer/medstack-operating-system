@@ -78,6 +78,34 @@ BOARD ?= qemu
 ifeq ($(filter $(BOARD),qemu stm32),)
   $(error BOARD must be "qemu" or "stm32", not "$(BOARD)")
 endif
+
+# Which kernel the board build uses. A parameter on the existing targets, in the
+# shape of KEY and BOARD, and not a second set of targets: the only difference
+# is where the kernel comes from.
+#
+#   make stm32                   ST's release: tarball 6.6.129 + the r3.1 patch
+#   make stm32 KERNEL=med        the tree in ./linux-med, at its current HEAD
+#
+# It only fills in the pair MED_KERNEL_GIT/MED_KERNEL_SRCREV, which are still
+# honoured when given by hand (and for a tree elsewhere). The revision is read
+# from the tree at the moment of the call, so it is always a commit and never a
+# branch tip, which is what the recipe demands. What the build fetches is that
+# commit: uncommitted work in ./linux-med does not reach the image, hence the
+# warning.
+KERNEL ?=
+ifneq ($(KERNEL),)
+  ifneq ($(KERNEL),med)
+    $(error KERNEL must be "med" or unset, not "$(KERNEL)")
+  endif
+  ifeq ($(wildcard linux-med/.git),)
+    $(error KERNEL=med needs a clone of the kernel fork at ./linux-med)
+  endif
+  MED_KERNEL_GIT    := git://$(CURDIR)/linux-med;protocol=file;branch=$(shell git -C linux-med branch --show-current)
+  MED_KERNEL_SRCREV := $(shell git -C linux-med rev-parse HEAD)
+  ifneq ($(shell git -C linux-med status --porcelain --untracked-files=no),)
+    $(warning ./linux-med has uncommitted changes; the build uses commit $(MED_KERNEL_SRCREV) without them)
+  endif
+endif
 BOARD_CFG     := $(if $(filter stm32,$(BOARD)),$(STM32_CFG),$(QEMU_CFG))
 BOARD_MACHINE := $(shell awk '/^machine:/{print $$2}' $(BOARD_CFG))
 
@@ -99,6 +127,7 @@ ifeq ($(NATIVE),1)
   KEY_ENV      := $(if $(KEY),MED_DATA_KEY_SOURCE=$(KEY),)
   KEY_ARGS     :=
   KERNEL_ARGS  :=
+  export MED_KERNEL_GIT MED_KERNEL_SRCREV
   # native: kas reads MED_BENCH from the environment directly
 else
   KAS  := $(KAS_CONTAINER)
@@ -153,6 +182,7 @@ help:
 	@echo "  service     build eeg-acquisition-service only (fast inner loop)"
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
+	@echo "              add KERNEL=med to build the kernel fork in ./linux-med at its HEAD"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY= as the image"
