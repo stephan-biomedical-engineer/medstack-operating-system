@@ -14,7 +14,7 @@
 //   MedicalStorage       - session records on the encrypted volume
 //   MedicalIPC           - the sample stream published to the HMI
 //   MedicalLogger        - the audit trail
-//   MedicalUpdate        - A/B slot confirmation after a successful start
+//   MedicalUpdate        - readiness, on which A/B slot confirmation waits
 //
 // Porting the EEG to different silicon therefore changes zero lines here; it
 // changes one value in a configuration file. That is the number the
@@ -290,7 +290,8 @@ int main(int argc, char** argv) {
     if (selfTest != med::Status::Ok) {
         logger.audit(med::AuditEvent::SelfTestFailed, "front-end self test failed",
                      {{"driver", deviceConfig.driver},
-                      {"status", med::toString(selfTest)}});
+                      {"status", med::toString(selfTest)},
+                      {"detail", device.lastError()}});
         return 1;
     }
     logger.audit(med::AuditEvent::SelfTestPassed, "front-end self test passed",
@@ -341,30 +342,49 @@ int main(int argc, char** argv) {
     }
     med::MedicalIpcServer& server = *serverResult.value();
 
-    // ---------------------------------------------------- A/B slot confirmation
-    // Reaching this point means the software that was installed into this slot
-    // came up, passed its self test and opened every resource it needs. That -
-    // not "the kernel booted" - is the condition under which an update may be
-    // confirmed. Until it is, the bootloader still falls back to the previous
-    // slot.
-    med::Result<std::unique_ptr<med::MedicalUpdate>> updateResult =
-        med::MedicalUpdate::connect();
-    if (updateResult) {
-        med::MedicalUpdate& update = *updateResult.value();
-        med::Result<std::string> slot = update.bootSlot();
-        med::Result<std::string> marked = update.markBootedGood();
-        logger.audit(med::AuditEvent::UpdateSucceeded, "booted slot confirmed good",
-                     {{"slot", slot ? slot.value() : "unknown"},
-                      {"marked", marked ? marked.value() : "none"}});
-    } else {
-        logger.info("no update service available, skipping slot confirmation",
-                    {{"detail", updateResult.message()}});
-    }
-
     // --------------------------------------------------------------- session
     std::signal(SIGTERM, handleSignal);
     std::signal(SIGINT, handleSignal);
     std::signal(SIGPIPE, SIG_IGN);  // a departing HMI must not kill acquisition
+
+    // Started before the session exists, not after. A session directory is a
+    // claim that a recording was made; one created for a front-end that then
+    // refused to start is a record of nothing, and a unit that restarts on
+    // failure writes one per attempt - 54 of them in a minute on the board,
+    // the first time the iio link met the service's sandbox. And the reason
+    // goes into the audit record: the driver knows exactly which setting was
+    // refused, and "refused to start" alone sent that diagnosis to a shell.
+    {
+        const med::Status started = device.start();
+        if (started != med::Status::Ok) {
+            logger.audit(med::AuditEvent::DeviceFault, "front-end refused to start",
+                         {{"status", med::toString(started)},
+                          {"detail", device.lastError()}});
+            return 1;
+        }
+    }
+
+    // ---------------------------------------------------- A/B slot confirmation
+    // Reaching this point means the software that was installed into this slot
+    // came up, passed its self test, opened every resource it needs and STARTED
+    // its front-end. That - not "the kernel booted" - is the condition under
+    // which an update may be confirmed, and this is where the service says so.
+    //
+    // It says so to the service manager, and nothing more. The unit is
+    // Type=notify and required by boot-complete.target, and the OS marks the
+    // booted slot good (rauc-mark-good.service) only once that target is
+    // reached - so a slot whose acquisition never starts is never confirmed,
+    // and the bootloader falls back when its attempts run out. This used to
+    // call markBootedGood() itself, before device.start(), and both halves were
+    // wrong: on the board, start() failed 54 times and the slot was confirmed
+    // on every one, and rauc-mark-good.service had already confirmed it at
+    // 12.9 s, before this service ran at all. One writer of the bootloader's
+    // counters, and it is the OS.
+    {
+        const med::Status ready = med::MedicalUpdate::reportReady();
+        logger.info("acquisition running, readiness reported to the service manager",
+                    {{"status", med::toString(ready)}});
+    }
 
     const std::string sessionId = med::formatTimestamp(med::Clock::now());
     const std::string sessionDir = "session-" + sessionId;
@@ -397,10 +417,6 @@ int main(int argc, char** argv) {
         storage.writeString(sessionDir + "/metadata.json", metadata);
     }
 
-    if (device.start() != med::Status::Ok) {
-        logger.audit(med::AuditEvent::DeviceFault, "front-end refused to start", {});
-        return 1;
-    }
     logger.audit(med::AuditEvent::AcquisitionStarted, "acquisition session started",
                  {{"session", sessionId}, {"driver", info.driver}, {"link", link}});
 
@@ -414,6 +430,13 @@ int main(int argc, char** argv) {
     /// it at all is that the alternative - waiting for the viewer - costs
     /// samples.
     std::uint64_t viewerMissed = 0;
+    /// Why the loop ended. A front-end that stops answering is a fault, and the
+    /// exit status has to say so: this used to fall through to `return 0`, and
+    /// with Restart=on-failure systemd read a clean exit and did not restart.
+    /// Unplugging the USB bridge for 10 s on the board ended acquisition for
+    /// good - the bridge came back, passed its self test, and nothing ever
+    /// read it again, with the unit "inactive" rather than "failed".
+    bool deviceFault = false;
 
     while (g_stopRequested == 0) {
         // Non-blocking: a viewer connecting or leaving must never stall the
@@ -433,6 +456,7 @@ int main(int argc, char** argv) {
             logger.audit(med::AuditEvent::DeviceFault, "acquisition read failed",
                          {{"status", med::toString(frame.status())},
                           {"detail", frame.message()}});
+            deviceFault = true;
             break;
         }
         ++frames;
@@ -486,6 +510,7 @@ int main(int argc, char** argv) {
     device.stop();
     logger.audit(med::AuditEvent::AcquisitionStopped, "acquisition session stopped",
                  {{"session", sessionId},
+                  {"reason", deviceFault ? "front-end fault" : "stop requested"},
                   {"frames", std::to_string(frames)},
                   {"dropped", std::to_string(dropped)},
                   // In the audit record and not only in a counter: a viewer
@@ -498,5 +523,9 @@ int main(int argc, char** argv) {
                  {{"session", sessionId}, {"path", storage.basePath() + "/" + sessionDir}});
     logger.audit(med::AuditEvent::SystemStop, "EEG acquisition service stopped", {});
 
-    return 0;
+    // Non-zero so that the unit's Restart=on-failure brings acquisition back
+    // when the front-end does. While it is absent each attempt fails its self
+    // test and leaves no session behind (device.start() runs before one is
+    // created), so the retries cost a log line each and nothing in the record.
+    return deviceFault ? 1 : 0;
 }

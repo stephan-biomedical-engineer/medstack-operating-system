@@ -7,9 +7,18 @@ Documentation=file:/etc/medplatform/eeg.conf
 # than be silently held back by systemd.
 Wants=data.mount
 After=data.mount dbus.service systemd-journald.service
+# Boot assessment: the slot this software was installed into is confirmed only
+# once boot-complete.target is reached (rauc-mark-good.service is ordered after
+# it and requires it), and that target now waits for this service to report
+# ready - which it does only after its front-end has started. See RequiredBy=
+# below and the comment at reportReady() in the service.
+Before=boot-complete.target
 
 [Service]
-Type=simple
+# notify, not simple: "the process exists" is not "acquisition started", and
+# the difference is the one an update has to be judged by. simple also made a
+# crash-looping unit look active between attempts (CLAUDE.md, acq-active).
+Type=notify
 ExecStart=/usr/bin/eeg-acquisition-service --config /etc/medplatform/eeg.conf
 Restart=on-failure
 RestartSec=2s
@@ -68,13 +77,34 @@ ReadWritePaths=/data
 # to be re-guessed for every board. A class is a statement about what kind of
 # hardware this service may talk to, which is what the sandbox is for.
 #
-# NOT YET EXERCISED on hardware: no target in this repository has run the
-# acquisition service against an industrial I/O front-end, so this line is
-# written and unproven. If the service ever reports EPERM opening its
-# converter, this is the line to check first.
+# Exercised on hardware on 2026-10-04 (STM32MP257, the usb link): the service
+# opened its converter through this line and acquired.
 DeviceAllow=/dev/rpmsg0 rw
 DeviceAllow=/dev/rpmsg_ctrl0 rw
 DeviceAllow=char-iio rw
 
+# An industrial I/O front-end is configured by writing its sysfs attributes,
+# and ProtectKernelTunables=yes, together with the rest of this sandbox, mounts
+# /sys read-only. That is not a theory: the first time this service met an iio
+# front-end it failed on its first write with EROFS, restarted 54 times, and
+# reported only "refused to start". (On its own, outside this set of
+# properties, ProtectKernelTunables leaves /sys writable - which is how a quick
+# test with systemd-run said the opposite.)
+#
+# The fix keeps the protection and reopens one directory: the front-end's
+# adjunct layer links /run/med-afe/eeg0 to the converter's sysfs directory when
+# udev sees it, and systemd follows the link when it builds the namespace, so
+# only that device's attributes become writable - not /sys, and not /proc/sys.
+# A path, not a device number, for the same reason as char-iio above.
+#
+# "-" because only the iio link creates it: on rpmsg and simulated the path is
+# absent and the line is ignored. On iio, a missing link means the front-end
+# never appeared, and the service fails on its first write, as it should.
+ReadWritePaths=-/run/med-afe/eeg0
+
 [Install]
 WantedBy=multi-user.target
+# Without this, boot-complete.target requires nothing, and "the boot completed"
+# means only "the kernel came up": the slot was confirmed at 12.9 s on the
+# board, before this service had run.
+RequiredBy=boot-complete.target
