@@ -14,6 +14,20 @@
 SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTR{name}=="ads1299-*", \
     SYMLINK+="med-afe-eeg0", OWNER="root", GROUP="root", MODE="0660"
 
+# The same converter's sysfs directory, under a name as stable as the node's.
+#
+# The acquisition service configures the converter by writing its attributes,
+# and its sandbox mounts /sys read-only. Its unit reopens exactly one path,
+# /run/med-afe/eeg0, and systemd resolves the link when it builds the
+# namespace - so the service can write this device's attributes and no other
+# file under /sys. Without this link, the service fails on its first write
+# (measured on the board, 2026-10-04: EROFS, 54 restarts).
+#
+# No remove rule: a link left behind by an unplugged converter dangles, and
+# systemd treats a dangling "-" path as absent. The next add replaces it.
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ACTION=="add", ATTR{name}=="ads1299-*", \
+    RUN+="/bin/mkdir -p /run/med-afe", RUN+="/bin/ln -sfn /sys%p /run/med-afe/eeg0"
+
 # 0660 root:root, and not a dedicated group.
 #
 # The plan asked for "by group, not 0666", and the reason to answer it with
