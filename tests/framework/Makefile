@@ -36,10 +36,13 @@ CXXFLAGS += $(shell pkg-config --cflags libsystemd) -DMED_TESTS_HAVE_SYSTEMD=1
 LDLIBS   += $(shell pkg-config --libs libsystemd)
 endif
 
-# The library sources under test. MedicalUpdate is excluded: it is a D-Bus
-# client for the RAUC daemon, and a host without rauc.service on the bus can
-# only be told "the daemon is not there", which tests the host and not the
-# wrapper. It is in the README's uncovered list.
+# The library sources under test. MedicalUpdate is here only with libsystemd,
+# and only HALF of it is tested: reportReady() talks to the service manager
+# through NOTIFY_SOCKET, which a test can stand up with a datagram socket, and
+# it is the half the A/B confirmation now rests on. The D-Bus half stays
+# uncovered - a host without rauc.service on the bus can only be told "the
+# daemon is not there", which tests the host and not the wrapper - and the
+# binary says so on every run.
 LIB_SOURCES := \
 	$(FRAMEWORK)/src/med-framework.cpp \
 	$(FRAMEWORK)/src/MedicalConfiguration.cpp \
@@ -55,8 +58,8 @@ TEST_SOURCES := \
 	test_device.cpp
 
 ifeq ($(HAVE_SYSTEMD),yes)
-LIB_SOURCES  += $(FRAMEWORK)/src/MedicalLogger.cpp
-TEST_SOURCES += test_logger.cpp
+LIB_SOURCES  += $(FRAMEWORK)/src/MedicalLogger.cpp $(FRAMEWORK)/src/MedicalUpdate.cpp
+TEST_SOURCES += test_logger.cpp test_update.cpp
 endif
 
 BUILD   := build

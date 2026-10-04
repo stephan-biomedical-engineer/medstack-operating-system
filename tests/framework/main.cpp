@@ -17,6 +17,7 @@ void testStorage();
 void testDevice();
 #ifdef MED_TESTS_HAVE_SYSTEMD
 void testLogger();
+void testUpdate();
 #endif
 
 int main() {
@@ -28,6 +29,7 @@ int main() {
     testDevice();
 #ifdef MED_TESTS_HAVE_SYSTEMD
     testLogger();
+    testUpdate();
 #endif
 
     const int status = medtest::report();
@@ -43,8 +45,11 @@ int main() {
 #ifndef MED_TESTS_HAVE_SYSTEMD
     std::printf("  - MedicalLogger  (libsystemd ausente neste host:"
                 " instale libsystemd-dev e recompile)\n");
+    std::printf("  - MedicalUpdate  (inteiro: libsystemd ausente neste host)\n");
+#else
+    std::printf("  - MedicalUpdate  (a metade D-Bus: connect, install, mark*;"
+                " precisa do daemon do RAUC no barramento)\n");
 #endif
-    std::printf("  - MedicalUpdate  (cliente D-Bus do RAUC; precisa do daemon no barramento)\n");
     std::printf("  - MedicalIPC     (o caminho socket é exercitado por make check, no alvo)\n");
     std::printf("  - atomicidade de MedicalStorage (precisa de corte de energia)\n");
     std::printf("  - qualquer coisa que dependa de hardware: ver README.md\n");

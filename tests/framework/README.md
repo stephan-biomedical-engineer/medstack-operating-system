@@ -100,10 +100,15 @@ amostras/s).
 
 - **`MedicalLogger`**, quando falta `libsystemd-dev`. Instale e recompile; a
   suíte passa a cobrir o vocabulário de auditoria e a cadeia de hash.
-- **`MedicalUpdate`** — é cliente D-Bus do daemon RAUC. Num host sem
-  `rauc.service` no barramento, a única resposta possível é "o daemon não está
-  lá", o que testa o host e não o *wrapper*. É coberto no alvo, pela asserção
-  `rauc-active` do `make check`.
+- **`MedicalUpdate`, a metade D-Bus** (`connect`, `install`, `mark*`) — é
+  cliente do daemon RAUC. Num host sem `rauc.service` no barramento, a única
+  resposta possível é "o daemon não está lá", o que testa o host e não o
+  *wrapper*. É coberto no alvo, pela asserção `rauc-active` do `make check`. A
+  outra metade, `reportReady()`, **é** coberta aqui desde 2026-10-04, com um
+  socket de datagrama fazendo o papel do gerenciador de serviço: a mensagem
+  exata, o destino, e os três desfechos (`Ok`, `Unavailable`, `IoError`). É a
+  metade de que a confirmação do slot A/B passou a depender. Sem
+  `libsystemd-dev`, o `MedicalUpdate` inteiro fica de fora, como o logger.
 - **`MedicalIPC`** — o caminho de socket é exercitado no alvo, e foi lá que o
   defeito do `accept4` sem `SOCK_NONBLOCK` apareceu. Um teste de host do
   *loopback* é possível e não substituiria a asserção `acq-sample-rate`.

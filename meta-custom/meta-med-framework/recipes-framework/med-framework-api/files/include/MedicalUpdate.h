@@ -62,6 +62,22 @@ public:
     /// fail.
     static Result<std::unique_ptr<MedicalUpdate>> connect();
 
+    /// Tell the service manager that this program is now doing its job.
+    ///
+    /// This - not markBootedGood() - is how an application takes part in
+    /// confirming an update. A unit that declares Type=notify and is required
+    /// by boot-complete.target holds that target until it reports ready, and
+    /// the OS marks the booted slot good only once the target is reached. A
+    /// program that never gets this far leaves the slot unconfirmed, and the
+    /// bootloader falls back after its attempts run out. Keeping the call this
+    /// narrow keeps one writer of the bootloader's counters: the OS.
+    ///
+    /// Static, and needs no D-Bus or RAUC: readiness is owed to the service
+    /// manager whether an update daemon exists or not. Unavailable when the
+    /// process was not started with a notification socket (run by hand, or
+    /// from a unit that is not Type=notify).
+    static Status reportReady();
+
     /// Compatible string the running image was built with; a bundle whose
     /// compatible differs is rejected by RAUC before anything is written.
     Result<std::string> compatible() const;

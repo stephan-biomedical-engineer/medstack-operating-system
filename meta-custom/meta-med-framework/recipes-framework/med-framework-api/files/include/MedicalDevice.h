@@ -136,6 +136,15 @@ public:
     /// Power-on / periodic self test (IEC 60601-1 §14 essential performance).
     /// Must be safe to call while stopped.
     virtual Status selfTest() = 0;
+
+    /// What the last failed call refused, in words, for the audit record -
+    /// "the front-end refused bias_drive = 'derived'" where the Status alone
+    /// says OutOfRange. Empty when the driver has nothing to add.
+    ///
+    /// Last in the class on purpose: appended, it leaves every existing
+    /// vtable slot where it was, so a caller built against the previous
+    /// header still finds start() and selfTest() where it expects them.
+    virtual std::string lastError() const { return {}; }
 };
 
 class MedicalDeviceFactory {

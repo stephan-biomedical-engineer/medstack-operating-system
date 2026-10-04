@@ -576,6 +576,8 @@ public:
 
     bool isRunning() const override { return static_cast<bool>(channel_); }
 
+    std::string lastError() const override { return lastError_; }
+
     Result<SampleFrame> read(std::chrono::milliseconds timeout) override {
         if (!channel_) {
             return Result<SampleFrame>::fail(Status::Unavailable, "device is stopped");
@@ -843,6 +845,8 @@ public:
     }
 
     bool isRunning() const override { return fd_ >= 0; }
+
+    std::string lastError() const override { return lastError_; }
 
     Result<SampleFrame> read(std::chrono::milliseconds timeout) override {
         if (fd_ < 0) {

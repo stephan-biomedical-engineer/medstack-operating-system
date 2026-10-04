@@ -3,6 +3,7 @@
 #include "MedicalUpdate.h"
 
 #include <systemd/sd-bus.h>
+#include <systemd/sd-daemon.h>
 
 #include <cerrno>
 #include <cstdlib>
@@ -344,6 +345,14 @@ Status MedicalUpdate::install(const std::string& bundlePath) {
     }
     sd_bus_error_free(&error);
     return status;
+}
+
+Status MedicalUpdate::reportReady() {
+    const int rc = sd_notify(0, "READY=1");
+    if (rc > 0) {
+        return Status::Ok;
+    }
+    return (rc == 0) ? Status::Unavailable : Status::IoError;
 }
 
 Result<std::string> MedicalUpdate::markBootedGood() {
