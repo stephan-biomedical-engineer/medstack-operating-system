@@ -11,7 +11,13 @@
 #define CONFIG_COUNTER 1
 
 enum counter_function { COUNTER_FUNCTION_INCREASE };
-enum counter_synapse_action { COUNTER_SYNAPSE_ACTION_FALLING_EDGE };
+/* Same order as include/uapi/linux/counter.h, so a value means the same thing. */
+enum counter_synapse_action {
+	COUNTER_SYNAPSE_ACTION_NONE,
+	COUNTER_SYNAPSE_ACTION_RISING_EDGE,
+	COUNTER_SYNAPSE_ACTION_FALLING_EDGE,
+	COUNTER_SYNAPSE_ACTION_BOTH_EDGES,
+};
 enum counter_signal_level { COUNTER_SIGNAL_LEVEL_LOW, COUNTER_SIGNAL_LEVEL_HIGH };
 
 struct counter_signal { int id; const char *name; };

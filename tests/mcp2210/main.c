@@ -34,10 +34,33 @@ static int do_probe(void)
 	return ret;
 }
 
+/*
+ * What hid_device_remove() does (hid-core.c:2694-2710), in its order: the
+ * driver's .remove if it has one, and hid_hw_stop() if it does not, THEN the
+ * driver's devres group. The shim used to skip the first half, so a driver
+ * with no .remove and a devm action that stops the hardware stopped it twice
+ * and the suite never knew - on a real kernel that is usbhid freeing its
+ * buffers twice, a slab BUG on unplug (BRINGUP_AFE.md §2.4). A failed probe
+ * is released by the core's probe error path, which does not stop anything.
+ */
 static void do_release(void)
 {
+	struct hid_driver *drv = shim_driver_ref();
+	bool bound = mcp != NULL;
+
+	shim_hw_stop_calls = 0;
+	if (bound) {
+		if (drv->remove)
+			drv->remove(&hdev);
+		else
+			hid_hw_stop(&hdev);
+	}
 	shim_devm_release(&hdev.dev);
+	if (bound)
+		CHECK_MSG(shim_hw_stop_calls == 1,
+			  "o hardware foi parado exatamente uma vez na remocao");
 	mcp = NULL;
+	shim_counter = NULL;	/* devres would have unregistered it */
 }
 
 /*
@@ -59,11 +82,21 @@ static void clear_obs(void)
 	shim_log_reset();
 }
 
-/* A device whose GP6 is the dedicated interrupt pin, so probe writes 0x21. */
+/*
+ * A device whose GP6 is the dedicated interrupt pin. The upstream driver
+ * programs the counting mode itself, so the device starts with none; the
+ * board driver only reads it, so the device starts provisioned to count
+ * falling edges, as the factory part does (BRINGUP_AFE.md §2.1).
+ */
 static void fake_reset_with_int_pin(void)
 {
 	fake_reset();
 	fake.pin_designation[MCP2210_INTERRUPT_PIN] = FAKE_PIN_DEDICATED;
+#ifdef MCP2210_TEST_VARIANT_BOARD
+	fake.other_settings = (fake.other_settings & ~MCP2210_MASK_INT_MODE) |
+			      FIELD_PREP(MCP2210_MASK_INT_MODE,
+					 MCP2210_INT_MODE_FALLING);
+#endif
 }
 
 static void fresh(void)
@@ -151,6 +184,7 @@ static void check_nvram_not_written(void)
 
 /* ============================================================== A. probe */
 
+#ifdef MCP2210_TEST_VARIANT_UPSTREAM
 static void test_probe(void)
 {
 	u16 value_before, dir_before;
@@ -225,6 +259,147 @@ static void test_probe(void)
 	do_release();
 	spi_device = "ads1299";
 }
+
+#endif /* MCP2210_TEST_VARIANT_UPSTREAM */
+
+#ifdef MCP2210_TEST_VARIANT_BOARD
+/*
+ * The board driver's contract: it adapts to the settings the board was
+ * provisioned with and never writes them (0x21), and nothing the board chose
+ * stops the bridge from coming up. Every sub-test ends by checking that no
+ * 0x21 was sent, because that is the property and not a side detail.
+ */
+static void check_settings_not_written(void)
+{
+	CHECK_MSG(fake.set_chip_settings_writes == 0,
+		  "nenhum 0x21: o driver nao reescreveu as configuracoes da placa");
+	check_nvram_not_written();
+}
+
+static void test_probe(void)
+{
+	enum counter_synapse_action action;
+
+	section("A. Probe sem reconfigurar a placa (branch board/*)");
+
+	/* A1 - the chip select is the one the board designated */
+	fake_reset();
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && mcp->child, "o filho SPI foi registrado");
+	check_settings_not_written();
+	do_release();
+
+	/*
+	 * A2 - the default spi_chip_select is 0, and on the factory part GP0 is
+	 * a GPIO. The upstream driver turns it into a chip select idling high;
+	 * on the AFE board GP0 is grounded. Here the pin stays a GPIO, the
+	 * child is refused and named, and the bridge is still up.
+	 */
+	fake_reset();
+	spi_chip_select = 0;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->child, "sem filho, mas a ponte subiu");
+	CHECK_EQ(fake.pin_designation[0], FAKE_PIN_GPIO);
+	CHECK_MSG(shim_log_contains("GP0") && shim_log_contains("not a chip select"),
+		  "a recusa nomeia o pino e diz por que");
+	check_settings_not_written();
+	do_release();
+
+	/* A3 - a dedicated pin asked for as chip select: refused, bridge up */
+	fake_reset_with_int_pin();
+	spi_chip_select = MCP2210_INTERRUPT_PIN;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->child, "sem filho, mas a ponte subiu");
+	CHECK_MSG(shim_log_contains("GP6"), "a recusa nomeia o pino");
+	CHECK_EQ(fake.pin_designation[MCP2210_INTERRUPT_PIN], FAKE_PIN_DEDICATED);
+	check_settings_not_written();
+	do_release();
+
+	/* A4 - GP8 cannot be a chip select at all: refused, bridge up */
+	fake_reset();
+	spi_chip_select = 8;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->child, "sem filho, mas a ponte subiu");
+	check_settings_not_written();
+	do_release();
+
+	/* A5 - the board's chip select can be any designated pin, GP4 here */
+	fake_reset();
+	fake.pin_designation[1] = FAKE_PIN_GPIO;
+	fake.pin_designation[4] = FAKE_PIN_CS;
+	spi_chip_select = 4;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && mcp->child, "GP4 provisionado como CS e aceito");
+	check_settings_not_written();
+	do_release();
+
+	/* A6 - GP6 counting falling edges: a counter that says so */
+	fake_reset_with_int_pin();
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_counter != NULL, "o counter foi registrado");
+	if (shim_counter) {
+		CHECK_EQ(shim_counter->ops->action_read(shim_counter,
+			 &shim_counter->counts[0],
+			 &shim_counter->counts[0].synapses[0], &action), 0);
+		CHECK_EQ(action, COUNTER_SYNAPSE_ACTION_FALLING_EDGE);
+	}
+	check_settings_not_written();
+	do_release();
+
+	/* A7 - provisioned for rising edges: the counter reports rising */
+	fake_reset_with_int_pin();
+	fake.other_settings = (fake.other_settings & ~MCP2210_MASK_INT_MODE) |
+			      FIELD_PREP(MCP2210_MASK_INT_MODE,
+					 MCP2210_INT_MODE_RISING);
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_counter != NULL, "o counter foi registrado");
+	if (shim_counter) {
+		CHECK_EQ(shim_counter->ops->action_read(shim_counter,
+			 &shim_counter->counts[0],
+			 &shim_counter->counts[0].synapses[0], &action), 0);
+		CHECK_EQ(action, COUNTER_SYNAPSE_ACTION_RISING_EDGE);
+	}
+	check_settings_not_written();
+	do_release();
+
+	/*
+	 * A8 - GP6 dedicated but counting nothing, and A9 - GP6 a GPIO, which
+	 * is the AFE board (its DRDY is on GP5). Either way a counter would
+	 * read 0 forever and mean "no sample lost". No counter, and the log
+	 * says this link cannot report loss.
+	 */
+	fake_reset_with_int_pin();
+	fake.other_settings &= ~MCP2210_MASK_INT_MODE;
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_counter == NULL, "modo 'sem contagem': nenhum counter");
+	CHECK_MSG(shim_log_contains("cannot report lost samples"),
+		  "e o log diz o que isso custa");
+	check_settings_not_written();
+	do_release();
+
+	fake_reset();
+	fake.pin_designation[MCP2210_INTERRUPT_PIN] = FAKE_PIN_GPIO;
+	spi_chip_select = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(shim_counter == NULL, "GP6 como GPIO: nenhum counter");
+	CHECK_MSG(mcp && mcp->child, "e o resto da ponte funciona");
+	check_settings_not_written();
+	do_release();
+
+	/* A10 - and the bridge with nothing behind it still comes up */
+	fake_reset();
+	spi_chip_select = 1;
+	spi_device = "";
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->child, "nenhum filho, e o probe passa");
+	do_release();
+	spi_device = "ads1299";
+}
+#endif /* MCP2210_TEST_VARIANT_BOARD */
 
 /* =================================================== B. interrupt counter */
 
@@ -776,11 +951,83 @@ static void test_unimplemented_phases(void)
 	do_release();
 }
 
+/*
+ * The transfer settings cache (BRINGUP_AFE.md §6.1). Each exchange is two USB
+ * frames, and rewriting unchanged settings before every read made the usb
+ * link deliver 167 samples/s at a nominal 250. The property: identical
+ * consecutive messages send 0x40 once; any parameter that changes sends it
+ * again; any failure forgets it; and the data is still the data.
+ */
+static void test_settings_cache(void)
+{
+	u8 tx[28], rx[28];
+	struct spi_transfer x;
+	int i;
+
+	section("K. Cache das transfer settings");
+
+	fresh();
+	fill_pattern(tx, sizeof(tx));
+
+	/* K1 - ten identical reads: one 0x40, and every read still correct */
+	clear_obs();
+	for (i = 0; i < 10; i++) {
+		memset(rx, 0, sizeof(rx));
+		CHECK_EQ(run_one(tx, rx, sizeof(tx)), 0);
+		CHECK_MSG(memcmp(tx, rx, sizeof(tx)) == 0, "o dado de cada leitura confere");
+	}
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS], 1);
+	CHECK_EQ(fake.xfer_bytes, sizeof(tx));
+
+	/* K2 - a different length is a different transaction: 0x40 again */
+	clear_obs();
+	CHECK_EQ(run_one(tx, rx, 27), 0);
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS], 1);
+	CHECK_EQ(fake.xfer_bytes, 27);
+
+	/* K3 - a different speed too */
+	clear_obs();
+	memset(&x, 0, sizeof(x));
+	x.tx_buf = tx;
+	x.rx_buf = rx;
+	x.len = 27;
+	x.speed_hz = 1000000;
+	CHECK_EQ(run_message(&x, 1), 0);
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS], 1);
+	CHECK_EQ(fake.bitrate, 1000000);
+
+	/* K4 - and back to the cached one: written again, since it changed */
+	clear_obs();
+	CHECK_EQ(run_one(tx, rx, 27), 0);
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS], 1);
+
+	/* K5 - a failed transaction forgets the cache */
+	fake.bus_unavailable = true;
+	CHECK_MSG(run_one(tx, rx, 27) != 0, "a transacao recusada falha");
+	fake.bus_unavailable = false;
+	clear_obs();
+	CHECK_EQ(run_one(tx, rx, 27), 0);
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS] == 1,
+		  "depois de uma falha as settings sao escritas de novo");
+
+	/* K6 - what the cache saves: two exchanges per read, not three */
+	clear_obs();
+	CHECK_EQ(run_one(tx, rx, 27), 0);
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_SPI_SETTINGS], 0);
+
+	check_nvram_not_written();
+	do_release();
+}
+
 /* ------------------------------------------------------------------ main */
 
 int main(void)
 {
+#ifdef MCP2210_TEST_VARIANT_BOARD
+	printf("MCP2210 - verificacoes de host (Fase 7), driver da placa\n");
+#else
 	printf("MCP2210 - verificacoes de host (Fase 7)\n");
+#endif
 
 	test_probe();
 	test_interrupt_counter();
@@ -789,6 +1036,7 @@ int main(void)
 	test_spi_contract();
 	test_nvram_read();
 	test_unimplemented_phases();
+	test_settings_cache();
 
 	int status = report();
 

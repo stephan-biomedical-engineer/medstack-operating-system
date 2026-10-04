@@ -7,6 +7,21 @@ sem imagem, sem placa e sem toolchain cruzada:
 make -C tests/mcp2210 check     # ou `make test` na raiz, que roda as duas suites
 ```
 
+## Duas variantes, uma por branch do `linux-med`
+
+O `linux-med` tem dois drivers do MCP2210, um por branch, e eles discordam de
+propósito. `feature/ads1299-mcp2210-driver` é o que vai para mainline.
+`board/*` é o da placa de AFE: nunca reescreve as configurações do chip, não
+reconfigura pino, só registra o `counter` se o GP6 estiver provisionado para
+contar bordas, e não derruba a ponte quando o filho SPI não pode entrar
+(`docs/BRINGUP_AFE.md` §2.3). A suíte compila o driver que estiver no checkout,
+então `VARIANT` segue a branch (`board` para `board/*`, `upstream` para o
+resto) e diz qual rodou na primeira linha.
+
+As expectativas `board` foram injetadas contra o driver upstream
+(`make check VARIANT=board` com o `linux-med` na branch de upstream): 16
+falhas, todas na seção A, uma família por mudança, e nenhuma fora dela.
+
 ## Como funciona
 
 `linux-med/drivers/hid/hid-mcp2210.c` é compilado **byte a byte como ele

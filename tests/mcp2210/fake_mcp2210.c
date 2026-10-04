@@ -9,6 +9,7 @@
 
 struct fake_mcp2210 fake;
 struct counter_device *shim_counter;
+int shim_hw_stop_calls;
 
 unsigned long shim_usleep_calls;
 int shim_hid_parse_ret, shim_hid_start_ret, shim_hid_open_ret;

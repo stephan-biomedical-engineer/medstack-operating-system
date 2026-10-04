@@ -34,7 +34,9 @@ head_() { printf '\n=== %s\n' "$*"; }
 head_ "0. Contexto, para o registro"
 say "  data:     $(date -Is 2>/dev/null || date)"
 say "  kernel:   $(uname -r)"
-say "  maquina:  $(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0' || echo '?')"
+MODEL=$(tr -d '\0' < /sys/firmware/devicetree/base/model 2>/dev/null)
+[ -n "$MODEL" ] || MODEL=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+say "  maquina:  ${MODEL:-?}"
 say "  rtc:      $(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null || echo 'sem RTC')"
 say ""
 say "  ATENCAO: se o RTC nao esta inicializado, a data acima esta errada e todo"
@@ -145,20 +147,25 @@ else
 	say "    (nada com 'mcp2210' em /sys/kernel/debug/gpio)"
 fi
 
+# O numero de linhas sai do intervalo "GPIOs A-B" do debugfs. Sem
+# CONFIG_GPIO_SYSFS (a imagem nao tem; o Ubuntu tambem nao expoe ali),
+# /sys/bus/gpio/devices/gpiochipN nao tem label nem ngpio - a versao anterior
+# lia de la e dava SKIP em qualquer kernel, inclusive o da placa. Achado no
+# host em 2026-10-03.
 NG=""
-for g in /sys/bus/gpio/devices/gpiochip*; do
-	[ -r "$g/label" ] || continue
-	case "$(cat "$g/label")" in
-	*mcp2210*) NG=$(cat "$g/ngpio" 2>/dev/null); say "    $g label=mcp2210 ngpio=$NG" ;;
-	esac
-done
+RANGE=$(printf '%s\n' "$GPIOBLOCK" | sed -n 's/.*GPIOs \([0-9]*\)-\([0-9]*\),.*mcp2210.*/\1 \2/p' | head -1)
+if [ -n "$RANGE" ]; then
+	set -- $RANGE
+	NG=$(( $2 - $1 + 1 ))
+	say "    intervalo $1-$2 -> ngpio=$NG"
+fi
 
 if [ "$NG" = "9" ]; then
 	ok "gpiochip de rotulo mcp2210 com 9 linhas"
 elif [ -n "$NG" ]; then
 	no "o gpiochip tem $NG linhas, esperado 9"
 else
-	skip "nao foi possivel ler ngpio pelo sysfs; confira o bloco do debugfs acima"
+	skip "nenhum gpiochip mcp2210 no debugfs; debugfs montado?"
 fi
 
 # ------------------------------- 6. critério 5 - o contador, via subsistema
@@ -207,10 +214,11 @@ else
 	fi
 
 	say ""
-	say "  ISTO E A PRIMEIRA CONFIRMACAO EMPIRICA das constantes [DS20005176?]:"
-	say "  ler o contador exige GET_CHIP_SETTINGS, SET_CHIP_SETTINGS e"
-	say "  GET_INT_COUNT com os deslocamentos certos. Se chegou aqui, os tres"
-	say "  opcodes e o byte 1 do 0x12 estao corretos no silicio."
+	say "  O que isto confirma no silicio: GET_CHIP_SETTINGS, SET_CHIP_SETTINGS e"
+	say "  GET_INT_COUNT foram aceitos com estado 0x00 e eco de comando certo (o"
+	say "  driver descarta resposta com eco errado). O que NAO confirma: o"
+	say "  deslocamento do valor. Um contador em repouso le 0, e um deslocamento"
+	say "  errado sobre um byte zerado tambem le 0. Isso so o criterio 6 fecha."
 fi
 
 # ------------------------------------- 7. critério 6 - os 1000 pulsos
@@ -275,7 +283,7 @@ cat <<BLOCK
 | 5. contador le e zera | | |
 | 6. 1000 pulsos -> 1000 ± 0 | | |
 
-Kernel: \`$(uname -r)\`. Placa: \`$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0')\`.
+Kernel: \`$(uname -r)\`. Maquina: \`${MODEL:-?}\`.
 
 **O que isto NAO mediu**: nada analogico. Nenhum conversor estava ligado — e o
 parametro \`spi_device=\` existe para garantir isso.

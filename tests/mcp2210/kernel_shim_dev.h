@@ -123,7 +123,9 @@ static inline int hid_parse(struct hid_device *h) { (void)h; return shim_hid_par
 static inline int hid_hw_start(struct hid_device *h, unsigned f) { (void)h; (void)f; return shim_hid_start_ret; }
 static inline int hid_hw_open(struct hid_device *h) { (void)h; return shim_hid_open_ret; }
 static inline void hid_hw_close(struct hid_device *h) { (void)h; }
-static inline void hid_hw_stop(struct hid_device *h) { (void)h; }
+/* Counted: stopping twice frees usbhid's buffers twice (BRINGUP_AFE.md §2.4). */
+extern int shim_hw_stop_calls;
+static inline void hid_hw_stop(struct hid_device *h) { (void)h; shim_hw_stop_calls++; }
 static inline void hid_device_io_start(struct hid_device *h) { (void)h; }
 
 /* The seam. Implemented by the fake device; see fake_mcp2210.h. */
