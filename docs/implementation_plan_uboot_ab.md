@@ -1,6 +1,8 @@
 # Plano de implementação — seleção de slot A/B no U-Boot (STM32MP257)
 
-**Estado**: **implementado e validado em hardware, menos o fallback.** O ciclo completo foi medido em
+**Estado**: **implementado e validado em hardware, inclusive o fallback** (2026-10-04, ver "Resultado
+medido — passo 6" no §8; a injeção foi uma aquisição que não parte, não um pânico de kernel).
+O texto abaixo, de antes dessa data, dizia: **implementado e validado em hardware, menos o fallback.** O ciclo completo foi medido em
 2026-08-31: `make bundle` → `rauc install` → `BOOT_ORDER=B A` → `reboot` → a placa boota o slot B
 pelo PARTUUID que o bootloader escolheu, com `rauc.slot=B` na cmdline, e o slot A permanece elegível.
 Nenhum `fw_setenv` em nenhum ponto. O que resta é o passo 6 do §8 — o fallback por injeção de falha,
@@ -575,6 +577,44 @@ ele importa: um aparelho em campo troca de identidade ao se atualizar.
 **Não medido ainda**: passos 3, 5 e 6 — a permanência do contador em boots repetidos, o pulo de um
 slot com contador zerado, e o fallback por injeção de falha. O sexto é o único que exercita o
 mecanismo que existe para falhar.
+
+### Resultado medido — passo 6, o fallback (2026-10-04)
+
+**Medido, e a injeção não foi a que este plano previa.** O passo 6 pedia zerar o superbloco do
+slot B e ver três pânicos. O que se injetou foi uma falha mais realista e mais exigente: um slot que
+boota, roda o kernel e o userspace inteiros, e cuja **aquisição não parte**. Para essa falha ser
+vista, foi preciso antes corrigir o que a confirmação do slot significava.
+
+**O defeito que impedia isso.** Até esta data o slot era confirmado aos ~12,9 s de qualquer boot,
+pelo `rauc-mark-good.service`, que espera a `boot-complete.target`. Essa target não exigia nada,
+então "o boot completou" queria dizer "o kernel subiu". Além disso, o `eeg-acquisition-service`
+chamava `markBootedGood()` **antes** do `device.start()`. Na primeira subida do link `iio` na placa
+(`BRINGUP_AFE.md` §6.4), a partida falhou 54 vezes, e o slot foi confirmado em cada uma. Uma
+atualização que quebrasse a aquisição teria ficado instalada, confirmada pelo próprio software que
+ela quebrou.
+
+**A correção** (padrão de *boot assessment* do systemd): a unit virou `Type=notify`, com
+`Before=` e `RequiredBy=boot-complete.target`. O serviço avisa `READY=1` por
+`MedicalUpdate::reportReady()`, depois do `device.start()`, e deixou de chamar `markBootedGood()`:
+um único escritor dos contadores, o SO. O tomógrafo, que não tem aplicação, continua com a
+`boot-complete.target` vazia, como antes.
+
+| Boot | Estado | `BOOT_A_LEFT` | `boot-complete.target` | Slot |
+|---|---|---|---|---|
+| normal | serviço pronto aos 12,53 s → target 12,59 s → `marked slot(s) rootfs.0 as good` 13,64 s | 3 | `active` | A |
+| injeção 1 | regra udev em `/etc` sem o link de `/run`: `front-end refused to start`, 15 reinícios | **2** | `inactive` | A |
+| injeção 2 | idem | **1** | `inactive` | A |
+| injeção 3 | idem | **0** | `inactive` | A |
+| 4º boot | o U-Boot cai sozinho: `rauc.slot=B`, `marked slot(s) rootfs.1 as good` | 0 | `active` | **B** |
+
+Nenhum `fw_setenv` em ponto algum. Recuperado com `rauc install` no slot A, o que também apagou a
+regra injetada: `BOOT_A_LEFT=3`, slot A confirmado, serviço com 0 reinícios.
+
+**O que isto não diz**: nada sobre um kernel que entra em pânico. Esse caso depende de o `saveenv`
+acontecer antes do `booti` (§5, ponto 1), o que está escrito no `bootcmd`, mas a falha que o
+exercitaria não foi injetada. E o `rauc status` mostrou `boot status: good` durante as três
+injeções. Com o backend U-Boot, ele diz `good` enquanto restam tentativas, então essa linha não
+serve para ver um slot não confirmado: o que serve é o contador.
 
 Registrar os resultados em `RESULTS.md` §8 e em `BOOT_SLOT_AB_STM32MP2.md`; a §6 deste arquivo
 recebe o que foi medido, como fizeram os planos do RAUC e do LUKS.

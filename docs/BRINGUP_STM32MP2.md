@@ -34,6 +34,8 @@
 | 16 | `make verify-bundle` falha logo após um `make bundle` bem-sucedido | `RAUC_NATIVE` apontava para dentro do `WORKDIR`, que o `rm_work` (item 3) apaga ao fim da receita | `sysroots-components/*/rauc-native/…` | `make verify-bundle BOARD=stm32` volta a passar (§9.10) |
 | 17 | SSH recusa a conexão com `REMOTE HOST IDENTIFICATION HAS CHANGED` depois de bootar o outro slot | o rootfs não traz chave de host nem `machine-id`; ambos são gerados no primeiro boot **de cada slot** | em aberto | `ls rootfs/etc/ssh/` sem chaves, `/etc/machine-id` com 0 bytes (`BOOT_SLOT_AB_STM32MP2.md` §5.1) |
 | 18 | — (nenhum) | `Storage=persistent` põe o journal em `/var/log/journal`, que fica **dentro de um slot A/B** — a próxima atualização o destrói | em aberto | `10-journald-audit.conf` lido no rootfs produzido (`BOOT_SLOT_AB_STM32MP2.md` §5.2) |
+| 19 | `eeg-acquisition` em laço (54 reinícios), log só com `front-end refused to start` | com o sandbox completo, `ProtectKernelTunables=yes` monta `/sys` só leitura, e o link `iio` configura o conversor por sysfs | udev liga `/run/med-afe/eeg0` ao sysfs do conversor; a unit ganha `ReadWritePaths=-/run/med-afe/eeg0` | `systemd-run` com as mesmas propriedades nos dois sentidos; serviço com `NRestarts=0` no slot B (§9.12) |
+| 20 | — (nenhum) | o slot A/B era confirmado aos ~12,9 s de qualquer boot (`rauc-mark-good` espera uma `boot-complete.target` que nada exigia), e a aplicação chamava `markBootedGood()` antes do `device.start()` | unit `Type=notify`, `RequiredBy=boot-complete.target`, `READY=1` só depois do `device.start()` | fallback medido: três boots com a aquisição falhando, `BOOT_A_LEFT` 3→0, o quarto em B (§9.12) |
 
 Note o padrão: **oito dos dezoito itens não tinham sintoma nenhum**. Não falharam build, não
 falharam boot, não emitiram warning. Apareceram porque alguém foi olhar o artefato produzido. E note
@@ -1247,6 +1249,43 @@ O que **não** foi medido: o fallback por injeção de falha, e o pulo de um slo
 Ver `implementation_plan_uboot_ab.md` §8, passos 5 e 6.
 
 ---
+
+### 9.12 Sexta sessão (2026-10-04): o front-end real na placa, e o fallback medido
+
+A ponte USB-SPI e o conversor da placa de AFE, ligados numa porta USB da DK. O registro completo
+está em `BRINGUP_AFE.md` §6.4 e, para o A/B, em `implementation_plan_uboot_ab.md` §8, "passo 6".
+Aqui fica o que a sessão ensinou sobre **esta placa e o seu caminho de atualização**.
+
+- **A placa estava acessível por IPv4** (`192.168.1.11`, DHCP, interface `end0`), ao contrário do
+  que registra o `BRINGUP_HMI_STM32MP2.md` §11. O IPv6 link-local continua sendo o endereço
+  estável, porque sai do MAC; o IPv4 pode mudar a cada boot.
+- **Um kernel novo exige regravar o cartão.** A placa rodava o kernel de fábrica da ST, sem os
+  drivers do front-end. O kernel mora na `med-boot`, que os dois slots compartilham e que nenhum
+  bundle troca (§5.4 do `BOOT_SLOT_AB_STM32MP2.md`). Daí em diante, tudo o que mudou no rootfs foi
+  por OTA: três `rauc install` na sessão.
+- **`make bundle` ignorava `KERNEL=med`**, e teria empacotado módulos de outro kernel numa instalação
+  assinada, verificada e bem-sucedida. Corrigido no `Makefile`; o bundle foi conferido por dentro
+  (`/lib/modules/6.6.129-gb8dbcb083402`).
+- **Itens 19 e 20 da tabela do topo.** O 20 é o mais grave da sessão e não tinha sintoma: o slot
+  era confirmado sem que nada da aplicação tivesse rodado. Com a correção, a confirmação vem aos
+  13,64 s, depois do aviso de prontidão do serviço aos 12,53 s.
+- **O fallback, pela primeira vez.** A falha injetada foi uma regra udev em `/etc` sem o link de
+  `/run`, para que o boot fosse inteiro e só a aquisição falhasse. Resultado: `BOOT_A_LEFT` 2, 1,
+  0, nenhuma `boot-complete.target`, e o boot seguinte em `rauc.slot=B`, sem intervenção.
+  Recuperado reinstalando o slot A.
+- **A chave de host SSH mudou a cada troca de slot** (item 17), quatro vezes nesta sessão.
+
+- **O governador de frequência custava 0,7% das amostras** (`BRINGUP_AFE.md` §6.5): o `schedutil`
+  alternava o A35 entre 1,2 e 1,5 GHz 86 vezes por segundo. Fixado em `performance` por
+  `med-cpufreq-policy`, uma receita do `meta-med-bsp` com uma linha de tmpfiles. Ficou no rootfs,
+  e não no fragmento de kernel, para que chegue por OTA.
+- **Desplugar a ponte com o driver carregado** não afeta o kernel do 6.6, mas encerrava a aquisição
+  para sempre: o serviço saía com 0 e o `Restart=on-failure` não reiniciava. Corrigido e validado
+  com a mesma falha: a aquisição volta 1,7 s depois da ponte (`BRINGUP_AFE.md` §6.6).
+
+**Estado ao fim da sessão**: slot B (quarto `rauc install` do dia), `BOOT_B_LEFT=3`, governador
+`performance`, `eeg-acquisition` adquirindo pelo link `usb`. As ~60 sessões vazias deixadas pelo
+laço do item 19 continuam no `/data`.
 
 ## 10. Estado ao fim deste registro
 

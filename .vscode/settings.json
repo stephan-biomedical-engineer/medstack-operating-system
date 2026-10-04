@@ -82,5 +82,77 @@
   },
   "[python]": {
     "editor.tabSize": 4
-  }
+  },
+  // poky is cloned by kas into layers/, not sources/ (that is the
+  // oe-init-build-env convention, which this repository does not use).
+  "python.autoComplete.extraPaths": [
+    "${workspaceFolder}/layers/poky/bitbake/lib",
+    "${workspaceFolder}/layers/poky/meta/lib"
+  ],
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/layers/poky/bitbake/lib",
+    "${workspaceFolder}/layers/poky/meta/lib"
+  ],
+  // Pylance indexes every .py under the workspace root, which here means the
+  // build tree, the cloned layers and the 6.9 GB kernel tree (672 Python
+  // files in linux-med alone). exclude only stops them being scanned as
+  // project source: the two extraPaths above are still used to resolve
+  // imports, so "import bb" keeps working.
+  "python.analysis.exclude": [
+    "**/build/**",
+    "**/layers/**",
+    "**/downloads/**",
+    "**/sstate-cache/**",
+    "**/.kas-container/**",
+    "**/linux-med/**",
+    "**/pki/**"
+  ],
+
+  // ---------------------------------------------------------------------
+  // BitBake extension (yocto-project.yocto-bitbake).
+  //
+  // There is no oe-init-build-env here: kas generates build/conf and sets up
+  // the environment, so pathToEnvScript stays unset and the wrapper below is
+  // what makes the extension's own bitbake calls work. The extension runs
+  //     kas-container shell kas/project-eeg-qemu.yml -c 'bitbake <target>'
+  //
+  // It is kas-container, the same entry point "make" uses, and not the host's
+  // kas. The build directory is created inside the container, where it is
+  // /work/build, and bitbake records that in build/tmp-glibc/saved_tmpdir; the
+  // host's kas sees /home/.../build instead and the sanity checker refuses with
+  // "TMPDIR has changed location". bitbake-layers show-layers passes under
+  // either (it never reaches the check), which is why the first test looked
+  // fine. Builds stay on the Makefile tasks (tasks.json); this is for editing.
+  //
+  // DL_DIR/SSTATE_DIR: local.mk points them at a disk that is specific to one
+  // machine, so they are NOT set here. Without them the container falls back
+  // to ./downloads and ./sstate-cache, which is harmless for parsing but
+  // changes the configuration hash, so the next "make" reparses. Set them in
+  // bitbake.shellEnv in your USER settings (not this file) to avoid that.
+  //
+  // build/bitbake.lock is shared with "make": do not run the extension's
+  // commands while a build is in progress.
+  // ---------------------------------------------------------------------
+  "bitbake.pathToBitbakeFolder": "${workspaceFolder}/layers/poky/bitbake",
+  "bitbake.pathToBuildFolder": "${workspaceFolder}/build",
+  "bitbake.workingDirectory": "${workspaceFolder}",
+  "bitbake.commandWrapper": "${workspaceFolder}/.kas-container/kas-container-5.2 shell kas/project-eeg-qemu.yml -c",
+  "bitbake.buildConfigurations": [
+    {
+      "name": "eeg-qemu",
+      "commandWrapper": "${workspaceFolder}/.kas-container/kas-container-5.2 shell kas/project-eeg-qemu.yml -c"
+    },
+    {
+      "name": "eeg-stm32mp2",
+      "commandWrapper": "${workspaceFolder}/.kas-container/kas-container-5.2 shell kas/project-eeg-stm32mp2.yml -c"
+    },
+    {
+      "name": "tomograph",
+      "commandWrapper": "${workspaceFolder}/.kas-container/kas-container-5.2 shell kas/project-tomograph.yml -c"
+    }
+  ],
+  "bitbake.loggingLevel": "info",
+  "bitbake.disableConfigModification": false,
+  // Every save would start a kas shell and contend for the build lock.
+  "bitbake.parseOnSave": false
 }

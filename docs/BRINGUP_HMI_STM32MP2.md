@@ -333,6 +333,10 @@ nem responde mDNS. Some-se a isso que, nesta rede, o ARP em IPv4 não atravessa 
 o WiFi — `nmap -sn -PR` não encontra nada e o `ping` responde `Destination Host Unreachable` da
 própria máquina de origem.
 
+**Atualização de 2026-10-04**: nessa data o IPv4 chegou (`ssh root@192.168.1.11`, endereço lido em
+`end0` pela sessão IPv6). Não se sabe o que mudou na rede, e o endereço vem de DHCP. O caminho
+abaixo continua sendo o estável.
+
 O que funciona, e é o caminho a usar em bancada:
 
 ```sh

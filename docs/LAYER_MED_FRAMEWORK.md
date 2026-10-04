@@ -125,8 +125,10 @@ trilha de auditoria que pareça andar para trás.
 
 ### 5.2 `MedicalDevice` — a abstração que sustenta a portabilidade
 
-Interface abstrata de seis métodos, incluindo `selfTest()` (IEC 60601-1 §14), mais uma **fábrica por
-nome**:
+Interface abstrata de seis métodos, incluindo `selfTest()` (IEC 60601-1 §14), mais `lastError()`
+(desde 2026-10-04: o texto do que a última chamada recusou, que os drivers `rpmsg` e `iio` já
+montavam e ninguém conseguia ler; acrescentado no fim da classe, o que mantém a vtable do ABI 1),
+mais uma **fábrica por nome**:
 
 ```cpp
 MedicalDeviceFactory::registerDriver("simulated", …);
@@ -224,6 +226,12 @@ novo como bom só depois do próprio autoteste pós-update passar. Os três prec
 estruturado, não de saída de CLI parseada. E a fronteira está declarada: esta classe nunca toca
 bloco de disco nem ambiente de bootloader.
 
+`reportReady()`, estático e sem D-Bus (2026-10-04), é como uma aplicação **participa** da confirmação
+do slot sem escrevê-la: manda `READY=1` ao systemd, e uma unit `Type=notify` exigida pela
+`boot-complete.target` segura a confirmação até esse aviso. `markBootedGood()` continua na API, mas a
+aplicação de referência não o chama mais, para que o SO seja o único escritor dos contadores do
+bootloader.
+
 ### 5.8 `src/MedDigest.h` — o único cabeçalho **não instalado**
 
 SHA-256 sobre a interface EVP do OpenSSL. Fica em `src/` por decisão explícita: aplicações obtêm
@@ -265,6 +273,9 @@ byte igual.
 - **O `MedicalUpdate` foi exercitado apenas até onde o RAUC do QEMU chega** — que o serviço de
   atualização esteja *ativo* na suíte prova que o wrapper alcançou o daemon por D-Bus, mas
   `markBootedGood()` só terá efeito real quando a seleção de slot existir no alvo físico.
+  **Atualização de 2026-10-04**: a seleção existe, e o `reportReady()` foi exercitado no STM32MP257,
+  inclusive pela falha que ele existe para revelar (três boots sem prontidão, o fallback para o
+  outro slot).
 - **Os carimbos de tempo são corretos e a fonte de tempo não.** Na placa, sem RTC inicializado, o
   `MedicalLogger` e o `MedicalStorage` produzem registros com data errada — a API está certa e o
   registro sai errado, que é o tipo de defeito que nenhuma leitura de código encontra.

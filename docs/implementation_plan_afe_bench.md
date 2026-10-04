@@ -510,6 +510,15 @@ clínico com cara de evento fisiológico.
 
 ### 8.3 O gerador de teste interno
 
+> **Corrigido pela bancada em 2026-10-04 (`BRINGUP_AFE.md` §4.3):** o procedimento abaixo **não
+> funciona pelo `in_voltageN_raw`**. A leitura avulsa é single-shot, e cada START reinicia o
+> divisor do gerador: a onda de ~1 Hz fica presa na fase zero e lê uma linha reta. A amplitude e a
+> frequência só se medem pelo **buffer**, que converte em modo contínuo, e é assim que
+> `scripts/afe-phase4.py` faz. A tabela abaixo continua valendo, agora **medida**: o gerador oscila
+> ±VREF/2400, ou seja, 3750 µV de pico a pico em `1x`. A constante `ADS1299_TEST_SIGNAL_PP_DIVISOR`
+> citada no fim desta seção não existe mais: o autoteste de probe passou a medir o nível DC, e a
+> constante agora é `ADS1299_TEST_SIGNAL_DIVISOR` = 2400.
+
 ```sh
 cat .../input_mux_available          # normal shorted bias_meas mvdd temperature test_signal ...
 echo test_signal > .../input_mux

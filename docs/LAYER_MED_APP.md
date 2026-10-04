@@ -204,12 +204,24 @@ paciente), `ReadWritePaths=/data` como único destino de escrita, `MemoryDenyWri
 `SystemCallFilter=@system-service` com `SystemCallErrorNumber=EPERM`, e `DeviceAllow=/dev/rpmsg0`,
 inofensivo onde o nó não existe.
 
+Uma segunda exceção de escrita, `ReadWritePaths=-/run/med-afe/eeg0`, desde 2026-10-04. Um front-end
+IIO se configura escrevendo atributos de sysfs, e `ProtectKernelTunables=yes`, junto com o resto
+deste sandbox, monta `/sys` só leitura: na placa, o serviço falhou na primeira escrita e reiniciou
+54 vezes. A camada adjunta do front-end liga aquele caminho ao diretório sysfs do conversor, e o
+systemd segue o link ao montar o namespace. Fica gravável esse diretório, e não o `/sys` inteiro.
+O `-` torna a linha inócua nos links `rpmsg` e `simulated`.
+
+**`Type=notify`, exigida pela `boot-complete.target`** (também de 2026-10-04). É o que liga esta
+unit à confirmação do slot A/B: o `rauc-mark-good.service` só roda depois dessa target, e a target
+só é atingida quando o serviço avisa que está pronto, depois que o front-end partiu. Antes disso,
+`Type=simple` e nenhuma exigência faziam o slot ser confirmado aos ~12,9 s de qualquer boot.
+
 `RuntimeDirectory`/`StateDirectory` fazem o systemd criar `/run/medplatform` e
 `/var/lib/medplatform` com o modo certo — é assim que isso funciona num rootfs somente-leitura. E
 `Wants=data.mount`, **não** `Requires`: num alvo sem a partição, o serviço deve falhar alto nos
 próprios termos, com registro de auditoria, em vez de ser silenciosamente segurado pelo systemd.
 
-### 5.4 `main.cpp` — 361 linhas sem uma syscall
+### 5.4 `main.cpp` — sem uma syscall
 
 Sete `#include <medplatform/...>` e mais nada do sistema. A ordem de partida é o desenho principal,
 e cada passo é uma condição de parada, não um aviso:
@@ -226,10 +238,15 @@ e cada passo é uma condição de parada, não um aviso:
    `SecurityEvent` — é configuração legítima de desenvolvimento e ilegítima clinicamente, e de
    qualquer forma é uma decisão.
 6. **Servidor IPC** publicando o socket.
-7. **Só então `markBootedGood()`.** O comentário é a definição operacional de "atualização
+7. **`device.start()`, antes de criar a sessão.** Uma partida recusada vai para a auditoria com o
+   motivo exato (`MedicalDevice::lastError()`) e não deixa diretório de sessão: antes de
+   2026-10-04, cada tentativa falha deixava um `metadata.json` de uma gravação que nunca existiu.
+8. **Só então `MedicalUpdate::reportReady()`.** É a definição operacional de "atualização
    bem-sucedida": chegar aqui significa que o software instalado *neste slot* subiu, passou no
-   autoteste e abriu todos os recursos — isso, e não "o kernel bootou", é a condição para confirmar
-   um update.
+   autoteste, abriu todos os recursos **e iniciou a aquisição**. O serviço só avisa o systemd; quem
+   confirma o slot é o SO, quando a `boot-complete.target` é atingida. Até 2026-10-04 este passo
+   chamava `markBootedGood()`, e antes do `device.start()`: um slot com a aquisição quebrada era
+   confirmado (medido na placa, `implementation_plan_uboot_ab.md` §8, "passo 6").
 
 O laço tem três decisões que merecem nota: `accept()` com timeout **zero** (um visualizador
 conectando nunca trava a aquisição); **o registro é gravado antes de ser publicado** ("o que um

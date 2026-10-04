@@ -251,6 +251,105 @@ formato*, **não** de latência. Latência só tem significado no STM32MP257, e 
 
 ---
 
+### Resultado — o front-end real, pelo link `usb`, num host (2026-10-04)
+
+Primeira aquisição com silício. A ponte MCP2210 foi plugada num PC (Ubuntu, kernel 6.8, Secure Boot
+com uma chave de bancada), com o `hid-mcp2210` e o `ti-ads1299` do `linux-med` compilados para esse
+kernel, e o ADS1299 numa placa de AFE **sem eletrodos** (entradas flutuando; toda medida abaixo usa
+entradas internas do MUX). O registro completo, com cada comando, está em `BRINGUP_AFE.md` §2–§6.
+**Nada disto é da STM32MP257**: é o mesmo código de driver num kernel e num controlador USB
+diferentes.
+
+| Medida | Resultado | Comando |
+|---|---|---|
+| Identidade e reset | ID `0x3E` (ADS1299, 8 canais); os 23 registradores de configuração no valor da Tabela 11 | `afe-spi-oracle.py`, sem driver |
+| Amplitude do gerador (a ambiguidade A1) | ±VREF/2400 de **pico**; 167 259–167 335 códigos pp nos 8 canais, contra 167 772 | idem |
+| Tabela de ganhos e escala | `raw × scale` constante em 0,72% (1x) e 0,34% (2x) nos 7 ganhos; a −0,04% e −0,18% do previsto | `afe-phase4.py` |
+| Ruído com entradas em curto, ganho 24 | 0,13 µV RMS, 0,63 µV pp (40 conversões avulsas) | idem |
+| MUX comuta | em curto, ligar o gerador move a leitura 2 códigos, contra 167 300 | idem |
+| Taxa do link `usb`, a 250 SPS | **167/s** com o driver original (3 trocas HID × 2 ms); **250/s** depois de não reenviar transfer settings inalteradas | `afe-spi-oracle.py timing`, `afe-phase4.py --only ac` |
+| Sessão de 30 min, 250 SPS | 449 998 devidas, 449 873 entregues, **125 perdidas (0,0278%)**, diferença não contada **0**; **0** amostras corrompidas | `afe-phase5-long.py` |
+
+**Três defeitos que só a execução viu**, nenhum visível a build nem à suíte de host como estava:
+
+1. **Desplugar a ponte derrubava o kernel** (`kernel BUG at mm/slub.c:553`): o driver não tinha
+   `.remove`, o núcleo HID parava o hardware e a ação devm parava de novo, e o `usbhid` liberava os
+   mesmos buffers duas vezes. Corrigido com um `.remove` vazio. A suíte de host agora reproduz a
+   ordem de remoção do núcleo HID.
+2. **O autoteste de probe reprovava silício bom**, por desenho. Em single-shot, cada START reinicia o
+   divisor do gerador de teste, e a onda de ~1 Hz nunca parece oscilar. Valeria também na ligação
+   `spi`. Corrigido medindo o nível DC do gerador contra o offset em curto: 83 542–83 829 códigos
+   contra 83 886.
+3. **A ponte reenviava as transfer settings antes de cada transação**, e a 250 SPS um terço das
+   amostras se perdia. Isso não aparece como erro, só como taxa: o contador do driver acusava a
+   perda corretamente, e o serviço teria registrado uma sessão com um terço a menos do que declarava.
+
+**O que isto significa**: o teto do link `usb` é do protocolo de comando e resposta da ponte sobre o
+quadro de 1 ms do USB full-speed. São duas trocas no mínimo por amostra, ~4 ms, ou seja, **~250
+amostras por segundo, que é a menor taxa do conversor**. O link funciona exatamente na borda, com
+margem zero: o p90 de uma leitura é 4,084 ms. A perda medida não é zero, e não há como torná-la
+zero com garantia neste link. É um argumento quantitativo, e não de adjetivo, para a topologia de
+produto ser a do coprocessador (`amp`).
+
+**E o que um registro precisa saber**: em 30 minutos houve 125 perdas, mas só 49 lacunas visíveis
+nos timestamps, com o maior intervalo de 9,04 ms (≤ 2 amostras). Depois de uma leitura atrasada o
+driver dispara a seguinte imediatamente, e a amostra de recuperação chega com um intervalo de
+aparência normal. **A perda neste link não pode ser inferida dos timestamps**; só o `lost_samples`
+do driver a conta, e foi exato na sessão inteira. O serviço de aquisição tem de levar esse número
+para o registro.
+
+**O que isto não significa**: nada sobre a placa (6.6, outro controlador USB); nada sob carga (o PC
+estava ocioso); nada sobre as ligações `spi` e `amp`, então a comparação entre ligações continua por
+fazer; nada sobre o caminho do eletrodo (sem eletrodos, sem fonte DC externa); e o detector de
+corrupção só enxerga erros acima de 5% da excursão do sinal de teste.
+
+### Resultado — o mesmo front-end, pelo link `usb`, na STM32MP257 (2026-10-04)
+
+A ponte numa porta USB da STM32MP257F-DK, com o kernel `6.6.129-gb8dbcb083402` do `linux-med`
+(cartão regravado: o kernel mora na `med-boot`, que nenhum bundle troca) e o
+`eeg-acquisition-service` gravando no `/data` criptografado. É a primeira aquisição de silício
+pela plataforma inteira, do driver de kernel ao registro de sessão, no alvo físico.
+
+```
+$ make stm32 KERNEL=med KEY=development       # depois: make bundle BOARD=stm32 KERNEL=med KEY=development
+mcp2210 0003:04D8:00DE.0001: USB-SPI bridge ready, 9 GPIOs, 8 chip selects, ads1299 attached
+ads1299 spi0.4: self test passed: test signal DC level 83453..83783 codes from offset (expected 83886), shorted-input noise 117 codes
+```
+
+| Medida, 20 s | Resultado |
+|---|---|
+| gravado em `raw.bin` | 355 quadros × 488 bytes = **4970 amostras, 248/s** |
+| perdidas (`lost_samples`) | **34**; 4970 + 34 = 5004, contra ~5002 devidas |
+| perda | **0,68%**, contra 0,03% no PC ocioso |
+| ruído em curto no autoteste | 117 e 49 códigos, em dois boots, contra 23 no PC |
+
+**Três defeitos que só a placa mostrou, nenhum visível a build, QEMU ou PC** (`BRINGUP_AFE.md` §6.4):
+o sandbox da unit montava `/sys` só leitura e o link `iio` configura o conversor por sysfs (54
+reinícios); o motivo da falha não chegava ao log; e cada tentativa falha deixava uma sessão vazia
+no registro. Mais um, que é deste documento: **o slot A/B era confirmado com a aquisição quebrada**
+(§8, "o fallback").
+
+**O que isto não significa**: uma janela de 20 s, não uma sessão longa. A perda e o ruído maiores
+que no PC são observações e não conclusões, até uma sessão longa na placa. Nada sobre jitter, CPU
+ou carga, e nada ainda sobre eletrodos.
+
+**A sessão longa, e a causa da perda** (mesmo dia, `BRINGUP_AFE.md` §6.5). Em 30 min com o
+governador padrão (`schedutil`), a perda foi de **0,67%**, com 0 saltos de sequência entre os
+quadros gravados, intervalo entre quadros com mediana de 56,01 ms (esperado 56) e p99,9 de 62,9 ms,
+e o serviço usando ~1,4% de um núcleo. A causa foi isolada trocando só o governador de frequência
+da CPU:
+
+| Governador | Trocas de frequência/s | Perda |
+|---|---|---|
+| `schedutil` (padrão) | ~86 | 0,63–0,72% |
+| `ondemand`, parado em 1,2 GHz | 0–0,1 | 0,005–0,021% |
+| `performance`, fixo em 1,5 GHz, 30 min | 0 | **0,000–0,003%** |
+
+**A perda acompanha a taxa de troca de frequência, não a frequência.** Sem trocas, o link `usb`
+na placa perde tanto quanto no PC ocioso. É um fato de plataforma, e não do front-end: qualquer
+aquisição temporizada pelo host nesta placa paga pelo DVFS. A política que o corrige ainda não foi
+escolhida, e o custo de energia de cada uma não foi medido.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
@@ -346,7 +445,9 @@ inativo, verificação criptográfica). A *integração com bootloader* **não e
 verdade e o ambiente do bootloader é reordenado para `BOOT_ORDER=B A`; o que continua sem medição,
 nos dois alvos, é um boot que **use** essa ordem. Além disso, `boot-attempts` é rejeitado pelo RAUC para qualquer backend
 que não seja `uboot`/`barebox`, então o mecanismo de fallback do QEMU seria diferente do que o
-STM32MP257 usa. Ver `implementation_plan_rauc.md` §3.
+STM32MP257 usa. Ver `implementation_plan_rauc.md` §3. **Atualização de 2026-10-04**: no
+STM32MP257, a troca de slot (2026-08-31) e o fallback por falha injetada (§8) estão medidos; no
+QEMU, continua valendo o que este parágrafo diz.
 
 ---
 
@@ -837,13 +938,13 @@ reordenou uma lista, não a substituiu.
 Com isto, a frase da §6 muda pela primeira vez desde que foi escrita. Era *"a política A/B está
 validada no QEMU, a integração com o bootloader não está validada em lugar nenhum"*. Passa a ser:
 **a política A/B está validada no QEMU, e no STM32MP257 estão validadas a instalação, a ativação e a
-troca de slot — o fallback não.**
+troca de slot — o fallback não.** Em 2026-10-04 mudou outra vez: **o fallback também**, por injeção
+de falha (ver "o fallback, por injeção de falha", abaixo).
 
 ##### O que ainda **não** foi medido
 
-- **O fallback.** Um slot que falha *n* vezes deve ceder a vez ao outro. É o único item que exige
-  injeção de falha — corromper o slot B e contar os boots — e sem isso continua sendo alegação, pela
-  mesma razão que o `acq-active` da suíte de aceitação ensinou.
+- ~~**O fallback.**~~ Medido em 2026-10-04, com uma aquisição que não parte como falha injetada
+  (abaixo). Continua não medido para um kernel que entra em pânico.
 - **Nada disso tem rede de proteção automatizada.** O `make check` roda no QEMU, onde
   `MED_BOOTLOADER` é `noop`; nenhuma das 21 asserções pode ver uma regressão aqui. A bancada é o
   único teste.
@@ -1029,6 +1130,33 @@ O modelo que isso congela, as três linhas medidas:
 
 ---
 
+### Resultado — o fallback, por injeção de falha (2026-10-04)
+
+**Antes de medir, foi preciso corrigir o que "slot bom" significava.** O `rauc-mark-good.service`
+confirmava o slot aos ~12,9 s de qualquer boot, porque espera a `boot-complete.target` e nada
+exigia essa target. E o serviço de aquisição chamava `markBootedGood()` antes do `device.start()`.
+Na placa, com a partida falhando 54 vezes, o slot foi confirmado em todas. Correção: *boot
+assessment* do systemd. A unit virou `Type=notify` e passou a ser exigida pela
+`boot-complete.target`, com `READY=1` por `MedicalUpdate::reportReady()` depois do
+`device.start()`. O SO passou a ser o único escritor dos contadores.
+
+| Boot | `boot-complete.target` | `BOOT_A_LEFT` | Slot |
+|---|---|---|---|
+| normal: pronto 12,53 s, target 12,59 s, `marked … rootfs.0 as good` 13,64 s | atingida | 3 | A |
+| aquisição não parte (injetada), 1º | não atingida | **2** | A |
+| idem, 2º | não atingida | **1** | A |
+| idem, 3º | não atingida | **0** | A |
+| seguinte, sem intervenção | atingida | 0 | **B** (`rauc.slot=B`, marcado `good`) |
+
+Nenhum `fw_setenv`. Recuperado com `rauc install` no slot A (`BOOT_A_LEFT=3`).
+
+**O que isto não significa**: nada sobre um kernel em pânico, que não foi a falha injetada. E o
+`rauc status` disse `good` durante as três falhas: com o backend U-Boot isso quer dizer "restam
+tentativas", não "confirmado", e só o contador distingue os dois. Detalhes em
+`implementation_plan_uboot_ab.md` §8, "passo 6".
+
+---
+
 ## 9. O que **não** foi medido
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
@@ -1039,7 +1167,8 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   `rpmsg` continua não exercitado em alvo nenhum. O boot acrescentou uma restrição ao plano —
   `stm32-rproc 0.m33: Support of signed firmware only`.
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
-- **Integração com bootloader e fallback A/B em boot falho** — §6. A §8 não muda isso, nem depois
+- **Integração com bootloader e fallback A/B em boot falho** — **medidos no STM32MP257 em
+  2026-08-31 (troca) e 2026-10-04 (fallback, §8)**; o texto a seguir é de antes. §6. A §8 não muda isso, nem depois
   do `rauc install` de 2026-08-30: no STM32MP257 a seleção de slot **não está implementada**
   (`med-boot` compartilhada, `extlinux.conf` fixando o slot A), então `BOOT_ORDER=B A` é escrito e
   nunca lido; no QEMU o mecanismo é outro. Também não medido: o **estado de fábrica** desse
@@ -1053,6 +1182,8 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   deixou esta lista em 2026-08-30 (§8), e a HMI em 2026-08-27 (`BRINGUP_HMI_STM32MP2.md`).
 - **Estabilidade do serviço de aquisição na placa** — subiu, mas o log de boot traz dois
   `Started …` e o `NRestarts` não foi consultado. Não se pode afirmar que roda sem reiniciar.
+  **Atualização de 2026-10-04**: no link `usb`, `NRestarts=0` depois das correções (§3); em sessão
+  longa, ainda não medido.
 - **Carimbo de tempo confiável no alvo físico** — a placa correu sem RTC inicializado, com data de
   2025-05-29. Nenhuma medida deste documento tomada na placa depende de tempo absoluto, mas
   qualquer registro que o dispositivo escreva depende, e isso não está tratado.
@@ -1105,6 +1236,14 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   - o contador de bordas do GP6 como referência de perda de amostra;
   - **se os módulos sequer carregam**. Compilar não é `insmod`, e em particular a disputa de
     associação com o `hid-generic` está *lida no fonte do kernel* e não observada.
+  **Atualização de 2026-10-04 (§3, "o front-end real, pelo link `usb`, num host")**: num PC,
+  não na placa, deixaram de ser "não medidos" os módulos carregarem, a associação contra o
+  `hid-generic` (observada), a vazão da ligação USB (167/s, depois 250/s, explicada por trocas HID
+  medidas), o autoteste contra o gerador interno (reprovava por desenho e foi corrigido), o ruído em
+  curto e a perda de amostra numa sessão de 30 min com o host ocioso. Na STM32MP257, no mesmo dia:
+  os módulos carregam, o autoteste passa e o serviço adquire, mas só numa janela de 20 s (§3).
+  Continuam não medidos: a sessão longa e o jitter na STM32MP257, a perda **sob carga**, as ligações `spi` e `amp`, a comparação entre elas, e o
+  contador do GP6, que a placa de AFE não pode usar porque o DRDY está no GP5.
   E há uma classe de erro anterior a todas essas: **nenhuma constante de datasheet foi conferida**.
   Mapa de registradores do ADS1299, opcodes e deslocamentos do MCP2210, VID/PID. Estão marcadas nos
   fontes e agrupadas para que conferir seja uma passada só; enquanto não for, qualquer medida feita

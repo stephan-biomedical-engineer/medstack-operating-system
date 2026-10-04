@@ -1,8 +1,7 @@
 # Plano de Execução do TCC — MedPlatform
 
 > **Status**: plano de execução submetido à aprovação do orientador. Não é registro de medição
-> (`RESULTS.md`) nem registro de engenharia (`BRINGUP_*.md`) — é o documento que organiza o que
-> falta fazer, em que ordem, e o que se corta se o calendário apertar.
+> (`RESULTS.md`) nem registro de engenharia (`BRINGUP_*.md`) — é o documento que organiza o que falta fazer, em que ordem, e o que se corta se o calendário apertar.
 >
 > **Quando**: 25/08/2026. **Horizonte**: ~16 semanas, entrega e defesa em dezembro de 2026
 > (datas a confirmar com o orientador).
@@ -14,21 +13,14 @@
 
 ## 1. O que o trabalho propõe
 
-A tese é que uma arquitetura em camadas com dependência estritamente unidirecional, somada a um
-framework de abstração de uso obrigatório, permite construir *classes distintas* de dispositivo
-médico reaproveitando uma plataforma comum — e que esse reaproveitamento é **mensurável**, não
-apenas afirmado.
+A tese é que uma arquitetura em camadas com dependência estritamente unidirecional, somada a um framework de abstração de uso obrigatório, permite construir *classes distintas* de dispositivo médico reaproveitando uma plataforma comum — e que esse reaproveitamento é **mensurável**, não apenas afirmado.
 
 O objeto construído é o `MedStack`: quatro camadas Yocto (`meta-med-bsp`, `meta-med-distro`,
-`meta-med-framework`, `meta-med-app`) sobre Scarthgap 5.0 LTS, com um sistema de aquisição de EEG
-como prova de conceito e um perfil de tomógrafo como caso de controle. As restrições que a
-IEC 62304 impõe — segregação de itens de software, rastreabilidade, atualização controlada — entram
-como restrições arquiteturais, não como endurecimento opcional.
+`meta-med-framework`, `meta-med-app`) sobre Scarthgap 5.0 LTS, com um sistema de aquisição de EEG como prova de conceito e um perfil de tomógrafo como caso de controle. As restrições que a
+IEC 62304 impõe — segregação de itens de software, rastreabilidade, atualização controlada — entram como restrições arquiteturais, não como endurecimento opcional.
 
 A afirmação que o trabalho já sustenta, e que dá a medida do resto do plano: **a plataforma que as
-duas classes de dispositivo herdam tem 206 pacotes; o delta específico do EEG são 3**, e o conjunto
-do tomógrafo é subconjunto estrito do conjunto do EEG. O mesmo código de aplicação e de framework
-compila e executa para `qemux86-64` e para `aarch64/cortexa35` sem uma linha de diferença.
+duas classes de dispositivo herdam tem 206 pacotes; o delta específico do EEG são 3**, e o conjunto do tomógrafo é subconjunto estrito do conjunto do EEG. O mesmo código de aplicação e de framework compila e executa para `qemux86-64` e para `aarch64/cortexa35` sem uma linha de diferença.
 
 ---
 
@@ -60,8 +52,7 @@ demais fraquezas daquela lista continuam de pé e estão endereçadas, uma a uma
 
 ## 3. Como este trabalho produz evidência
 
-Vale declarar isto como método, porque é o que separa o trabalho de um relato do tipo "usamos Yocto
-no nosso produto" e porque foi ele que produziu os achados mais úteis.
+Vale declarar isto como método, porque é o que separa o trabalho de um relato do tipo "usamos Yocto no nosso produto" e porque foi ele que produziu os achados mais úteis.
 
 São quatro níveis de evidência, e um não substitui o outro:
 
@@ -70,19 +61,13 @@ São quatro níveis de evidência, e um não substitui o outro:
 2. **Inspeção do artefato produzido.** Ler a tabela de partições do `.wic`, extrair o pacote e ler o
    arquivo instalado. Dos treze defeitos catalogados no porte para hardware, **seis não tinham
    sintoma nenhum** — não quebraram build, não emitiram aviso, e só apareceram assim.
-3. **Suíte de aceitação em execução.** `make check` boota a imagem e executa 23 asserções sobre o
-   console serial. É a única coisa do repositório que pega regressão de comportamento.
-4. **Execução no alvo físico.** Quatro defeitos do primeiro boot dependiam de hardware que a imagem
-   não contém — pânico da GPU no mundo seguro, colisão de rótulos de partição com o eMMC de fábrica,
-   ausência de RTC.
+3. **Suíte de aceitação em execução.** `make check` boota a imagem e executa 23 asserções sobre o    console serial. É a única coisa do repositório que pega regressão de comportamento.
+4. **Execução no alvo físico.** Quatro defeitos do primeiro boot dependiam de hardware que a imagem não contém — pânico da GPU no mundo seguro, colisão de rótulos de partição com o eMMC de fábrica, ausência de RTC.
 
 Duas regras derivadas orientam o restante do plano:
 
-- **Uma asserção que nunca viu a falha que procura é uma afirmação, não uma verificação** — três
-  defeitos passaram por asserções que os declaravam saudáveis.
-- **Um valor que decide o comportamento do produto precisa estar escrito em alguma camada deste
-  repositório**, mesmo quando coincide com o default do upstream, porque um default vence por
-  ausência de adversário — e isso já aconteceu três vezes (`WKS_FILE` duas, `QB_MEM` uma).
+- **Uma asserção que nunca viu a falha que procura é uma afirmação, não uma verificação** — três defeitos passaram por asserções que os declaravam saudáveis.
+- **Um valor que decide o comportamento do produto precisa estar escrito em alguma camada deste repositório**, mesmo quando coincide com o default do upstream, porque um default vence por ausência de adversário — e isso já aconteceu três vezes (`WKS_FILE` duas, `QB_MEM` uma).
 
 ---
 
@@ -97,23 +82,17 @@ ancoradas numa defesa em meados de dezembro; o critério de pronto é o que não
 Fechar o que já está diagnosticado e custa pouco, para que nenhuma medição posterior seja feita
 sobre um sistema com defeito conhecido.
 
-- **Escopo**: `SystemCallFilter=mincore` na HMI; `QB_MEM` declarado em `meta-med-bsp`; asserção de
-  estabilidade com janela maior que 30 s; tratamento do relógio sem RTC; captura das figuras já
-  possíveis; **compra do módulo ADS1299** (prazo de entrega é o risco crítico do plano).
+- **Escopo**: `SystemCallFilter=mincore` na HMI; `QB_MEM` declarado em `meta-med-bsp`; asserção de estabilidade com janela maior que 30 s; tratamento do relógio sem RTC; captura das figuras já possíveis; **compra do módulo ADS1299** (prazo de entrega é o risco crítico do plano).
 - **Critério de pronto**: suíte 23/23 e interface de operador de pé por ≥ 10 min sem reinício, com
   captura de tela arquivada.
 - **Já feito nesta fase** (bancada de 27/08): `SystemCallFilter=mincore` aplicado e **validado em
-  hardware**, e a interface de operador renderizando em monitor HDMI. Continuam pendentes, e nenhuma
-  sobrevive a um reboot: a regra de udev do `/dev/galcore`, o `weston.ini` com `idle-time=0`, o modo
-  CEA fixado, o `QB_MEM` do QEMU e os limites de reinício da unidade de aquisição. Ver
-  `BRINGUP_HMI_STM32MP2.md` §9.
+  hardware**, e a interface de operador renderizando em monitor HDMI. Continuam pendentes, e nenhuma sobrevive a um reboot: a regra de udev do `/dev/galcore`, o `weston.ini` com `idle-time=0`, o modo CEA fixado, o `QB_MEM` do QEMU e os limites de reinício da unidade de aquisição. Ver `BRINGUP_HMI_STM32MP2.md` §9.
 - **Texto**: capítulo de metodologia (§3 acima).
 
 ### Fase 2 — Fechar a atualização A/B no alvo físico
 **08/09 – 28/09 (3 semanas)**
 
-Hoje o trabalho afirma "política de atualização validada em QEMU, integração com bootloader não
-validada". Esta fase remove a segunda metade da frase.
+Hoje o trabalho afirma "política de atualização validada em QEMU, integração com bootloader não validada". Esta fase remove a segunda metade da frase.
 
 - **Escopo**: script de U-Boot lendo `BOOT_ORDER` e `BOOT_<slot>_LEFT`; `extlinux.conf` por slot;
   instalação real de bundle na placa; **rollback provocado** por injeção de falha, que é o resultado
@@ -125,11 +104,9 @@ validada". Esta fase remove a segunda metade da frase.
 ### Fase 3 — Caminho AMP: firmware no Cortex-M33
 **29/09 – 19/10 (3 semanas)**
 
-O driver `rpmsg` do framework nunca foi exercitado em alvo nenhum. Esta fase o exercita com sinal
-sintético gerado no coprocessador, antes de qualquer conversor físico entrar na conta.
+O driver `rpmsg` do framework nunca foi exercitado em alvo nenhum. Esta fase o exercita com sinal sintético gerado no coprocessador, antes de qualquer conversor físico entrar na conta.
 
-- **Escopo**: firmware mínimo no M33 emitindo o cabeçalho de quadro de 40 bytes que o framework já
-  declara; enfrentar a restrição `Support of signed firmware only` observada no primeiro boot;
+- **Escopo**: firmware mínimo no M33 emitindo o cabeçalho de quadro de 40 bytes que o framework já declara; enfrentar a restrição `Support of signed firmware only` observada no primeiro boot;
   primeira medição de **latência, jitter e perda de amostras** — hoje listados como não medidos.
 - **Também nesta fase**: a camada adjunta vazia, com receitas construindo módulos triviais. É o
   passo que verifica `module.bbclass`, gancho e autoload enquanto errar ainda custa zero, e é
@@ -144,15 +121,9 @@ sintético gerado no coprocessador, antes de qualquer conversor físico entrar n
 O teste mais duro da tese: introduzir um *part-number* concreto e verificar que ele não vaza para
 cima.
 
-- **Escopo, modo hat**: ligação SPI + `DRDY` ao M33 e descrição no device tree; firmware com mapa de
-  registradores e conversão para nanovolts; parâmetros clínicos (ganho, taxa de dados, detecção de
-  eletrodo solto) em `eeg.conf`; aquisição do sinal de teste interno do conversor.
+- **Escopo, modo hat**: ligação SPI + `DRDY` ao M33 e descrição no device tree; firmware com mapa de registradores e conversão para nanovolts; parâmetros clínicos (ganho, taxa de dados, detecção de eletrodo solto) em `eeg.conf`; aquisição do sinal de teste interno do conversor.
 - **Escopo, modo USB**: a **camada adjunta** (`meta-med-afe-ads1299`, fora das quatro camadas do
-  `MedStack`), o *backport* do `ti-ads1298.c` de 6.9 para 6.6 e sua adaptação para o ADS1299 com
-  canal de carimbo de tempo, e o driver `mcp2210` (`spi_controller` sobre HID) — precedido da
-  avaliação das implementações de terceiros já existentes. Ver `implementation_plan_iio_afe.md`, que
-  é a autoridade sobre esta metade, incluindo a ordem: **o driver do AFE vem antes da ponte**, por
-  ser o de menor risco e maior retorno.
+  `MedStack`), o *backport* do `ti-ads1298.c` de 6.9 para 6.6 e sua adaptação para o ADS1299 com canal de carimbo de tempo, e o driver `mcp2210` (`spi_controller` sobre HID) — precedido da avaliação das implementações de terceiros já existentes. Ver `implementation_plan_iio_afe.md`, que é a autoridade sobre esta metade, incluindo a ordem: **o driver do AFE vem antes da ponte**, por ser o de menor risco e maior retorno.
 - **Critério de pronto**: **zero ocorrências das strings `ADS1299` e `MCP2210` fora da camada
   adjunta e do firmware** — verificável por `grep` —, e a mesma aplicação consumindo dos três
   drivers (`simulated`, `rpmsg`, `iio`) por troca de configuração.
@@ -161,15 +132,11 @@ cima.
 ### Fase 5 — Segurança, perfil de produção e avaliação comparativa
 **10/11 – 30/11 (3 semanas)**
 
-Pacote deliberadamente **sem dependência de hardware**: é ele que sobe de posição se a Fase 3 ou a 4
-escorregar.
+Pacote deliberadamente **sem dependência de hardware**: é ele que sobe de posição se a Fase 3 ou a 4 escorregar.
 
 - **Escopo**: AppArmor via `meta-security`, com perfis para os dois serviços e medição do
-  antes/depois; `med-image-prod` com rootfs imutável efetivamente exercitado; comparação com
-  Buildroot e com base Debian por critérios declarados (SBOM, reprodutibilidade, suporte LTS,
-  auditoria de licenças); tabela de rastreabilidade IEC 62304.
-- **Critério de pronto**: perfil de produção bootando com rootfs somente-leitura e a suíte passando
-  sobre ele.
+  antes/depois; `med-image-prod` com rootfs imutável efetivamente exercitado; comparação com Buildroot e com base Debian por critérios declarados (SBOM, reprodutibilidade, suporte LTS, auditoria de licenças); tabela de rastreabilidade IEC 62304.
+- **Critério de pronto**: perfil de produção bootando com rootfs somente-leitura e a suíte passando sobre ele.
 - **Texto**: capítulos de segurança e de avaliação.
 
 ### Fase 6 — Fechamento
@@ -195,8 +162,7 @@ escorregar.
 
 **Trabalho futuro declarado**
 
-- TPM real e *secure boot* — hoje inalcançável no conjunto de camadas (só emuladores em software,
-  sem fTPM para o OP-TEE)
+- TPM real e *secure boot* — hoje inalcançável no conjunto de camadas (só emuladores em software, sem fTPM para o OP-TEE)
 - Terceira classe de dispositivo ou terceiro alvo, para fortalecer a métrica de portabilidade com
   esforço medido
 - Suíte de aceitação automatizada contra alvo serial: hoje a verificação em hardware é manual
@@ -210,28 +176,25 @@ escorregar.
 
 ## 6. Riscos e plano de corte
 
-| Risco | Impacto | Mitigação |
-|---|---|---|
-| Firmware assinado obrigatório no Cortex-M33 | Bloqueia a Fase 3 inteira | Investigar na Fase 1, não na 3. Se for bloqueio duro, a restrição vira resultado documentado e a fase encurta. |
-| Prazo de entrega do módulo ADS1299 | Adia ou elimina a Fase 4 | Compra na semana 1. Se não chegar até 20/10, a Fase 5 assume o lugar e o conversor vira trabalho futuro. |
-| Seleção de slot exige mais U-Boot que o previsto | Estoura a Fase 2 | Caixa de tempo de 3 semanas; ambiente semeado e script escrito já são resultado parcial publicável. |
-| Bring-up analógico (ruído, eletrodos, alimentação) | Consome a Fase 4 sem produzir sinal utilizável | Aceitar o sinal de teste interno do conversor como critério mínimo; eletrodos são bônus. |
-| Verificação em hardware é manual | Regressão silenciosa entre fases | Reexecutar o roteiro de aceitação da placa ao fim de cada fase, com resultado datado. |
-| Espaço em disco e tempo de build | Já parou o trabalho uma vez (152 GB em diretórios de trabalho) | Já mitigado (`rm_work`, caches em disco externo); monitorar. |
+| Risco                                              | Impacto                                                        | Mitigação                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Firmware assinado obrigatório no Cortex-M33        | Bloqueia a Fase 3 inteira                                      | Investigar na Fase 1, não na 3. Se for bloqueio duro, a restrição vira resultado documentado e a fase encurta. |
+| Prazo de entrega do módulo ADS1299                 | Adia ou elimina a Fase 4                                       | Compra na semana 1. Se não chegar até 20/10, a Fase 5 assume o lugar e o conversor vira trabalho futuro.       |
+| Seleção de slot exige mais U-Boot que o previsto   | Estoura a Fase 2                                               | Caixa de tempo de 3 semanas; ambiente semeado e script escrito já são resultado parcial publicável.            |
+| Bring-up analógico (ruído, eletrodos, alimentação) | Consome a Fase 4 sem produzir sinal utilizável                 | Aceitar o sinal de teste interno do conversor como critério mínimo; eletrodos são bônus.                       |
+| Verificação em hardware é manual                   | Regressão silenciosa entre fases                               | Reexecutar o roteiro de aceitação da placa ao fim de cada fase, com resultado datado.                          |
+| Espaço em disco e tempo de build                   | Já parou o trabalho uma vez (152 GB em diretórios de trabalho) | Já mitigado (`rm_work`, caches em disco externo); monitorar.                                                   |
 
-**Ordem de corte, se o calendário apertar.** Esta ordem é a decisão que peço para aprovar junto com
-o plano — descartar nesta sequência:
+**Ordem de corte, se o calendário apertar.** Esta ordem é a decisão que peço para aprovar junto com o plano — descartar nesta sequência:
 
 1. O **modo USB** (camada adjunta e os dois drivers de kernel) — o modo hat sustenta sozinho o
    argumento de particionamento, que é o mais forte dos dois
-2. Firmware no Cortex-M33 (o driver `rpmsg` permanece não exercitado, e isso já está declarado como
-   limitação)
+2. Firmware no Cortex-M33 (o driver `rpmsg` permanece não exercitado, e isso já está declarado como limitação)
 3. Avaliação comparativa com Buildroot e Debian
 4. Perfil de produção com rootfs imutável
 
 **Nunca cortar**: a Fase 1, a Fase 2 e o tempo de escrita. Sem a Fase 2, a afirmação sobre
-atualização de campo permanece pela metade — e é a metade que um avaliador de dispositivo médico vai
-perguntar primeiro.
+atualização de campo permanece pela metade — e é a metade que um avaliador de dispositivo médico vai perguntar primeiro.
 
 ---
 
@@ -240,16 +203,16 @@ perguntar primeiro.
 Esta lista não é nova: sai da `CONTRIBUTION.md` §4 e da `RESULTS.md` §9. O que o plano faz é
 atribuir cada item a uma fase.
 
-| Lacuna | Fase |
-|---|---|
-| Latência, jitter e perda de amostras no caminho de aquisição | 3 |
-| Fallback A/B em boot falho, com bootloader real | 2 |
+| Lacuna                                                                       | Fase  |
+| ---------------------------------------------------------------------------- | ----- |
+| Latência, jitter e perda de amostras no caminho de aquisição                 | 3     |
+| Fallback A/B em boot falho, com bootloader real                              | 2     |
 | Métrica de portabilidade fortalecida com esforço medido, não só `diff` vazio | 4 e 5 |
-| Comparação com alternativas de construção de imagem | 5 |
-| Tabela de rastreabilidade IEC 62304 | 5 |
-| Rootfs imutável exercitado | 5 |
-| Carimbo de tempo confiável no alvo físico | 1 |
-| Tempo de build e tempo de boot como números publicados | 5 |
+| Comparação com alternativas de construção de imagem                          | 5     |
+| Tabela de rastreabilidade IEC 62304                                          | 5     |
+| Rootfs imutável exercitado                                                   | 5     |
+| Carimbo de tempo confiável no alvo físico                                    | 1     |
+| Tempo de build e tempo de boot como números publicados                       | 5     |
 
 ---
 

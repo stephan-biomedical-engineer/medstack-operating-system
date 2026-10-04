@@ -623,6 +623,13 @@ constante mais segura de errar em todo o arquivo: um ID errado não produz dado
 ruim, produz ausência de *bind*, e o `hid-generic` leva o dispositivo no
 primeiro segundo da primeira sessão de bancada. Não bloqueia nada.
 
+**Observado em 2026-10-03.** A peça da bancada, plugada num host sem driver de
+MCP2210, enumera `idVendor=04d8, idProduct=00de, bcdDevice=0.02` em dez
+ciclos de plugar/desplugar, e o `hid-generic` a reivindica
+(`BRINGUP_AFE.md` §2). O PID passa de corroborado a **observado nesta
+unidade**. O que a observação não diz: que esse par seja o padrão de fábrica de
+toda peça — ele vem dos ajustes de *power-up* da NVRAM, que são configuráveis.
+
 **Critério:** zero marcadores `[DS20005176?]` no arquivo. **Cumprido.**
 **Injeção:** nenhuma aplicável — é uma leitura. A contagem de constantes
 corrigidas durante a varredura é o resultado, e ela foi quatro.
