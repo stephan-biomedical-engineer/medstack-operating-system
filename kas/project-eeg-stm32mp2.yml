@@ -79,9 +79,9 @@ local_conf_header:
     # a sample's timestamp is when the host was told, one bus frame and one
     # wakeup after the conversion. That is an error of phase, not of date, and
     # no arithmetic downstream can undo it.
-    MED_EEG_DRIVER = "rpmsg"
-    MED_EEG_ADDRESS = "/dev/rpmsg0"
-    MED_EEG_LINK = "amp"
+    MED_EEG_DRIVER = "iio"
+    MED_EEG_ADDRESS = "/dev/med-afe-eeg0"
+    MED_EEG_LINK = "usb"
     MED_EEG_REQUIRE_ENCRYPTION = "true"
 
     # U-Boot is what actually selects the boot slot on this SoC, and it is the

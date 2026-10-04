@@ -268,8 +268,14 @@ tomograph: $(TOOL)
 # bundle built with the profile's default key source installs a slot whose
 # med-data-provision.sh looks for a key that is not on this board. It would
 # build, sign, verify and install, and fail on the next boot.
+#
+# KERNEL too, for the same reason: the rootfs carries /lib/modules, and the
+# kernel that loads them lives on med-boot, which no bundle replaces. A bundle
+# built without KERNEL=med for a board flashed with it ships ST's modules for a
+# kernel that is not running - every front-end module refused at load, after a
+# signed, verified, successful install.
 bundle: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) shell $(BOARD_CFG) -c "bitbake med-bundle-eeg"
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake med-bundle-eeg"
 
 # Verifies with the *device's* keyring settings, which is the whole point: with
 # rauc's defaults this same bundle fails with "unsuitable certificate purpose",
