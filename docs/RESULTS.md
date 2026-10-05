@@ -350,6 +350,15 @@ na placa perde tanto quanto no PC ocioso. É um fato de plataforma, e não do fr
 aquisição temporizada pelo host nesta placa paga pelo DVFS. A política que o corrige ainda não foi
 escolhida, e o custo de energia de cada uma não foi medido.
 
+**A vazão do link `usb` não depende da ODR nem do clock SPI** (`BRINGUP_AFE.md` §6.7): 250 leituras/s
+com ODR de 250 a 16 000 SPS e clock SPI de 1, 4 e 12 MHz. A 16 kSPS, o ADS1299 produz 3,46 Mbit/s e
+o link entrega 54 kbit/s, ou **1,56%**. O limite é a arquitetura do MCP2210: HID *full-speed*,
+pergunta e resposta por transação, nenhum buffer e nenhuma leitura disparada pelo `DRDY`. Não é a
+velocidade SPI dele, nem o conversor, nem a CPU. Nem uma ponte HID sem latência passaria de ~2 400
+amostras/s (64 bytes por quadro de 1 ms). **O que isto não significa**: que a ponte aplicou de fato
+1 e 12 MHz nas leituras de dados, o que não foi observado; e a contagem de perdidas fechou 0,3% curta
+a 12 MHz, sem explicação.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método

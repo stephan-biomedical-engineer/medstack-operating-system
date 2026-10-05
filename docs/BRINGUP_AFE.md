@@ -19,22 +19,47 @@
 
 ## 0. A linha, dita primeiro
 
-| | Estado em 2026-09-26 |
+| | Estado em 2026-10-04 |
 |---|---|
-| Hardware do front-end | **não chegou.** Nada nas §2 a §10 pôde ser executado |
-| Mapa de registradores | **transcrito** do SBAS499 (`Register_Map_ADS1299.md`) |
-| Passada de datasheet (Fase 0) | **parcial**: 9 marcas viraram citação de tabela, 1 continua aberta |
-| Defeitos achados por ela | **quatro** (D1 a D4), mais uma ambiguidade e três lacunas (§11) |
-| Driver do AFE na árvore do kernel | **migrado**, in-tree, compilando para arm64 pelo caminho do Yocto (§12.6) |
-| Driver da ponte MCP2210 | **não migrado**; a receita out-of-tree continua na camada adjunta |
-| Defeitos achados ao migrar | **quatro** (D5 a D8), dois deles invisíveis a qualquer build |
-| Guarda de configuração de kernel | **verificada por injeção de falha** nos dois kernels (§12.6) |
-| Imagem `spi` ou `usb` construída | **nenhuma**. A ligação que usa o driver está resolvida e não compilada |
-| Amostra real adquirida | **nenhuma**, por nenhuma das quatro ligações |
+| Hardware do front-end | placa de AFE montada (ADS1299 + MCP2210), ligada a um PC e à STM32MP257 |
+| Passada de datasheet (Fase 0) | **nenhuma marca aberta** nos dois drivers; a amplitude do gerador, que o datasheet não decide, foi **medida no silício** (§4) |
+| Amostra real adquirida | **sim, pelo link `usb`**: no PC (30 min, §6.3) e na placa (30 min, §6.5) |
+| Link `spi` (`DRDY` como interrupção) | **nunca rodou** |
+| Link `amp` (Cortex-M33) | **nenhuma amostra**: não existe firmware |
+| Vazão do link `usb` | **250 leituras/s**, em qualquer ODR e qualquer clock SPI; a 16 kSPS, 1,56% do que o conversor produz (§6.7) |
 
-Nenhuma constante deste front-end foi conferida contra **silício**. Conferido contra o datasheet e
-conferido contra a peça são afirmações diferentes, e só a segunda encerra a dívida no sentido que o
-`BRINGUP_STM32MP2.md` §11 regra 1 dá à palavra.
+**Os drivers foram validados?** Funcionam em silício, no PC e no alvo, pelo link `usb` a 250 SPS.
+"Validados", sem qualificação, não: boa parte do que implementam nunca foi exercitada, e não houve
+verificação no sentido da IEC 62304.
+
+| Camada | `hid-mcp2210` | `ti-ads1299` |
+|---|---|---|
+| compila limpo (`W=1`, arm64 6.6 e x86 6.8), `checkpatch --strict` 0/0/0 | sim | sim |
+| constantes conferidas contra o datasheet | sim | sim, e a amplitude do gerador medida no silício |
+| suíte de host sem hardware | **325 verificações**, 13 injeções de falha (`tests/mcp2210`) | **não existe** |
+| silício, PC (Ubuntu 6.8) | Fase 1: 8 PASS; desplugar depois do `.remove` (§2) | Fases 3, 4 (só referências internas) e 5 (§4–§6.3) |
+| silício, placa (6.6) | probe, chip select, dois desplugues sem `BUG` (§6.4, §6.6) | autoteste, 30 min de aquisição, recuperação após desplugar (§6.4–§6.6) |
+
+**O que nunca foi exercitado:**
+
+- **`hid-mcp2210`**:
+  - o contador de bordas do GP6, porque nesta placa o `DRDY` está no GP5;
+  - a Fase 2, loopback SPI;
+  - a Fase 8-B, incluindo o teste negativo "a aquisição nunca escreve a NVRAM";
+  - o clock SPI efetivo das leituras de dados (§6.7).
+- **`ti-ads1299`**:
+  - o caminho com `DRDY` como interrupção;
+  - qualquer ODR acima de 250 sem perda;
+  - sinal externo nos pinos de entrada;
+  - detecção de eletrodo solto e SRB1, que o driver não controla;
+  - a Fase 8-A.
+- **Os dois**:
+  - toda perda medida foi contada pelo próprio driver, sem referência independente (o analisador
+    lógico, E0 do `implementation_plan_board_stats.md`);
+  - nenhum foi submetido ao kernel.
+
+O quadro anterior desta seção, de 2026-09-26, está no histórico do git; ele registrava o estado
+em que nenhum hardware tinha chegado.
 
 ---
 
@@ -904,6 +929,68 @@ pede.
 Mais uma janela de perda, de 180 s, logo após esse boot e já em `performance`: 9 perdidas em 45 012
 (**0,020%**). Fica uma ordem de grandeza abaixo do `schedutil`, mas acima dos ≤ 0,003% da sessão de
 30 min. A janela começou ~45 s após o boot, e uma janela isolada não separa essas duas coisas.
+
+### 6.7 O que chega pelo USB, por ODR e por clock SPI · **2026-10-04, na placa**
+
+`/tmp/rate.sh` e `/tmp/rate16k.sh` (`scripts` do scratchpad da sessão, em `sh` do BusyBox), com o
+serviço parado: `dd` do `/dev/iio:deviceN` por 10 s (20 s a 16 kSPS), 40 bytes por amostra
+(8 × `le:s24/32` + carimbo `s64`), e o `lost_samples` da janela. Governador `performance`. O clock
+SPI foi trocado recarregando o módulo com `spi_max_speed_hz`.
+
+| ODR | Devido (216 bits × ODR) | Entregue | Perdido | Clock SPI 1 / 4 / 12 MHz |
+|---|---|---|---|---|
+| 250 | 54 kbit/s | 249,8/s = **54 kbit/s** | 0% | idêntico |
+| 500 | 108 kbit/s | 249,9/s | 50% | idêntico |
+| 1 000 | 216 kbit/s | 249,9/s | 75% | idêntico |
+| 2 000 | 432 kbit/s | 249,9/s | 87,5% | idêntico |
+| 16 000 | **3 456 kbit/s** | 249,9/s | **98,4%** | 4 e 12 MHz: idêntico |
+
+**O link entrega 250 leituras por segundo, e nada mais, em qualquer ODR e qualquer clock SPI.** A
+demanda do conversor cresce linearmente com a ODR, mas o que chega não. O gargalo é a latência por
+transação (duas trocas HID de 64 bytes por amostra, ~2 ms cada, §6.1), e não a largura de banda:
+os 54 kbit/s úteis são uma fração pequena do que um endpoint de interrupção *full-speed* carrega.
+A 16 kSPS, cada amostra teria 62,5 µs para ser lida, e a ponte leva ~4 ms. Só `amp` e `spi`
+alcançam as ODR acima de 250.
+
+**Contabilidade**: entregues + perdidas somaram 16 001/s a 4 MHz (exato) e 15 955/s a 12 MHz,
+0,3% abaixo do devido. Isso não tem explicação, e é o que a E0 do `implementation_plan_board_stats.md`
+existe para resolver, com o analisador lógico contando o `DRDY`.
+
+**O que isto não diz**: que a ponte de fato usou 1 e 12 MHz. O driver só registra o clock das
+leituras de registrador (2 MHz); o das leituras de dados não foi observado. A conclusão "o clock
+SPI não importa" vale pela conta e por esta medida, mas a confirmação é o SCLK no analisador.
+
+**Por que 1,56%, e de quem é o limite.** 1,56% = 250/16 000. A 16 kSPS sai uma amostra a cada
+62,5 µs. Durante os ~4 ms de uma leitura, o conversor produz 64 amostras, e o link entrega uma: as
+outras 63 são sobrescritas. Três fatos se somam:
+
+1. **O ADS1299 não tem fila.** O registrador de saída guarda só a última conversão, e cada `DRDY`
+   sobrescreve a anterior.
+2. **O MCP2210 não lê sozinho.** Ele não dispara uma leitura no `DRDY` e não acumula amostras.
+   Cada transferência é um comando que o host envia e cuja resposta espera.
+3. **Cada pergunta e resposta custa ~2 ms.** O chip é HID *full-speed*: o host fala com ele uma vez
+   por quadro de 1 ms, em relatórios de 64 bytes. O protocolo exige duas trocas por leitura, uma
+   que inicia a transferência e outra que busca os dados (§6.1–6.2), o que dá **~4 ms por amostra**.
+
+**O limite é a arquitetura do MCP2210, não a velocidade SPI dele.** O SPI do chip vai a 12 MHz, e
+uma amostra de 27 bytes passaria pelo fio em ~18 µs. Também não é o conversor, nem a CPU da placa
+(o serviço usa ~1%), nem, depois do cache de §6.2, o nosso driver. O driver **já foi** parte do
+problema: reescrever as configurações de transferência a cada leitura custava uma terceira troca
+(167/s). Hoje ele está no piso do protocolo do chip. A medida sustenta isso: as mesmas 250
+leituras/s com 1, 4 e 12 MHz. Se o limite fosse o SPI, a vazão mudaria com o clock.
+
+**Nem uma ponte HID ideal resolveria.** Sem latência nenhuma, um endpoint de interrupção
+*full-speed* carrega 64 bytes por quadro, ou 512 kbit/s. Com 27 bytes por amostra, o teto absoluto
+seria ~2 400 amostras/s, e 16 kSPS precisam de 432 kB/s, quase sete vezes isso. Hardware diferente
+passaria disso: uma ponte USB *high-speed* com transferência em bloco e buffer, ou um
+microcontrolador que lê no `DRDY` e envia as amostras em rajada. **Para este projeto, a conclusão é
+a outra: o MCP2210 serve para bancada e desenvolvimento, e o teto dele é um argumento com número a
+favor da ligação `amp`**, em que a leitura acontece no próprio chip, na interrupção do `DRDY`.
+
+**De passagem, uma pista sobre o ruído do autoteste** (§6.6): nas três recargas desta medida, com
+o serviço parado, deu **28–29 códigos**, perto dos 23 do PC. Os 49–205 anteriores vieram de probes
+no boot e no replug, enquanto o serviço tentava partir. A hipótese nova, ao lado da alimentação: a
+atividade concorrente durante o autoteste. Não foi testada.
 
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
