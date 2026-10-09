@@ -14,6 +14,11 @@
 # Saída: um PASS/FAIL por critério, e no fim um bloco pronto para colar em
 # BRINGUP_AFE.md §2. Um FAIL nunca é interpretado aqui - o plano diz o que cada
 # um derruba, e adivinhar seria pior que reportar.
+#
+# O módulo é recarregado com spi_device= vazio para o critério 2, e no fim volta
+# ao estado em que estava: descarregado, ou carregado com os mesmos parâmetros.
+# Sem isso o front-end some depois desta fase, e a Fase 4 não acha o iio:device
+# (visto no host em 2026-10-05).
 
 set -u
 
@@ -87,13 +92,28 @@ fi
 head_ "2. Carregar o driver com NADA atras da ponte"
 say "  E para isto que o parametro spi_device existe."
 
+# Os parametros sao 0444, entao /sys/module os mostra; um charp nunca
+# atribuido le "(null)", que para o modprobe e o mesmo que vazio.
+WAS_LOADED=0
+SAVED_PARAMS=""
 if lsmod 2>/dev/null | grep -q "^$MOD"; then
-	say "  o modulo ja esta carregado (autoload); descarregando para controlar o parametro"
+	WAS_LOADED=1
+	for f in /sys/module/$MOD/parameters/*; do
+		[ -r "$f" ] || continue
+		v=$(cat "$f"); [ "$v" = "(null)" ] && v=""
+		SAVED_PARAMS="$SAVED_PARAMS ${f##*/}=$v"
+	done
+	say "  o modulo ja esta carregado, com:$SAVED_PARAMS"
+	say "  descarregando para controlar o parametro; volta assim no fim"
 	rmmod "$MOD" 2>/dev/null || say "  rmmod falhou - pode haver um filho SPI preso"
 fi
 
+# So o que o kernel disse DEPOIS deste modprobe conta. Ler o ultimo 'bridge
+# ready' do dmesg inteiro aceitaria a linha de uma carga anterior.
+DMESG_BEFORE=$(dmesg | wc -l)
 modprobe "$MOD" spi_device= 2>&1 | sed 's/^/  modprobe: /'
 sleep 1
+NEW_DMESG=$(dmesg | tail -n +$((DMESG_BEFORE + 1)))
 
 if lsmod 2>/dev/null | grep -q "^$MOD"; then
 	ok "modulo carregado"
@@ -104,7 +124,7 @@ fi
 # ------------------------------------------------- 3. critério 2 - o probe
 
 head_ "3. Critério 2 - a linha do probe"
-PROBE=$(dmesg | grep -F 'USB-SPI bridge ready' | tail -1)
+PROBE=$(printf '%s\n' "$NEW_DMESG" | grep -F 'USB-SPI bridge ready' | tail -1)
 say "  $( [ -n "$PROBE" ] && echo "$PROBE" || echo '(nenhuma linha)')"
 
 # A linha atual diz "N GPIOs, M chip selects, X attached". Nove e oito, e
@@ -183,9 +203,25 @@ for c in /sys/bus/counter/devices/counter*; do
 done
 [ -z "$CNT" ] && CNT=$(ls -d /sys/bus/counter/devices/counter* 2>/dev/null | head -1)
 
+# O driver so registra o contador se a NVRAM da ponte puser o GP6 em modo de
+# contagem, e diz quando nao poe. A placa de AFE usa o GP6 para um LED
+# (BRINGUP_AFE.md §2.3.2), entao ali a ausencia e a provisao, nao um defeito -
+# e a versao anterior dava FAIL apontando CONFIG_COUNTER, que e a causa errada.
+NOPROV=$(printf '%s\n' "$NEW_DMESG" | grep -F 'is not provisioned to count edges' | tail -1)
+CNT5=""
+
 if [ -z "$CNT" ] || [ ! -r "$CNT/count0/count" ]; then
-	no "nenhum counter com count0/count. CONFIG_COUNTER carregou? (modprobe counter)"
-	say "        Sem isto a ligacao USB nao tem como saber que perdeu amostra."
+	if [ -n "$NOPROV" ]; then
+		say "  $NOPROV"
+		skip "critério 5 nao se aplica a esta provisao: a NVRAM nao poe o GP6 em contagem"
+		say "        Medi-lo pede uma ponte com o GP6 provisionado como contador."
+		say "        Nesta provisao a ligacao USB nao tem como saber que perdeu amostra."
+		CNT5="nao aplicavel: GP6 nao provisionado para contar (dmesg)"
+	else
+		no "nenhum counter com count0/count, e o driver nao disse que o GP6 esta fora"
+		say "        de contagem. CONFIG_COUNTER carregou? (modprobe counter)"
+		say "        Sem isto a ligacao USB nao tem como saber que perdeu amostra."
+	fi
 else
 	say "  counter:  $CNT  ($(cat "$CNT/name" 2>/dev/null))"
 	say "  sinal:    $(cat "$CNT/signal0/name" 2>/dev/null || echo '?')"
@@ -239,6 +275,8 @@ if [ -n "${CNT:-}" ] && [ -r "$CNT/count0/count" ]; then
 	say "  e repetir. O contador tem de ficar PARADO. Se avancar de qualquer"
 	say "  jeito, o teste dos 1000 pulsos nao estava medindo o que parecia."
 	skip "critério 6 - requer gerador de sinais e uma pessoa"
+elif [ -n "$NOPROV" ]; then
+	skip "critério 6 - nao se aplica a esta provisao (ver critério 5)"
 else
 	skip "critério 6 - sem contador, nao ha o que medir"
 fi
@@ -256,6 +294,21 @@ say ""
 say "  B. Ordem de carga"
 say "     plugar com o modulo carregado, e plugar com ele ausente carregando"
 say "     depois. Os dois caminhos tem de terminar no MESMO estado."
+
+# ------------------------------------------- restaurar o estado do modulo
+
+head_ "Restaurando o modulo"
+rmmod "$MOD" 2>/dev/null
+if [ "$WAS_LOADED" = 1 ]; then
+	# shellcheck disable=SC2086 - cada parametro e uma palavra
+	if modprobe "$MOD" $SAVED_PARAMS 2>&1 | sed 's/^/  modprobe: /'; lsmod | grep -q "^$MOD"; then
+		say "  recarregado com:$SAVED_PARAMS"
+	else
+		say "  ATENCAO: nao recarregou. A mao: modprobe $MOD$SAVED_PARAMS"
+	fi
+else
+	say "  descarregado, como estava antes do script"
+fi
 
 # ------------------------------------------------------------- 9. resumo
 
@@ -280,7 +333,7 @@ cat <<BLOCK
 | 2. linha do probe | \`$(printf '%s' "$PROBE" | sed 's/.*: //')\` | |
 | 3. bind nosso, nao hid-generic | mcp2210=\`${OURS:-nada}\` hid-generic=\`${GENERIC:-nada}\` | |
 | 4. gpiochip com 9 linhas | ngpio=\`${NG:-?}\` | |
-| 5. contador le e zera | | |
+| 5. contador le e zera | ${CNT5} | |
 | 6. 1000 pulsos -> 1000 ± 0 | | |
 
 Kernel: \`$(uname -r)\`. Maquina: \`${MODEL:-?}\`.
