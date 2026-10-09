@@ -53,7 +53,8 @@ Window {
 
             Text {
                 text: eeg.status
-                color: "#8b949e"
+                color: eeg.electrodeOff ? "#f85149" : "#8b949e"
+                font.bold: eeg.electrodeOff
                 font.pixelSize: 14
                 anchors.verticalCenter: parent.verticalCenter
             }

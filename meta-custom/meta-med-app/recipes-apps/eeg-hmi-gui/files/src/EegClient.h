@@ -26,6 +26,9 @@ class EegClient : public QObject {
 
     Q_PROPERTY(bool connected READ connected NOTIFY connectionChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    /// A monitored electrode is reported off in the latest frame. Never true
+    /// where nothing is monitored - that is "unknown", not "attached".
+    Q_PROPERTY(bool electrodeOff READ electrodeOff NOTIFY statusChanged)
     Q_PROPERTY(int channelCount READ channelCount NOTIFY frameReceived)
     Q_PROPERTY(double sampleRateHz READ sampleRateHz NOTIFY frameReceived)
     Q_PROPERTY(qulonglong framesReceived READ framesReceived NOTIFY frameReceived)
@@ -37,6 +40,7 @@ public:
 
     bool connected() const { return static_cast<bool>(channel_); }
     QString status() const { return status_; }
+    bool electrodeOff() const { return electrodeOff_; }
     int channelCount() const { return channelCount_; }
     double sampleRateHz() const { return sampleRateHz_; }
     qulonglong framesReceived() const { return framesReceived_; }
@@ -64,6 +68,7 @@ private:
     QTimer reconnectTimer_;
 
     QString status_;
+    bool electrodeOff_ = false;
     int channelCount_ = 0;
     double sampleRateHz_ = 0.0;
     qulonglong framesReceived_ = 0;

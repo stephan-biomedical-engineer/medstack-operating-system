@@ -152,36 +152,20 @@ std::map<std::string, std::string> driverOptions(const med::MedicalConfiguration
     return options;
 }
 
-/// Serialise a frame in the same wire format the AMP link uses, so the HMI
-/// decodes what the co-processor produces and what the simulator produces with
-/// exactly the same code path.
-void encodeFrame(const med::SampleFrame& frame, double sampleRateHz,
-                 std::vector<unsigned char>& out) {
-    const std::size_t payloadBytes = frame.samples.size() * sizeof(std::int32_t);
-    out.resize(sizeof(med::amp::FrameHeader) + payloadBytes);
-
-    unsigned char* payload = out.data() + sizeof(med::amp::FrameHeader);
-    for (std::size_t i = 0; i < frame.samples.size(); ++i) {
-        // Nanovolt units: one LSB is 1 nV, so scaleNanoUnitsPerLsb is 1 and a
-        // float microvolt value survives the round trip to within 1 nV.
-        const std::int32_t raw =
-            static_cast<std::int32_t>(frame.samples[i] * 1000.0F);
-        std::memcpy(payload + i * sizeof(std::int32_t), &raw, sizeof(raw));
+/// The electrodes in a pair of masks, 1-based as an operator counts channels:
+/// "1+ 3-" is channel 1's positive input and channel 3's negative one.
+std::string describeElectrodes(std::uint16_t positive, std::uint16_t negative) {
+    std::string out;
+    for (unsigned channel = 0; channel < 16; ++channel) {
+        const unsigned bit = 1U << channel;
+        if ((positive & bit) != 0) {
+            out += (out.empty() ? "" : " ") + std::to_string(channel + 1) + "+";
+        }
+        if ((negative & bit) != 0) {
+            out += (out.empty() ? "" : " ") + std::to_string(channel + 1) + "-";
+        }
     }
-
-    med::amp::FrameHeader header;
-    std::memset(&header, 0, sizeof(header));
-    header.magic = med::amp::kFrameMagic;
-    header.version = med::amp::kFrameVersion;
-    header.channelCount = frame.channelCount;
-    header.samplesPerChannel = frame.samplesPerChannel;
-    header.sampleRateMilliHz = static_cast<std::uint32_t>(sampleRateHz * 1000.0);
-    header.sequence = frame.sequence;
-    header.timestampMicros = med::toUnixMicros(frame.timestamp);
-    header.scaleNanoUnitsPerLsb = 1;
-    header.crc32 = med::amp::crc32(payload, payloadBytes);
-
-    std::memcpy(out.data(), &header, sizeof(header));
+    return out.empty() ? "none" : out;
 }
 
 std::string readMachineId() {
@@ -437,6 +421,7 @@ int main(int argc, char** argv) {
     /// good - the bridge came back, passed its self test, and nothing ever
     /// read it again, with the unit "inactive" rather than "failed".
     bool deviceFault = false;
+    med::LeadOff lastContact;
 
     while (g_stopRequested == 0) {
         // Non-blocking: a viewer connecting or leaving must never stall the
@@ -461,7 +446,28 @@ int main(int argc, char** argv) {
         }
         ++frames;
 
-        encodeFrame(frame.value(), info.sampleRateHz, encoded);
+        // Electrode contact, audited when it changes and not per frame - once
+        // per frame would bury the trail. The per-frame status needs no line
+        // here: it is part of the encoded frame, so it is in the record.
+        const med::LeadOff& contact = frame.value().leadOff;
+        if (frames == 1 ? contact.monitored() : contact != lastContact) {
+            const bool detached =
+                contact.detachedPositive() != 0 || contact.detachedNegative() != 0;
+            const char* what = !contact.monitored() ? "electrode contact no longer monitored"
+                               : frames == 1        ? "electrode contact monitored"
+                               : detached           ? "electrode contact lost"
+                                                    : "electrode contact restored";
+            logger.audit(med::AuditEvent::ElectrodeContactChanged, what,
+                         {{"session", sessionId},
+                          {"sequence", std::to_string(frame.value().sequence)},
+                          {"monitored", describeElectrodes(contact.monitoredPositive,
+                                                           contact.monitoredNegative)},
+                          {"detached", describeElectrodes(contact.detachedPositive(),
+                                                          contact.detachedNegative())}});
+        }
+        lastContact = contact;
+
+        med::amp::encodeFrame(frame.value(), info.sampleRateHz, encoded);
 
         // The record is written before it is published: what a clinician later
         // reviews is authoritative, what the screen shows is a convenience.
