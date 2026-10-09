@@ -1,0 +1,23 @@
+[Unit]
+Description=MedPlatform Cortex-M33 producer firmware
+# Started by udev, not by a target: 90-med-amp.rules makes the remoteproc
+# called "m33" want this unit the moment the device exists. stm32_rproc is a
+# module and the core appears 7.1 s into the kernel's boot (measured on the
+# board, 2026-10-08); a unit waiting for it from sysinit.target would hold the whole boot
+# there, and one in multi-user.target would race it.
+#
+# Nothing orders the acquisition service after this unit, deliberately: that
+# service lives in meta-med-app, and a platform unit naming a board's
+# co-processor - or this layer naming an application unit - is the coupling
+# both sides exist to avoid. The service waits for its channel instead, for up
+# to five seconds (kConnectWindow in MedicalDevice.cpp); the channel appears
+# ~200 ms after this unit starts the core.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@LIBEXECDIR@/med-m33-load start
+ExecStop=@LIBEXECDIR@/med-m33-load stop

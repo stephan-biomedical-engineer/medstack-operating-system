@@ -1,0 +1,20 @@
+# MedPlatform - the AMP link, by name.
+#
+# The Cortex-M33's remoteproc: start the producer firmware as soon as the core
+# exists. Matched on the core's name, which is a fact of the devicetree, and
+# not on remoteprocN, which is probe order (the M0+ and the M33 swapped indices
+# between two boots, BRINGUP_STM32MP2.md §9.15).
+SUBSYSTEM=="remoteproc", ACTION=="add", ATTR{name}=="m33", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="med-m33-firmware.service"
+
+# The channel the producer announces. rpmsg_char names its node rpmsgN from an
+# ida - probe order again - so the acquisition service is pointed at this link
+# instead (MED_EEG_ADDRESS). Both conditions are needed: "rpmsg-raw" is the
+# name rpmsg_char binds to, so any firmware on any core can announce it; the
+# ancestor called "m33" is what makes the link mean "our producer".
+#
+# udev matches ATTR on the node itself and every ATTRS key on one ancestor, so
+# the two "name" tests below look at different devices, as intended - checked
+# with `udevadm info -a /dev/rpmsg0` on the board, 2026-10-08.
+SUBSYSTEM=="rpmsg", KERNEL=="rpmsg[0-9]*", ATTR{name}=="rpmsg-raw", ATTRS{name}=="m33", \
+    SYMLINK+="med-amp0"
