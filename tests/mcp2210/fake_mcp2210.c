@@ -12,6 +12,8 @@ struct counter_device *shim_counter;
 int shim_hw_stop_calls;
 
 unsigned long shim_usleep_calls;
+unsigned long jiffies;
+int shim_own_descs;
 int shim_hid_parse_ret, shim_hid_start_ret, shim_hid_open_ret;
 
 char shim_log[SHIM_LOG_LINES][SHIM_LOG_LEN];

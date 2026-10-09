@@ -141,6 +141,7 @@ struct hid_driver *shim_driver_ref(void);
 #define MODULE_LICENSE(x)
 #define MODULE_PARM_DESC(a, b)
 #define module_param(name, type, perm)
+#define MODULE_IMPORT_NS(ns)
 
 /* ----------------------------------------------------------------- sysfs */
 
@@ -326,6 +327,110 @@ static inline int devm_gpiochip_add_data(struct device *dev, struct gpio_chip *g
 	(void)dev;
 	gc->shim_data = data;
 	return 0;
+}
+
+/*
+ * A line the driver requests for itself. Only what gpiolib does that the
+ * driver can observe: the chip's .request runs, and every later access goes
+ * through the chip's callbacks. Who else may request the line is gpiolib's
+ * business and is not modelled.
+ */
+enum gpio_lookup_flags { GPIO_ACTIVE_HIGH = 0 };
+enum gpiod_flags { GPIOD_ASIS = 0 };
+
+struct gpio_desc {
+	struct gpio_chip *gc;
+	unsigned int hwnum;
+	const char *label;
+};
+
+extern int shim_own_descs;	/* requested and not yet freed */
+
+static inline struct gpio_desc *
+gpiochip_request_own_desc(struct gpio_chip *gc, unsigned int hwnum,
+			  const char *label, enum gpio_lookup_flags lflags,
+			  enum gpiod_flags dflags)
+{
+	struct gpio_desc *d;
+	int ret;
+
+	(void)lflags;
+	(void)dflags;
+	if (gc->request) {
+		ret = gc->request(gc, hwnum);
+		if (ret)
+			return ERR_PTR(ret);
+	}
+	d = kzalloc(sizeof(*d), GFP_KERNEL);
+	if (!d)
+		return ERR_PTR(-ENOMEM);
+	d->gc = gc;
+	d->hwnum = hwnum;
+	d->label = label;
+	shim_own_descs++;
+	return d;
+}
+static inline void gpiochip_free_own_desc(struct gpio_desc *d)
+{
+	if (!d)
+		return;
+	shim_own_descs--;
+	kfree(d);
+}
+static inline int gpiod_get_direction(struct gpio_desc *d)
+{
+	return d->gc->get_direction(d->gc, d->hwnum);
+}
+static inline int gpiod_get_value_cansleep(const struct gpio_desc *d)
+{
+	return d->gc->get(d->gc, d->hwnum);
+}
+static inline void gpiod_set_value_cansleep(struct gpio_desc *d, int v)
+{
+	d->gc->set(d->gc, d->hwnum, v);
+}
+
+/* ------------------------------------------------------------- workqueue */
+
+/*
+ * Nothing runs by itself. schedule marks the work pending and records the
+ * delay; a test runs it with shim_run_delayed_work(), which is the only way it
+ * ever executes - so "the work did X" is always a step the test took.
+ */
+struct work_struct { void (*func)(struct work_struct *); };
+struct delayed_work {
+	struct work_struct work;
+	bool pending;
+	unsigned long delay;
+};
+
+#define INIT_DELAYED_WORK(dw, fn) \
+	do { (dw)->work.func = (fn); (dw)->pending = false; } while (0)
+#define to_delayed_work(w)	container_of(w, struct delayed_work, work)
+
+static inline bool schedule_delayed_work(struct delayed_work *dw,
+					 unsigned long delay)
+{
+	bool was = dw->pending;
+
+	dw->pending = true;
+	dw->delay = delay;
+	return !was;
+}
+static inline bool cancel_delayed_work_sync(struct delayed_work *dw)
+{
+	bool was = dw->pending;
+
+	dw->pending = false;
+	return was;
+}
+static inline bool shim_run_delayed_work(struct delayed_work *dw)
+{
+	if (!dw->pending)
+		return false;
+	dw->pending = false;
+	dw->work.func(&dw->work);
+	return true;
 }
 
 #endif /* MCP2210_TEST_KERNEL_SHIM_DEV_H */

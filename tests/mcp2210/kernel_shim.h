@@ -133,6 +133,23 @@ static inline void usleep_range(unsigned long a, unsigned long b)
 }
 static inline unsigned long msecs_to_jiffies(unsigned int m) { return m; }
 
+/*
+ * Time is a variable the test moves by hand, one jiffy per millisecond, so a
+ * check that needs "a second later" says so instead of sleeping for it.
+ */
+extern unsigned long jiffies;
+#define time_before(a, b)	((long)((a) - (b)) < 0)
+
+#define READ_ONCE(x)		(x)
+#define WRITE_ONCE(x, v)	((x) = (v))
+
+/* ---------------------------------------------------------------- errors */
+
+#define MAX_ERRNO		4095
+#define IS_ERR(p)		((unsigned long)(p) >= (unsigned long)-MAX_ERRNO)
+#define PTR_ERR(p)		((long)(p))
+#define ERR_PTR(e)		((void *)(long)(e))
+
 /* ---------------------------------------------------------- completion */
 
 struct completion { int done; };

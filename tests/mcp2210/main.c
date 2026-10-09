@@ -1019,6 +1019,192 @@ static void test_settings_cache(void)
 	do_release();
 }
 
+#ifdef MCP2210_TEST_VARIANT_BOARD
+/*
+ * The status LED, board branch only. What this section can say and what it
+ * cannot: the work never runs by itself here, and time only moves when a test
+ * moves it - so these checks are about the DECISIONS the work makes and the
+ * exchanges each one costs, not about a 1 Hz blink on a real clock.
+ */
+#define LED_PIN	6
+
+/* A device provisioned like the AFE board: GP6 a GPIO output, found on. */
+static void led_device(void)
+{
+	do_release();
+	fake_reset();
+	fake.gpio_dir &= (u16)~BIT(LED_PIN);
+	fake.gpio_value |= (u16)BIT(LED_PIN);
+	/* A second output, to see that toggling the LED leaves it alone */
+	fake.gpio_dir &= (u16)~BIT(7);
+	fake.gpio_value |= (u16)BIT(7);
+	spi_chip_select = 1;
+	led_gpio = LED_PIN;
+}
+
+static bool led_level(void)
+{
+	return fake.gpio_value & BIT(LED_PIN);
+}
+
+static unsigned int gpio_exchanges(void)
+{
+	return fake.cmd_count[MCP2210_CMD_SET_GPIO_VALUE] +
+	       fake.cmd_count[MCP2210_CMD_GET_GPIO_VALUE] +
+	       fake.cmd_count[MCP2210_CMD_SET_GPIO_DIR] +
+	       fake.cmd_count[MCP2210_CMD_GET_GPIO_DIR];
+}
+
+/* Half a period later, run the work once. */
+static void led_tick(unsigned long ms)
+{
+	jiffies += ms;
+	CHECK_MSG(shim_run_delayed_work(&mcp->led_work),
+		  "o work do LED estava agendado");
+}
+
+static void test_status_led(void)
+{
+	u8 tx[27], rx[27];
+	bool before;
+	int i;
+
+	section("L. LED de estado: pisca com o SPI ocioso, aceso com ele em uso");
+
+	fill_pattern(tx, sizeof(tx));
+	jiffies = 100000;
+
+	/* L1 - no LED unless the board says so */
+	led_gpio = -1;
+	fresh();
+	CHECK_MSG(mcp->led == NULL, "sem led_gpio, nenhum LED");
+	CHECK_EQ(shim_own_descs, 0);
+	do_release();
+
+	/* L2 - GP6 provisioned as an output: claimed, found on, work started */
+	led_device();
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && mcp->led, "o LED foi reivindicado");
+	CHECK_EQ(shim_own_descs, 1);
+	CHECK_MSG(mcp->led_on && mcp->led_found_on, "o nivel encontrado (1) foi lido");
+	CHECK_MSG(mcp->led_work.pending, "o work do LED foi agendado");
+	CHECK_EQ(mcp->led_work.delay, MCP2210_LED_HALF_PERIOD_MS);
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SET_GPIO_DIR] == 0,
+		  "a direcao do pino nao foi mudada");
+	CHECK_MSG(fake.cmd_count[MCP2210_CMD_SET_GPIO_VALUE] == 0,
+		  "o probe nao escreveu o pino");
+	check_settings_not_written();
+
+	/* L3 - bus idle: every tick toggles, at a GET+SET each, nothing else */
+	before = led_level();
+	for (i = 0; i < 4; i++) {
+		clear_obs();
+		led_tick(MCP2210_LED_HALF_PERIOD_MS);
+		CHECK_MSG(led_level() != before, "ocioso: o LED trocou de nivel");
+		before = led_level();
+		CHECK_EQ(fake.cmd_count[MCP2210_CMD_GET_GPIO_VALUE], 1);
+		CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_GPIO_VALUE], 1);
+		CHECK_EQ(fake.cmd_count[MCP2210_CMD_SPI_TRANSFER], 0);
+		CHECK_MSG(fake.gpio_value & BIT(7), "o GP7 ficou como estava");
+		CHECK_MSG(mcp->led_work.pending, "o work se reagendou");
+	}
+
+	/* L4 - leave it off, then start "acquiring": forced on, once */
+	if (led_level()) {
+		clear_obs();
+		led_tick(MCP2210_LED_HALF_PERIOD_MS);
+	}
+	CHECK_MSG(!led_level(), "o LED esta apagado antes da aquisicao");
+	CHECK_EQ(run_one(tx, rx, sizeof(tx)), 0);
+	clear_obs();
+	led_tick(MCP2210_LED_HALF_PERIOD_MS);
+	CHECK_MSG(led_level(), "com o SPI em uso o LED acende");
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_GPIO_VALUE], 1);
+
+	/*
+	 * L5 - the property: while the bus stays busy, the work costs zero
+	 * exchanges. Each round is one converter read and then a tick.
+	 */
+	for (i = 0; i < 10; i++) {
+		CHECK_EQ(run_one(tx, rx, sizeof(tx)), 0);
+		clear_obs();
+		led_tick(MCP2210_LED_HALF_PERIOD_MS);
+		CHECK_MSG(gpio_exchanges() == 0,
+			  "durante a aquisicao o LED nao custa nenhuma troca");
+		CHECK_MSG(led_level(), "e continua aceso");
+	}
+
+	/* L6 - a quiet second is not yet idle; a quiet second and a bit is */
+	CHECK_EQ(run_one(tx, rx, sizeof(tx)), 0);
+	clear_obs();
+	led_tick(MCP2210_LED_IDLE_MS - 1);
+	CHECK_MSG(led_level() && gpio_exchanges() == 0,
+		  "menos de 1 s sem SPI: ainda aceso, sem troca");
+	clear_obs();
+	led_tick(2);
+	CHECK_MSG(!led_level(), "mais de 1 s sem SPI: volta a piscar");
+
+	/* L7 - removal: work stopped, pin left at the level found, line freed */
+	CHECK_MSG(!led_level(), "apagado antes da remocao");
+	do_release();
+	CHECK_MSG(led_level(), "a remocao devolveu o nivel encontrado (1)");
+	CHECK_EQ(shim_own_descs, 0);
+	check_nvram_not_written();
+
+	/* L8 - removal when the level already matches sends nothing */
+	led_device();
+	CHECK_EQ(do_probe(), 0);
+	clear_obs();
+	do_release();
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_GPIO_VALUE], 0);
+	CHECK_EQ(shim_own_descs, 0);
+
+	/* L9 - GP6 as the counter's dedicated pin: refused, bridge stays up */
+	led_device();
+	fake.pin_designation[LED_PIN] = FAKE_PIN_DEDICATED;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->led, "pino dedicado: sem LED");
+	CHECK_MSG(shim_log_contains("is not a GPIO in the bridge's settings"),
+		  "a recusa nomeia o motivo");
+	CHECK_MSG(mcp->child, "o filho SPI continua");
+	CHECK_EQ(shim_own_descs, 0);
+	do_release();
+
+	/* L10 - GP6 a GPIO but an input: refused, direction not touched */
+	led_device();
+	fake.gpio_dir |= (u16)BIT(LED_PIN);
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->led, "pino de entrada: sem LED");
+	CHECK_MSG(shim_log_contains("powers up as an input"), "a recusa nomeia o motivo");
+	CHECK_EQ(fake.cmd_count[MCP2210_CMD_SET_GPIO_DIR], 0);
+	CHECK_EQ(shim_own_descs, 0);
+	do_release();
+
+	/* L11 - the chip select pin, GP8 and a pin that does not exist */
+	led_device();
+	led_gpio = 1;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->led && mcp->child,
+		  "o pino do chip select nao vira LED, e o filho fica");
+	do_release();
+
+	led_device();
+	led_gpio = 8;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->led && shim_log_contains("cannot drive a LED"),
+		  "GP8 so entra: recusado");
+	do_release();
+
+	led_device();
+	led_gpio = 9;
+	CHECK_EQ(do_probe(), 0);
+	CHECK_MSG(mcp && !mcp->led, "GP9 nao existe: recusado");
+	do_release();
+
+	led_gpio = -1;
+}
+#endif /* MCP2210_TEST_VARIANT_BOARD */
+
 /* ------------------------------------------------------------------ main */
 
 int main(void)
@@ -1037,6 +1223,9 @@ int main(void)
 	test_nvram_read();
 	test_unimplemented_phases();
 	test_settings_cache();
+#ifdef MCP2210_TEST_VARIANT_BOARD
+	test_status_led();
+#endif
 
 	int status = report();
 
