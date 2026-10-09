@@ -1,9 +1,14 @@
 # Plano de implementação — o firmware do Cortex-M33 (ligação `amp`)
 
-> **Status**: **nada aqui foi implementado.** Não existe firmware, não existe receita, e
-> `MED_AMP_FIRMWARE` continua comentado no arquivo KAS do alvo. O que existe, e é o que torna este
-> plano escrevível hoje, é o diagnóstico da §2 — feito por inspeção dos artefatos que o build já
-> produziu, sem energizar a placa.
+> **Status**: **Fases 0 e 1 executadas na placa (2026-10-06, `BRINGUP_STM32MP2.md` §9.13); a
+> Estrada A está decidida. Fase 2 feita no host (`RESULTS.md` §3); o empacotamento da §5.1 virou
+> a receita `med-amp-abi`. Fase 3 executada com sinal sintético (§9.14): firmware nosso, assinado,
+> e o serviço adquirindo por `amp`. RIF do SPI6 no M33 aplicado pelo FIP, e o ID do ADS1299
+> (`0x3E`) lido pelo M33 (§9.15). O M33 adquire do conversor por DRDY, 120 s sem perda, ocioso e
+> com o A35 carregado (§9.16). Fase 4 atendida num cartão gravado do zero (critérios 1–3; a injeção não foi feita).** O firmware de exemplo da ST, assinado pela própria `meta-st-stm32mp`,
+> carrega pelo OP-TEE e anuncia canais rpmsg, e duas imagens com um bit trocado são recusadas.
+> Firmware nosso e receita ainda não existem, e `MED_AMP_FIRMWARE` continua comentado no arquivo
+> KAS do alvo. O diagnóstico da §2 foi feito por inspeção dos artefatos; a placa confirmou.
 >
 > **Escopo**: da decisão de devicetree até quadros sintéticos medidos, atravessando a ligação `amp`
 > fim a fim com a aplicação que já existe. **Não inclui o ADS1299**: o firmware desta fase gera
@@ -130,6 +135,17 @@ registrada aqui com a evidência que a produziu. A preferência, se as duas fore
 **Estrada A** — porque um dispositivo médico que autentica o firmware do seu coprocessador é o que
 se quer defender, e porque a Estrada B deixa uma dívida de devicetree que alguém pagará depois.
 
+**Decidido em 2026-10-06: Estrada A** (`BRINGUP_STM32MP2.md` §9.13). Evidência: com o FIP e o
+devicetree que já bootam, o `USBPD_DRP_UCSI_CM33_NonSecure_sign.bin` construído por
+`m33projects-stm32mp2` vai a `running` e anuncia `rpmsg-intc` e `rpmsg_i2c`. Um bit trocado no
+payload dá `TEE_ERROR_SECURITY` e um na região da assinatura dá `TEE_ERROR_SIGNATURE_INVALID`. O
+risco "provisionamento irreversível de chave" da §9 não se materializou: a chave é a de
+desenvolvimento da ST, já aceita por este OP-TEE, e nada foi gravado no SoC. A Estrada B não foi
+testada, e a decisão não depende dela. Duas consequências para o resto do plano: TF-M **não** é
+necessário para um firmware só não-seguro (`_CM33_NonSecure_sign.bin` carregou sozinho), e a
+receita da Fase 3 assina pelo mesmo `sign_copro_fw_m33` da `m33fw-utils-stm32mp.bbclass`, em vez de
+uma cadeia de chaves nova.
+
 ---
 
 ## 4. O que a `meta-st-stm32mp` já entrega
@@ -187,6 +203,13 @@ uma é aceitável:
 
 O pacote resultante (`med-amp-abi`, só cabeçalhos, zero dependências) fica abaixo dos dois
 consumidores e não inverte nada. A Fase 2 faz isso, **sem hardware**, e pode começar hoje.
+
+**Feito pela metade em 2026-10-06.** O cabeçalho existe (`med_amp_abi.h`, C99 freestanding) e o
+`MedicalDevice.h` o inclui. Mas ele mora no diretório `include/` do `med-framework-api` e é
+instalado com o `-dev` do framework, e isso **não** é "abaixo dos dois consumidores": a receita do
+firmware, na camada adjunta, teria de depender de uma receita da prioridade 9. A receita
+`med-amp-abi` separada, e a camada onde ela fica, são decisões da Fase 3, a primeira que tem um
+segundo consumidor de verdade. Até lá, a fonte única está garantida; o empacotamento, não.
 
 ---
 
@@ -333,7 +356,7 @@ echo start    > /sys/class/remoteproc/remoteprocN/state
 arquivo que não é firmware, o caminho não está vivo — está sendo ignorado.
 **Uma reprovação significa**: o mundo seguro é dono do coprocessador, a Estrada B está fechada, e a
 Estrada A deixa de ser preferência para ser obrigação.
-**Registro**: `BRINGUP_STM32MP2.md` §9.12, e a decisão volta para a §3.3 deste documento.
+**Registro**: `BRINGUP_STM32MP2.md` §9.13, e a decisão volta para a §3.3 deste documento.
 
 ### Fase 1 — o firmware de exemplo da ST, com zero linhas nossas
 
@@ -352,7 +375,7 @@ Carregar pela unidade da ST ou por `st,auto-boot`.
 **Injeção de falha**: parar o firmware (`echo stop > state`) e confirmar que o nó desaparece.
 **Uma reprovação significa**: o problema é de plataforma (memória, mailbox, DT) e não do nosso
 firmware — que ainda não existe. É precisamente por isso que esta fase vem antes.
-**Registro**: `BRINGUP_STM32MP2.md` §9.12.
+**Registro**: `BRINGUP_STM32MP2.md` §9.13.
 
 ### Fase 2 — o ABI fora do C++ (sem hardware nenhum)
 
@@ -400,7 +423,7 @@ e emite a 250 SPS.
 
 **Uma reprovação significa**: o contrato da §6 está mal implementado de um dos dois lados, e o
 critério 4 diz qual.
-**Registro**: `RESULTS.md` §3 ganha a coluna `amp`; `BRINGUP_STM32MP2.md` §9.13.
+**Registro**: `RESULTS.md` §3 ganha a coluna `amp`; `BRINGUP_STM32MP2.md` a seção da sessão em que ela rodar.
 
 ### Fase 4 — integração, e o fim dos nomes adivinhados
 
@@ -494,9 +517,9 @@ escrito e não resultado.)*
 
 | Fase | Critério | Resultado | Data |
 |---|---|---|---|
-| 0 | estrada decidida com evidência | — | — |
-| 1 | firmware da ST carrega e anuncia canal | — | — |
-| 2 | `offsetof` de cada campo confere; injeção vista | — | — |
-| 3 | 250 ± 1 SPS/canal, zero lacunas em 120 s | — | — |
-| 4 | cartão novo adquire sem intervenção | — | — |
-| 5 | jitter imóvel sob carga no A35 | — | — |
+| 0 | estrada decidida com evidência | **Estrada A**: `fw_format=TEE`, carga assinada aceita, dois bits trocados recusados (`0xffff000f`, `0xffff3072`) | 2026-10-06 |
+| 1 | firmware da ST carrega e anuncia canal | `running`; `rpmsg-intc` 0x400 e `rpmsg_i2c` 0x401; somem no `stop`. Nenhum `rpmsg-raw`, mas `/dev/rpmsg_ctrl0` existe | 2026-10-06 |
+| 2 | `offsetof` de cada campo confere; injeção vista | `med_amp_abi.h`: 21 offsets e 4 tamanhos conferidos em C++, em C e no `arm-none-eabi-gcc` do M33; 4 injeções vistas (`RESULTS.md` §3). O empacotamento para o firmware (§5.1) ficou aberto | 2026-10-06 |
+| 3 | 250 ± 1 SPS/canal, zero lacunas em 120 s | **sintético**: 249,975 SPS/canal pelo relógio do Linux, 0 lacunas e 0 CRC em 2.143 quadros; serviço real adquiriu por `amp` (142 × 488 B). Injeções: prescrição recusada ✓; quadros velhos antes do ack → defeito do framework, corrigido. CRC errado e sequência pulada **não injetados** no firmware (`BRINGUP_STM32MP2.md` §9.14). **Conversor real** (08/10): 250,031 conversões/s pelo relógio do M33, 0 lacunas, 0 CRC e 0 perdas em 2.143 quadros, gerador de teste dentro da especificação nos 8 canais (§9.16) | 2026-10-07, 2026-10-08 |
+| 4 | cartão novo adquire sem intervenção | **critérios 1–3 atendidos**: cartão gravado do zero, M33 carregado pelo udev (7,7 s), prescrição de fábrica aceita, `READY=1` e slot confirmado depois da aquisição, `NRestarts=0`, iguais em 4 boots; `MED_EEG_ADDRESS = /dev/med-amp0`. A enumeração não variou, então o nome não foi testado contra uma troca. **Injeção não feita**: depende de `StartLimit*` (`BRINGUP_STM32MP2.md` §9.16) | 2026-10-08 |
+| 5 | jitter imóvel sob carga no A35 | **antecipada, só a injeção**: com o conversor real, σ do intervalo entre quadros 1,95 → 2,16 µs e faixa 14 → 22 µs sob `dd`+`md5sum` nos dois A35, 0 perdas. A leitura SPI no M33 fica 18% mais lenta (215 → 254 µs): código do M33 na DDR. Custo de CPU e carga da HMI não medidos (`BRINGUP_STM32MP2.md` §9.16) | 2026-10-08 |

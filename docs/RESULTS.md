@@ -359,6 +359,156 @@ amostras/s (64 bytes por quadro de 1 ms). **O que isto não significa**: que a p
 1 e 12 MHz nas leituras de dados, o que não foi observado; e a contagem de perdidas fechou 0,3% curta
 a 12 MHz, sem explicação.
 
+### Resultado — o formato de fio do link `amp`, numa fonte só (2026-10-06)
+
+Fase 2 do `implementation_plan_m33_firmware.md`, sem hardware. O `FrameHeader`, a `ControlMessage`,
+o `ControlAck`, os magics e o CRC-32 saíram do `MedicalDevice.h` para o `med_amp_abi.h`: um cabeçalho
+C99 freestanding que o firmware do M33 vai incluir, e que o `MedicalDevice.h` agora só renomeia
+(`using FrameHeader = ::med_amp_frame_header`). O tamanho e o **offset de cada campo** são asserções
+de compilação no próprio cabeçalho.
+
+```bash
+make test        # tests/framework: abi-freestanding, abi-cortex-m33, depois o binário
+```
+
+| Verificação | Resultado |
+|---|---|
+| `sizeof` FrameHeader / ControlOption / ControlMessage / ControlAck | 40 / 56 / 464 / 72 |
+| offset de cada um dos 21 campos, em C++, contra a tabela do plano (§6.2–§6.3) | 21/21 |
+| os mesmos 25 números calculados por um compilador **C** (C99), contra o C++ | 25/25 |
+| compila freestanding com `-nostdinc`, só com os cabeçalhos do compilador, C99 e C11 | sim |
+| compila para `-mcpu=cortex-m33 -mthumb` com o `arm-none-eabi-gcc` 14.2.1 do Yocto, C99 e C11 | sim |
+| CRC-32 do framework (tabela), do cabeçalho em C++ e do cabeçalho em C, contra `0xCBF43926` | os três |
+| os três CRC em 448 B e em cada um dos 3584 bits invertidos | 3585 entradas, 0 divergências, 0 inversões sem efeito |
+| `make test` | **1310** verificações, 0 falhas (eram 1246); MCP2210 452, 0 falhas |
+| `make service` (bitbake, `med-framework-api` + `eeg-acquisition-service`) | verde; `med_amp_abi.h` instalado em `usr/include/medplatform/` |
+
+**Injeções de falha**, cada uma restaurada antes da seguinte:
+
+| Injeção | O que falhou |
+|---|---|
+| `version` ↔ `channelCount` trocados no `FrameHeader` (mesma largura, mesmo tamanho) | a compilação, nomeando os dois campos, nos quatro mecanismos: o `typedef` de C99 e o `_Static_assert` de C11, no host e no compilador do M33, e o `static_assert` do C++ pelo `MedicalDevice.h` |
+| a lista do lado C com `sequence` e `timestampMicros` fora de ordem | 2 falhas: `sequence: C diz 24, C++ diz 16` e o inverso |
+| CRC do cabeçalho começando em 0 em vez de `0xFFFFFFFF` | 4 falhas: o vetor padrão nos dois CRC do cabeçalho, a entrada vazia, e 3585 divergências; o CRC por tabela continuou certo |
+| `#include <string.h>` no cabeçalho | a compilação freestanding: `string.h: No such file or directory` |
+
+**O que isto não significa.** Que o firmware vai empacotar igual *em execução*: o que se provou é
+que o compilador dele aceita as asserções, e não que um quadro emitido pelo M33 chega legível, o que
+é a Fase 3. Os números esperados vêm do plano, escrito a partir do layout do `MedicalDevice.h`, então
+são o formato que o driver `rpmsg` já falava, e não uma verificação independente do formato. A
+única referência de fora do repositório continua sendo o vetor do CRC. E a pergunta de **onde o
+cabeçalho é empacotado para o firmware** ficou aberta: hoje ele é instalado com o `-dev` do framework
+(prioridade 9), e a receita do firmware na camada adjunta (prioridade 7) não pode depender dele sem
+fazer uma camada que só fornece passar a consumir de cima (`implementation_plan_m33_firmware.md`
+§5.1).
+
+### Resultado — o link `amp`, com sinal sintético, na STM32MP257 (2026-10-07)
+
+`med-m33-firmware` no Cortex-M33, carregado assinado pelo OP-TEE, contra o serviço instalado na
+imagem. **Sinal sintético**: nenhum conversor. O registro completo, com os quatro defeitos do
+firmware e os dois do lado Linux, está em `BRINGUP_STM32MP2.md` §9.14.
+
+```bash
+python3 scripts/amp-bench.py control ok.bin afe.bias_drive=false afe.gain=24 \
+    afe.lead_off_detection=false afe.reference_uv=4500000 afe.test_signal=off
+sh amp-bench.sh /run/med-m33/med-m33-producer_sign.bin ok.bin 2143 cap.bin   # na placa
+python3 scripts/amp-bench.py analyse cap.bin --seconds 120.02                 # no host
+make test     # inclui tests/m33-producer: 126 verificações do produtor, 6 injeções vistas
+```
+
+| Medida | `amp` (sintético) | `usb` na placa (§3, acima) |
+|---|---|---|
+| taxa entregue, relógio do Linux, 120 s | **249,975** amostras/s/canal | 250, com perda de 0,000–0,003% sob `performance` |
+| lacunas de sequência / CRC errado | 0 / 0 em 2.143 quadros | — |
+| intervalo entre quadros, relógio do produtor | 55.999–56.001 µs (esperado 56.000) | não existe: o carimbo é do host |
+| onde a amostra é datada | no M33, na interrupção | no Linux, depois de duas trocas HID |
+
+**O que isto não significa.** Não é uma comparação entre front-ends: de um lado há um conversor real
+atrás de uma ponte, do outro uma fórmula. A coluna `amp` mede o transporte e a datação, não a
+aquisição. O jitter de 2 µs é o do SysTick sem carga no A35 e sem conversor. A Fase 5 do plano é que
+mede sob carga, e só com o DRDY real ele vira número clínico. O carimbo do M33 é contado desde a
+subida do firmware, não é data (§9 abaixo).
+
+### Resultado — o link `amp` com o conversor real, ocioso e com o A35 carregado (2026-10-08)
+
+O mesmo firmware, agora com a fonte `converter`: o ADS1299 no SPI6 do M33, com DRDY como
+interrupção EXTI1 e o carimbo tomado na entrada da interrupção. As entradas estão no **gerador de
+teste interno** da peça (`afe.test_signal=internal`). O registro e os três defeitos que vieram antes
+estão em `BRINGUP_STM32MP2.md` §9.16.
+
+```bash
+python3 scripts/amp-bench.py control test24.bin afe.bias_drive=false afe.gain=24 \
+    afe.lead_off_detection=false afe.reference_uv=4500000 afe.test_signal=internal
+sh amp-bench.sh /run/med-bench/med-m33-producer_sign.bin test24.bin 2143 cap.bin  # na placa
+python3 scripts/amp-bench.py converter cap.bin --seconds 120.17                  # no host
+# carga: 2x 'while :; do dd if=/dev/zero of=/dev/null bs=8M count=64; done' + 2x 'md5sum /dev/zero'
+```
+
+| Medida (120 s, 2.143 quadros) | ocioso | A35 carregado |
+|---|---|---|
+| lacunas / CRC errado | 0 / 0 | 0 / 0 |
+| conversões perdidas / erros SPI / status fora de sincronia (contadores do M33) | 0 / 0 / 0 | 0 / 0 / 0 |
+| amplitude do gerador, 8 canais (especificação: 1.875 µV ± 20%) | 1.859,3–1.860,1 µV | idem |
+| período do gerador (especificação: 256 conversões) | 256,00 | 256,00 |
+| taxa pelo relógio do M33 | 250,031 conversões/s | 250,042 |
+| intervalo entre quadros, mín–máx (nominal 56.000 µs) | 55.986–56.000 µs | 55.980–56.002 µs |
+| σ do intervalo / p1–p99 | 1,95 µs / 55.989–55.997 | 2,16 µs / 55.985–55.995 |
+| duração da leitura SPI de 27 bytes, no M33 | 207–220 µs | **252–259 µs** |
+
+**O que isso mostra.** Primeiro, que o link `amp` adquire do conversor sem perder nada em 120 s.
+Segundo, que a datação no M33 quase não se move com o A35 saturado: σ +0,2 µs, faixa de 14 para 22 µs.
+É a afirmação da ligação `amp`, medida uma vez. Terceiro, um **acoplamento que o
+argumento de particionamento tem de declarar**: a leitura SPI fica 18% mais lenta sob carga, sem
+sobreposição entre as faixas. O código e os dados do M33 estão na DDR (`0x80100000`/`0x80a00000`
+no mapa do firmware), e a carga satura a DDR. O processador é separado; a memória é compartilhada.
+A margem é larga (259 µs dentro de um prazo de 4 ms), mas ela existe por folga e não por isolamento.
+
+**O que isto não significa.** Não é EEG: o gerador de teste não mede ruído de entrada, CMRR nem
+eletrodo. Não é o produto: o firmware foi carregado pelo script de bancada e o leitor foi `dd`, não
+o `eeg-acquisition-service` (Fase 4 do plano). A carga é uma receita e uma rodada. Não é
+`stress-ng`, que a imagem não tem, nem a HMI, que não roda nesta imagem. A causa do acoplamento é
+inferida do mapa de memória, não isolada: código fora da DDR não foi testado. A diferença de 125 ppm
+entre a taxa e 250 é a do oscilador da peça contra o relógio do M33, e não diz qual dos dois está
+certo. A deriva entre as duas colunas (250,031 → 250,042) pode ser térmica e não foi investigada.
+
+### Resultado — o formato v2: o estado dos eletrodos chega ao Linux (2026-10-08, só host)
+
+O `med-amp-abi` passou à versão 2. Depois das amostras vem um bloco de 8 bytes (`med_amp_lead_off`:
+monitorado e solto, positivo e negativo, um bit por canal), e o CRC cobre os dois. O quadro de
+8 × 14 tem 496 bytes, que é a carga inteira de um buffer `rpmsg` de 512 (no lado Linux,
+`MAX_RPMSG_BUF_SIZE` menos o `rpmsg_hdr`). Codificar e decodificar passou a ser do framework
+(`amp::encodeFrame` e `amp::decodeFrame`). O driver `rpmsg` e a HMI usam o mesmo decodificador, e a HMI
+tinha antes uma cópia própria do parser. O M33 programa BIAS derivado e lead-off DC em todas as
+entradas.
+
+```bash
+make test        # framework 1343 (eram 1310), MCP2210 452, produtor do M33 198 - 0 falhas
+```
+
+| Injeção (uma de cada vez, restaurada) | O que falhou |
+|---|---|
+| `encodeFrame`: CRC só sobre as amostras | 2: o CRC do quadro e a decodificação |
+| `decodeFrame`: CRC não confere o bloco | 1: o bit trocado no bloco passou |
+| `decodeFrame`: aceita quadro sem o bloco | 1: o truncado |
+| firmware: "solto" sem máscara de "monitorado" | 2: bits acima do 8º canal, e bits sem lead-off prescrito |
+| firmware: acumulador não zera por quadro | 1: o eletrodo solto vazou para o quadro seguinte |
+| firmware: P e N trocados na palavra de status | 10: as palavras com P ≠ N (as 4 com P = N passam, como deviam) |
+| firmware: lead-off aceito com sinal de teste | 1 |
+
+O `amp-bench.py`, que é a segunda leitura do formato, escrita sem o código do framework, leu 10
+quadros gerados pelo produtor C compilado no host com eletrodos soltos conhecidos (3+ em 3 quadros,
+8− em 1) e devolveu exatamente isso.
+
+**Depois, na placa (08/10 à noite, `BRINGUP_STM32MP2.md` §9.16).** A conferência do layout contra
+`LOFF_STAT` passou no silício com `P 42 N 00` pelos dois caminhos. A prescrição de fábrica foi aceita e
+relida. 180 quadros v2 chegaram íntegros, com as entradas sem eletrodo reportadas soltas, e o sinal de
+teste de 120 s em v2 repetiu o resultado da manhã. O teste "P e N trocados" acima continua provando só
+consistência. A correção do layout é a conferência na placa que a prova.
+
+**O que isto não significa.** Não diz que a detecção acerta um eletrodo que se solta de verdade:
+a bancada não tem eletrodos, e "tudo solto" é o resultado trivial. E o link `usb` continua
+aceitando `lead_off_detection = true` sem cumpri-lo (§9.16).
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
@@ -1170,12 +1320,14 @@ tentativas", não "confirmado", e só o contador distingue os dois. Detalhes em
 
 Registrado explicitamente para que a ausência não seja lida como resultado:
 
-- **Caminho AMP / `rpmsg` / Cortex-M33** — o QEMU não tem co-processador. O driver medido é o
-  `simulated`. O alvo que tem co-processador foi energizado em 2026-08-18 e o kernel reporta
-  `remoteproc remoteproc1: m33 is available`, mas nenhum firmware foi carregado nele: o driver
-  `rpmsg` continua não exercitado em alvo nenhum. O boot acrescentou uma restrição ao plano —
-  `stm32-rproc 0.m33: Support of signed firmware only`.
-- **Latência e jitter de tempo real** — o timing do QEMU não é significativo.
+- **Caminho AMP / `rpmsg` / Cortex-M33** — ~~nenhum firmware carregado~~ **exercitado na placa**:
+  com sinal sintético pelo serviço instalado (2026-10-07) e com o conversor real pelo script de
+  bancada (2026-10-08, §3), e **um cartão gravado do zero adquirindo sozinho**, igual em 4 boots
+  seguidos (Fase 4, `BRINGUP_STM32MP2.md` §9.16). **Ainda não medido**: o nome `/dev/med-amp0`
+  contra uma troca de enumeração, e a injeção de falha da Fase 4 (sem firmware na imagem).
+- **Latência e jitter de tempo real** — o timing do QEMU não é significativo. Na placa, pelo link
+  `amp`: o jitter do carimbo entre quadros, ocioso e com o A35 carregado (§3). **Ainda não medidos**:
+  a latência de entrada da interrupção isolada, o custo de CPU e a carga real (HMI).
 - **Integração com bootloader e fallback A/B em boot falho** — **medidos no STM32MP257 em
   2026-08-31 (troca) e 2026-10-04 (fallback, §8)**; o texto a seguir é de antes. §6. A §8 não muda isso, nem depois
   do `rauc install` de 2026-08-30: no STM32MP257 a seleção de slot **não está implementada**

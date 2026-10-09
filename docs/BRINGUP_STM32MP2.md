@@ -1287,6 +1287,503 @@ Aqui fica o que a sessão ensinou sobre **esta placa e o seu caminho de atualiza
 `performance`, `eeg-acquisition` adquirindo pelo link `usb`. As ~60 sessões vazias deixadas pelo
 laço do item 19 continuam no `/data`.
 
+### 9.13 Sétima sessão (2026-10-06): o M33 carrega firmware assinado, e recusa o adulterado
+
+Fases 0 e 1 do `implementation_plan_m33_firmware.md`, numa sessão só e sem regravar o cartão: a
+imagem era a da §9.12 (kernel `6.6.129-gb8dbcb083402`, slot A, `MED_EEG_LINK=usb`). Acesso por SSH
+no IPv6 link-local. Nada foi escrito no cartão: o firmware ficou em `/run/med-m33/`, e o
+`firmware_class.path` apontou para lá até o próximo boot.
+
+**A placa de AFE passou para o header de 40 pinos**, sem ponte, para a ligação `amp`. A fiação é
+fato desta placa e é a que o firmware do M33 vai ter de usar:
+
+| Sinal | Função do pino | Porta | Pino do header |
+|---|---|---|---|
+| MOSI | `SPI6_MOSI` | PC7 | 19 |
+| MISO | `SPI6_MISO` | PC4 | 21 |
+| SCK | `SPI6_SCK` | PF7 | 23 |
+| CS | `SPI6_NSS` | PF4 | 24 |
+| PWDN | `TIM8_CH4` | PC10 | 29 |
+| DRDY | `TIM5_CH1` | PH8 | 31 |
+
+RESET, START e CLKSEL não chegam ao header; **ainda não conferido** se estão fixos na placa de AFE e
+em que nível. Como o SPI6 continua `disabled` no devicetree do Linux, nada fala com o conversor
+nesta sessão: o que se mediu foi o mecanismo de carga do coprocessador, não o front-end.
+
+**Fase 0: o que a placa diz antes de qualquer firmware.**
+
+```
+remoteproc1  name=m33  state=offline  fw_format=TEE
+stm32-rproc 0.m33: Support of signed firmware only
+/dev/tee0, e a TA 80a4c275-0a47-4905-8285-1486a9771a08 registrada no barramento tee
+/lib/firmware: não existe (e o rootfs é somente leitura)
+```
+
+**Fase 1: o firmware da ST, com zero linhas nossas.** `bitbake m33projects-stm32mp2` no container
+(2328 tarefas, 2167 do sstate). O único projeto da DK que a receita compila é o
+`USBPD_DRP_UCSI`, que é o firmware padrão da ST para esta placa. O `OpenAMP_TTY_echo` da DK existe no
+STM32CubeMP2, mas só como projeto do CubeIDE, sem `CMakeLists.txt`, e a receita pula projeto sem
+CMake. A camada assina sozinha (`sign_copro`, `m33projects.inc`) com a chave de desenvolvimento em
+que este OP-TEE confia. O `_sign.bin` começa com `0x3543A468`, o magic do formato de imagem de
+remoteproc do OP-TEE.
+
+| Ensaio | Imagem | Resultado |
+|---|---|---|
+| Carga | `USBPD_DRP_UCSI_CM33_NonSecure_sign.bin`, 148.892 B, sha256 `648b3859…` | `running`; `rpmsg host is online`; canais `rpmsg-intc` (0x400) e `rpmsg_i2c` (0x401); aparece `/dev/rpmsg_ctrl0` |
+| Parada | a mesma | `offline`; `/sys/bus/rpmsg/devices` vazio, nenhum `/dev/rpmsg*` |
+| Injeção 1 | um bit trocado no offset 0x10000 (payload) | **recusada**: `TA_RPROC_FW_CMD_LOAD_FW` → `0xffff000f` (`TEE_ERROR_SECURITY`), `Boot failed: -5` |
+| Injeção 2 | um bit trocado no offset 0x100 (região da assinatura) | **recusada**: `0xffff3072` (`TEE_ERROR_SIGNATURE_INVALID`), `Boot failed: -5` |
+| Controle | a imagem boa de novo, depois das duas recusas | `running` |
+
+O que isso fecha: **a Estrada A existe nesta placa e é a escolhida.** "Support of signed firmware
+only" não é obstáculo, é a propriedade que se quer defender, e custou zero chaves novas e zero
+mudanças de devicetree. A Estrada B não foi testada e não precisa ser.
+
+O que isso **não** prova: que o *nosso* firmware vai carregar. A chave que assinou é a de
+desenvolvimento da ST, e uma receita nossa tem de chegar à mesma assinatura pelo mesmo caminho
+(`m33fw-utils-stm32mp.bbclass`). Também não prova nada sobre o SPI6, cuja atribuição RIF ao M33
+continua sem arquivo conhecido (`implementation_plan_ads1299.md` §11.4), nem sobre os GPIOs PF4,
+PC10 e PH8, que precisam da mesma atribuição.
+
+**A primeira tentativa de injeção não injetou nada**, e isso merece mais destaque que o resultado.
+O byte foi trocado na placa com `od -An` → `printf` → `dd`. O `od` do busybox não aceita `-An`, a
+troca nunca aconteceu, o "firmware corrompido" era idêntico ao bom, e subiu `running` duas vezes.
+Lido sem conferir, o registro teria sido "o OP-TEE aceita firmware adulterado", o que é falso e
+grave. Quem denunciou foi o `cmp -l`, que não imprimiu nada. A repetição gerou os arquivos no host,
+conferiu a diferença com `cmp -l` **dos dois lados** (65537: 117→116; 257: 220→221), e só então
+carregou. É a regra do `CLAUDE.md` em outra roupa: uma injeção que nunca viu a falha que procura é
+alegação, e "nunca viu" inclui "nunca chegou a acontecer".
+
+Três observações para as próximas fases:
+
+- **Nenhum canal se chama `rpmsg-raw`**, então nenhum `/dev/rpmsgN` aparece sozinho. O
+  `/dev/rpmsg_ctrl0` existe, o que confirma no kernel da placa o caminho de `RPMSG_CREATE_EPT_IOCTL`
+  da §6.1 do plano.
+- **O firmware da ST é o gerente de USB-PD da porta USB-C DRP.** O `rpmsg_i2c` é um I²C virtual que
+  o driver `ucsi-stm32g0-i2c` do Linux usa; a cada parada ele registra `i2c write 35, 08 error:
+  -110`. É inofensivo aqui, mas um firmware nosso no lugar deste deixa essa porta sem gerente de PD,
+  e isso tem de ser dito, não descoberto.
+- **O serviço de aquisição estava em laço** (`NRestarts=129`, `front-end self test failed`): a
+  imagem é `usb` e a ponte não está mais na placa. Esperado com essa imagem e sem relação com o M33,
+  mas a mensagem é a de autoteste reprovado e não a de dispositivo ausente, o que **não foi
+  investigado**.
+
+**Estado ao fim da sessão**: M33 `offline`, nenhum firmware no cartão, `firmware_class.path` em
+`/run/med-m33` até o próximo boot.
+
+### 9.14 Oitava sessão (2026-10-07): o nosso firmware no M33, e o serviço adquirindo por `amp`
+
+Fase 3 do `implementation_plan_m33_firmware.md`. **O sinal é sintético. O ADS1299 não foi tocado**:
+está no header (§9.13), mas o SPI6 continua `disabled` no Linux e sem atribuição RIF ao M33, e o
+firmware não tem driver do conversor. O que esta sessão validou é o **caminho** M33 → rpmsg → Linux →
+serviço → `/data`, com um produtor que gera, por fórmula, 10 Hz de 20 µV mais 50 Hz de 5 µV. Nada
+aqui é medida de eletrofisiologia nem do front-end.
+
+O firmware é `med-m33-firmware` (camada adjunta, `dynamic-layers/stm-st-stm32mp/recipes-firmware/`):
+bare metal, um endpoint `rpmsg-raw`, a amostra datada na interrupção do SysTick, assinado pela mesma
+`sign_copro_fw_m33` da ST. O formato vem da receita nova `med-amp-abi` (§5.1 do plano). Tudo em
+`/run`, nada gravado no cartão.
+
+**Quatro defeitos no caminho até o primeiro quadro**, nenhum visível no build:
+
+1. **`Trace not available`.** O buffer de trace da ST fica em `.bss`, na RAM do M33 (`0x80a00000`),
+   e com o OP-TEE carregando o firmware o Linux mapeia só os carveouts listados
+   (`carveout_memories`: `ipc-shmem-1`, as vrings, `cm33-sram2`). O buffer foi para uma seção
+   `.resource_table.trace`, que o `.ld` da ST já põe em `ipc-shmem-1`. Sem isso, o firmware era mudo.
+2. **A FPU desligada.** O `SystemInit()` não-seguro da ST não escreve `SCB->CPACR`, e o firmware é
+   *hard-float*. O sintoma foi o mais enganoso da sessão: canal anunciado, a prescrição chegou
+   (`message from 0x400, 464 bytes` no trace), e depois silêncio para sempre, porque o parser da
+   prescrição é o primeiro código com `double`, e a UsageFault caía num handler que girava calado.
+   Corrigido no `main()`, com o `CPACR` relido no trace (TrustZone pode vetar pelo NSACR). Os
+   handlers de falha agora escrevem CFSR/HFSR/PC no trace antes de parar.
+3. **O `mbox_ipcc.c` da ST zera a flag de mensagem depois de processar a vring.** Uma interrupção
+   que chega durante o processamento é apagada. Corrigido por leitura, antes de qualquer sintoma: a
+   flag é zerada antes, e é `volatile`. Não foi observado em falha.
+4. **O `HAL_InitTick()` não é refeito depois do `SystemCoreClockUpdate()`** no exemplo da ST.
+   Corrigido por leitura. O trace confirma o clock: `core clock 400000000 Hz`.
+
+**A bancada** (`scripts/amp-bench.sh` na placa, `scripts/amp-bench.py` no host). O host escreve a
+`ControlMessage` e julga a captura; a placa só tem busybox. O analisador recalcula **cada amostra**
+pela especificação do sinal, em precisão dupla, com o CRC do `zlib`, que é uma fonte de fora do
+repositório.
+
+| Captura | Resultado |
+|---|---|
+| 120 s, prescrição aceitável (lead-off e bias `false`) | ack primeiro; 2.143 quadros, **0 lacunas, 0 CRC errado**; 240.016 amostras a ≤ 0,52 nV do especificado; **249,975 amostras/s/canal pelo relógio do Linux**; 250,0000 pelo do M33, deltas de 55.999 a 56.001 µs |
+| sinal de teste interno, 300 quadros | quadrada de ±1.875.000 nV, período 256 amostras, erro 0,00 nV |
+| a prescrição que o `eeg.conf` envia (lead-off e bias `true`) | só o ack: `rejectedIndex 1`, *"afe.bias_drive: synthetic producer, no electrodes"*; nenhum quadro |
+
+**O serviço real, pelo link `amp`**, com o binário instalado e um `eeg.conf` de bancada em `/run`
+(`--config`, selado com o `.sha256`; lead-off e bias `false`): `front-end self test passed`,
+`acquisition session started`, `metadata.json` com `"driver": "rpmsg"` e `"link": "amp"`, e um
+`raw.bin` de 69.296 B = **142 × 488 B**, que é o `MED_FRAMES=142` do journal.
+
+**Dois defeitos do lado Linux, previstos lendo o `rpmsg_char` do 6.6 e depois observados:**
+
+- **Quadros velhos no lugar do ack.** No canal `rpmsg-raw`, `rpmsg_ept_cb` enfileira toda mensagem,
+  mesmo com o `/dev/rpmsgN` fechado; o `release` esvazia a fila no fechamento, mas o `open` não. Na
+  bancada: abrir, prescrever, fechar, reabrir 1 s depois, e a primeira mensagem lida tinha **488
+  bytes**, um quadro, e não os 72 do ack. No serviço, sem mudar código, deixando quadros na fila
+  antes de iniciá-lo: `self test failed`, *"the front-end answered the control message with
+  something else"*, contra um produtor saudável. **Sem a injeção o serviço passava**, porque reabre
+  o canal antes dos 56 ms do primeiro quadro: um defeito latente, escondido por uma corrida.
+  Corrigido no framework (`sendControl` descarta quadros até o ack, sob um prazo único), e a mesma
+  injeção passou: `self test passed`, 142 quadros.
+- **Fila sem limite no kernel.** Com o leitor fechado por 20 s, 357 mensagens já estavam na fila,
+  lidas em 10 ms, e o `Slab` cresceu 456 KB (~23 KB/s, ~2 GB/dia com o serviço parado e o firmware
+  transmitindo). **Não corrigido**: exige uma mensagem de parada no protocolo, e é decisão a tomar.
+  A bancada para o M33 ao fim de cada captura por causa disso.
+
+E duas armadilhas da bancada que valem registro. O `od -An` do busybox voltou a falhar (é a mesma
+da §9.13); os tamanhos das mensagens bastaram para a conclusão, mas o comando estava errado de
+novo. E o `/run/medplatform` só existe enquanto a unidade roda (`RuntimeDirectory=`), então o
+serviço rodado à mão falha no `bind` até o diretório ser criado.
+
+**O que isto não significa.** Nada sobre o ADS1299, nem sobre o SPI6 com o M33. Também não
+significa que um cartão novo adquire sozinho: o firmware não está na imagem, e a prescrição do
+`eeg.conf` é recusada por um produtor sintético. Por fim, o carimbo é o relógio do M33 desde a
+subida, que o framework lê como tempo Unix, e por isso a sessão aparece datada perto de 1970 no
+fluxo (`fromUnixMicros`).
+
+**Estado ao fim da sessão**: M33 `offline`; `eeg-acquisition.service` **parado** à mão (estava em
+laço pelo link `usb` sem ponte, `NRestarts=2031`) e volta no próximo boot; biblioteca corrigida
+só em `/run/med-bench/lib`.
+
+### 9.15 Nona sessão (2026-10-07): o RIF do SPI6 no M33, e o ADS1299 responde ao M33
+
+**O marco: pelo SPI6, a partir do Cortex-M33, o registrador de ID do ADS1299 respondeu `0x3E`**
+(família `111`, campo de canais `10` = 8 canais, revisão 1), o mesmo byte que a ponte USB leu em
+04/10. O DRDY leu 1, o repouso correto com o conversor em SDATAC. É o primeiro contato do link `amp`
+com o conversor real. **Ainda não é aquisição**: nenhuma conversão, nenhum DRDY como interrupção,
+e o fluxo de quadros continua sintético.
+
+**A atribuição** (`meta-med-afe-ads1299`, `external-dt_%.bbappend`, aplicada só com
+`MED_EEG_LINK = "amp"`): oito recursos do devicetree do OP-TEE passaram de CID1 a CID2,
+não-seguros e privilegiados. São o SPI6 (RIFSC 27), PC4, PC7, PC10, PF4, PF7, PH8 e a linha EXTI1 8.
+Antes de escrever, conferido na placa: nenhum dos seis pinos é reivindicado pelo Linux (pinctrl
+`UNCLAIMED`), e as interrupções de GPIO dele usam as linhas EXTI 3, 4 e 5. O clock de kernel do SPI6
+(`FLEXGEN_18`, da PLL5) já é configurado pelo OP-TEE, e o gate segue o RIFSC 27
+(`clk-stm32mp25.c`: `SEC_RIFSC(27)` para `ck_icn_p_spi6` e `ck_ker_spi6`).
+
+**Conferido no artefato, não na fonte.** O DTB do OP-TEE foi extraído de dentro do FIP e o
+`st,protreg` decodificado (`PER_ID` 0–7, `SCID` a partir do bit 12, `SEC` 16, `PRIV` 17, da macro
+`RIFPROT` do patch da ST). As 8 entradas estão em SCID=2 no FIP novo e em SCID=1 no FIP que estava no
+cartão. Duas entradas de controle, que não mudam (GPIOH 4: CID1, seguro; SPI3: sem CID), saem iguais
+nos dois, então o decodificador distingue. No `diff` do DTB inteiro, as únicas linhas diferentes são
+as cinco `st,protreg` tocadas, cada uma só nas células previstas (`0x21…` → `0x22…`), e os outros
+três DTBs embutidos (TF-A, U-Boot) são idênticos byte a byte. **Não comparado**: os binários de código
+do FIP, que foram reconstruídos.
+
+**A gravação, e o que ela ensinou sobre endereçar partições.** O FIP vai só por cartão: nenhum bundle
+RAUC o atualiza. Três achados antes de gravar:
+
+1. **O PARTUUID das partições FIP colide entre discos.** `by-partuuid` da `fip-a` dava `mmcblk0p5`
+   (o cartão) e o da `fip-b` dava `mmcblk1p4`, a eMMC de fábrica. Os UUIDs que o nosso `.wks` fixa
+   para as FIPs são os do layout de exemplo da ST, gravado também na eMMC. A regra da §9.3
+   ("endereçar por PARTUUID, nunca por partlabel") **não basta para essas partições**. A gravação
+   identificou o disco pela partição que é só nossa (`med-root-a`, a do `root=` em uso) e, dentro
+   dele, a `fip-a` pelo `PARTNAME` do `uevent`. A correção de raiz, UUIDs próprios no `.wks`, não foi
+   feita.
+2. **O banco ativo é o 0.** Metadados FWU v2 iguais nas duas cópias: `active_index 0`,
+   `previous_active_index 1`, os dois bancos aceitos (`0xfc`). A `fip-b` do cartão difere da `fip-a`
+   (o RIF é o mesmo), o que o `.wks`, que grava o mesmo arquivo nas duas, não explica. **Não
+   investigado.**
+3. **O `dd` do busybox não aceita `conv=fsync`.** A primeira tentativa não gravou nada, e o
+   `| tail -1` engoliu o erro. Quem pegou foi a releitura com sha256 depois da escrita; a `fip-a`
+   foi conferida idêntica ao backup antes de repetir. A segunda gravou, e a releitura bateu
+   (`13446233…`).
+
+Backup do FIP anterior em `/data/med-bench/` e no host em `build/med-bench-backups/`.
+
+**O teste negativo, com o FIP antigo.** A sondagem (`afe_probe.c`) pergunta ao RIF por cada
+recurso com o `ResMgr_Request()` da ST antes de tocar nele. Com o FIP antigo: sete recusas
+`SCID != CPU2`, *"front-end NOT probed"*, nenhum acesso ao hardware, e o fluxo sintético seguiu
+(1 ack + 30 quadros). Com o FIP novo: *"all belong to this core"*.
+
+**O reset do SoC inteiro.** A primeira sondagem com o FIP novo **reiniciou a placa toda**, e não só o
+M33: o journal do boot anterior termina sem nem a linha "powering up m33", e o trace se perdeu com a
+DDR. Sem console serial e sem `devmem` (o `/dev/mem` não devolve a região), a causa foi isolada por
+eliminação. A sondagem escrevia `__HAL_RCC_GPIOx_CLK_ENABLE()` para os bancos C, F e H, que são
+registros do RCC do lado seguro: o driver do Linux nem os controla (`CS_GATE` só de resumo). Tirar
+**só** essas três escritas eliminou o reset, e o boot id ficou igual antes e depois. Mecanismo provável:
+acesso ilegal reportado pelo RIF ao mundo seguro, que reinicia. Isso é **inferência**: a mensagem do
+OP-TEE iria para o console serial, que não está ligado. Os bancos já têm clock porque o Linux usa outros
+pinos deles.
+
+**O conversor sem alimentação.** Com o RIF certo e sem reset, a primeira leitura deu `0xFF` e DRDY 0,
+e a sondagem recusou (*"not a converter of this family"*). A placa do AFE estava ligada ao header só
+pelos sinais; AVDD (5 V), DVDD (3,3 V) e GND vinham da ponte USB nas sessões anteriores. Com 5 V,
+3,3 V e GND do header ligados, o mesmo firmware leu `0x3E`. É o controle negativo natural da leitura:
+uma linha MISO solta dá `0xFF`, e o teste de família a recusa.
+
+**Três armadilhas da bancada**, registradas porque cada uma custou uma rodada:
+
+- **A numeração do remoteproc trocou num boot** (o M33 virou `remoteproc0` e o M0 `remoteproc1`).
+  Um comando avulso com `remoteproc1` fixo mandou o firmware do M33 para o M0, que recusou com
+  *"Image is corrupted (bad magic)"*. O `amp-bench.sh` procura pelo nome; os comandos de diagnóstico
+  agora também. É a regra "um nome de dispositivo é uma corrida", desta vez com um remoteproc.
+- **O trace de 1.048 bytes perdia o início.** O Linux lê o trace até o primeiro NUL, e o anel da ST
+  escreve um NUL depois da posição atual, então uma volta no anel esconde tudo o que é mais antigo.
+  Agora o buffer tem 4 KiB. A primeira tentativa de mudar o tamanho não pegou por causa do CRLF do
+  arquivo da ST.
+- **O `head -N` do busybox** (só `head -n N`) quebrou dois comandos de diagnóstico.
+
+O `weston.service` falha neste boot, mas também falhava no de 04/10, antes de qualquer mudança no
+FIP. É a falha conhecida do HMI (§9.9 e `BRINGUP_HMI_STM32MP2.md`), e não regressão do RIF.
+
+**O que isto não significa.** Que o M33 adquire do conversor: falta o DRDY como interrupção (EXTI1 8,
+já atribuída), o `RDATAC`, o quadro de 27 bytes por amostra e o fim do gerador sintético no
+produtor. Nada sobre o SPI6 em velocidade: a leitura foi com o prescaler mais lento, que dá algumas
+centenas de kHz. E a imagem no cartão ainda é a do link `usb`. Só o FIP é novo; a imagem `amp`
+(firmware em `/lib/firmware`, `eeg.conf` com `rpmsg`) não foi gravada.
+
+**Estado ao fim da sessão**: FIP novo na `fip-a`; M33 `offline`; placa do AFE alimentada pelo header.
+
+### 9.16 Décima sessão (2026-10-07 e 2026-10-08): o M33 adquire do ADS1299
+
+**O marco: o M33 adquiriu do conversor por 120 s, com DRDY por interrupção, `RDATAC` e quadros
+reais.** 2.143 quadros, **0 lacunas, 0 CRC errado, 0 conversões perdidas, 0 erros de SPI e 0 palavras
+de status fora de sincronia** em 29.894 interrupções. O sinal é o gerador de teste interno da peça,
+e ele saiu dentro da especificação nos 8 canais: amplitude de 1.859,3–1.860,1 µV contra ±VREF/2400 =
+1.875 µV, e período de 256,00 conversões contra f_CLK/2²¹. A taxa pelo relógio do M33 foi
+**250,031 conversões/s**. Os números e o comando estão em `RESULTS.md` §3.
+
+**Como esta seção foi escrita.** A placa caiu em 07/10, entre a primeira captura com o conversor
+(12:44) e a de 120 s que validaria a última correção. A sessão de 07/10 não foi registrada. Os três
+defeitos abaixo foram reconstruídos a partir dos comentários que as correções deixaram em `afe.c` e
+`main.c` e da captura de 12:44, que está em `build/med-bench/`. A parte de 08/10 foi medida aqui.
+
+**Três defeitos no firmware**, cada um com a correção já no código:
+
+1. **`0xFF` de um conversor que tinha respondido `0x3E`.** Um `echo stop > state` reinicia o M33,
+   mas não o SPI6 nem o conversor. O controlador pode ficar no meio de uma transferência, e o
+   conversor fica em `RDATAC` com ninguém lendo. A sondagem seguinte lia `0xFF`. A correção faz as
+   duas coisas: reset do SPI6 pelo RCC (o gate dele segue o RIFSC 27, que agora é do M33) e um ciclo
+   de PWDN antes do `RESET`. O desligamento ordenado também mudou: `CoproSync_ShutdownCb` deixa o
+   conversor em power-down antes de confirmar o stop ao Linux.
+2. **HardFault em `main+4`** (CFSR `0x00080000`, NOCP, PC `0x80101114`). O `SystemInit()` não
+   seguro da ST não liga CP10/CP11, e o firmware é hard-float. Ligar a FPU na primeira linha de
+   `main()` funcionava só enquanto `main()` não tinha ponto flutuante. Quando o caminho do conversor
+   foi inlinado, o prólogo passou a salvar `d8` antes da primeira linha. A FPU agora é ligada num
+   construtor, que roda antes de `main()`.
+3. **Carimbos errados por um milissegundo inteiro.** A captura de 12:44 deu intervalos entre quadros
+   de **55.009 e 57.009 µs** (nominal 56.000). O DRDY tinha prioridade maior que o SysTick e
+   corrigia o relógio pelo bit pendente. Isso perde um caso: o DRDY interrompendo o próprio handler
+   do SysTick, depois que o bit pendente foi limpo e antes do `++ms_ticks`. A correção põe o SysTick
+   na prioridade mais alta (0), o DRDY abaixo (1) e o mailbox abaixo dos dois (2), e lê o par
+   (ms, `VAL`) com releitura.
+
+**A validação da correção 3 (08/10).** O mesmo firmware de 12:51 de ontem (`sha256 37a52677…`),
+captura de 120 s com o gerador de teste: intervalos de **55.986 a 56.000 µs**, σ = 1,95 µs, em 2.142
+intervalos. O erro de 1 ms sumiu. A média, 55.993,04 µs, é o oscilador interno da peça medido pelo
+relógio do M33. Essa diferença de 125 ppm não diz qual dos dois relógios está certo.
+
+**A injeção da Fase 5, antecipada: o A35 carregado.** Dois `dd if=/dev/zero of=/dev/null bs=8M`
+em laço (tráfego de DDR além do cache) e dois `md5sum /dev/zero`, durante toda a captura. O load
+average foi a 3,60.
+
+| | ocioso | A35 carregado |
+|---|---|---|
+| lacunas / CRC / perdidas / descartadas | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| intervalo entre quadros, mín–máx | 55.986–56.000 µs | 55.980–56.002 µs |
+| σ / p1–p99 | 1,95 µs / 55.989–55.997 | 2,16 µs / 55.985–55.995 |
+| **leitura SPI de 27 bytes no M33** | **207–220 µs** | **252–259 µs** |
+
+**A segregação por processador entrega o tempo, mas não isola o M33.** Sob carga, a datação mudou
+pouco: σ subiu 0,2 µs e a faixa passou de 14 para 22 µs. A leitura SPI ficou **18% mais lenta**, e
+as duas faixas não se sobrepõem. A causa está no mapa de memória do firmware: o código fica em
+`0x80100000` e os dados em `0x80a00000`, os dois **na DDR**, a mesma memória que os `dd` saturavam.
+O laço de polling do `HAL_SPI_TransmitReceive` busca instruções de lá. É a explicação que basta, não
+uma medida: não se tentou isolar a contenção (código na SRAM/RETRAM, ou o cache do M33). O que fica
+para o argumento de particionamento (`RESULTS.md` §4) é que **o processador é separado, a memória não**.
+A margem continua larga: 259 µs contra o prazo de 4 ms entre DRDYs.
+
+**Também visto**: o governor no cartão é `schedutil`. A imagem gravada é anterior ao commit que
+fixa `performance`. Isso não afeta o relógio do M33, mas afeta qualquer número do lado Linux desta
+sessão. E o `scp` não funciona para a placa (`Connection closed`, não há servidor SFTP). Os arquivos
+foram por `ssh … 'cat > …'`, com sha256 conferido do outro lado.
+
+**O que isto não significa.** Que um cartão novo adquire sozinho: o firmware continua fora da imagem,
+foi carregado pelo `amp-bench.sh`, e quem leu foi `dd`, não o serviço (Fase 4). Nada sobre sinal
+biológico: as entradas estavam no gerador de teste, não em eletrodos, então o ruído e o CMRR não
+foram medidos. A carga foi uma rodada de 120 s com uma receita de carga. A HMI, que é a carga real do
+produto, não roda nesta imagem (`weston.service` falha). A taxa pelo relógio do Linux (249,66) inclui
+o tempo até o ack, e por isso não é taxa.
+
+**Estado ao fim da manhã**: M33 `offline` (o stop do script desligou o conversor);
+`eeg-acquisition.service` parado à mão (estava em laço pelo link `usb` sem ponte, `NRestarts=460`),
+volta no próximo boot; capturas em `build/med-bench/cap-conv-test24-120s{,-load}.bin`.
+
+#### A tarde de 08/10: a Fase 4 na placa viva, e o lead-off
+
+**As três peças da Fase 4, testadas antes de existir imagem.** A receita do firmware ganhou um
+carregador (`med-m33-load`), uma unidade sem `[Install]` (`med-m33-firmware.service`) e uma regra de
+udev (`90-med-amp.rules`). As três foram postas em `/run` na placa e funcionaram, sem tocar no rootfs:
+
+- `udevadm trigger` no remoteproc chamado `m33` iniciou a unidade, e o firmware foi a `running`.
+  `WantedBy` da unidade é o dispositivo do remoteproc, não um target.
+- `/dev/med-amp0 -> rpmsg0`. Os atributos que a regra usa foram lidos antes com `udevadm info -a`.
+  `ATTR{name}=="rpmsg-raw"` vem do nó, e `ATTRS{name}=="m33"` vem do ancestral remoteproc.
+- O `systemctl stop` levou o M33 a `offline` e o link sumiu.
+- O serviço real, com a sandbox nova (`DeviceAllow=char-rpmsg_char`, no lugar de `/dev/rpmsg0` e
+  `/dev/rpmsg_ctrl0`) e um `eeg.conf` `amp` em `/run`, **adquiriu do conversor por `/dev/med-amp0`**.
+  Ficou `active/running` com `NRestarts=0` e prontidão reportada, a sessão foi gravada em `/data` com
+  `"link": "amp"`, e não houve descartes. Um `bad status 00 00 00` apareceu na conversão 1 da segunda
+  configuração, a do `start()` depois do autoteste. Foi descartado e contado, e não foi investigado.
+- Com a prescrição de fábrica (`lead_off_detection` e `bias_drive` = `true`) o firmware da manhã
+  **recusou**: `afe.bias_drive: not implemented by this firmware yet`. O motivo chega ao journal no
+  campo `MED_DETAIL`. A mensagem mostra só "front-end self test failed", e lê-la com `-o cat` dá a
+  impressão errada de que o motivo se perde.
+
+**O BIAS e o lead-off, e um defeito no link `usb` que isso revelou.** Para o BIAS, o driver de kernel
+é oráculo: `set_bias(DERIVED)`. Para o lead-off ele **não** é. O driver só liga os comparadores
+(`CONFIG4.PD_LOFF_COMP`) e deixa `LOFF_SENSP/N` em 0, e o próprio comentário dele diz que isso é "só
+metade" e que o `lead_off_status` responde `disabled`. **No link `usb`, `lead_off_detection = true`
+passa no build e não é cumprido**: o descarte silencioso que o firmware se recusa a fazer. Não corrigido.
+
+O M33 agora programa os dois. O estado dos eletrodos vai ao Linux num **`med-amp-abi` v2**, um bloco de
+8 bytes depois das amostras (monitorado e solto, positivo e negativo), coberto pelo CRC, num quadro
+de 496 bytes, que é a carga inteira de um buffer `rpmsg`. O layout da palavra de status do `RDATAC`
+não tem oráculo, e por isso o firmware o confere contra os registradores `LOFF_STAT` a cada
+configuração com detecção. Lead-off com o sinal de teste interno é recusado: não há eletrodo na
+medição. O serviço audita as transições (`ELECTRODE_CONTACT_CHANGED`), e a HMI mostra o eletrodo solto
+em vermelho. Testes de host e injeções em `RESULTS.md` §3.
+
+**Imagem `amp` construída** (`make stm32 KEY=development KERNEL=med`, 5669 tarefas, verde) e conferida
+no artefato: no manifesto, `med-m33-firmware` e nenhum módulo do front-end; no ext4, o `eeg.conf`
+com `rpmsg`, `/dev/med-amp0` e a prescrição de fábrica, a regra, a unidade, o carregador com o nome
+substituído, `DeviceAllow=char-rpmsg_char`, e o firmware igual byte a byte ao do deploy (`4e380bc0…`).
+**Não gravada.**
+
+**O que interrompeu a validação na placa.** A placa reiniciou às 16:16 UTC, e a bancada tinha sido
+mexida. Desde então o conversor responde ID `0xFF` com DRDY `0`, a mesma assinatura do conversor
+sem alimentação da §9.15. A sondagem não mudou hoje. Por isso o firmware v2 **não foi
+exercitado contra o conversor**: nem o lead-off, nem a conferência do layout, nem a prescrição de
+fábrica.
+
+**Um boot inteiro sumiu do journal persistente.** O boot desta manhã (`3a9d06f5…`, ~15:07–16:15 UTC),
+em que rodaram as capturas e a sessão de aquisição das 15:40, **não aparece** em
+`journalctl --list-boots`, e `journalctl _BOOT_ID=3a9d06f5…` dá `-- No entries --`. A lista pula
+de 07/10 16:02 para 08/10 16:16. A sessão das 15:40 continua em `/data/eeg`
+(`session-2026-10-08T15:40:20.815Z`), mas a trilha de auditoria dela não existe mais. No diretório do
+journal há um arquivo de 8 MiB com sufixo `~`, de 07/10 15:22, que é a marca do journald para um
+arquivo encontrado sujo na abertura. Causa não investigada.
+Hipótese a testar: o journal nunca saiu de `/run` naquele boot, ou o reinício o cortou antes de um
+sync. É o tipo de lacuna que a IEC 62304 cobra, e fica aberto.
+
+**O fallback A/B disparou sozinho, por uma falha real, e por um motivo que não é de software.** Depois
+de mais reinícios, a placa voltou como **slot B**: `rauc.slot=B`, `Booted from: rootfs.1 (B)`,
+`BOOT_A_LEFT=0`, slot A `bad`, `BOOT_B_LEFT=2`. A chave SSH e o machine-id mudaram junto
+(`642fd642…` → `e6ecbd27…`), como `BOOT_SLOT_AB_STM32MP2.md` registra. Ninguém gravou o cartão.
+O mecanismo foi este: a imagem do slot A é a do link `usb`, a ponte não está mais ligada, o serviço de
+aquisição nunca reporta pronto, e por isso nenhum boot de A é confirmado (`boot-complete.target`
+espera por ele desde 04/10). Cada reinício gastou uma tentativa. **É o primeiro fallback não injetado,
+e ele mostra um limite da política**: amarrar "o slot é bom" à aquisição não distingue software
+quebrado de front-end ausente. O dispositivo reverteu uma atualização porque faltava um periférico. O
+slot B também é da imagem `usb` (`NRestarts=127` ao chegar), então também não será confirmado. Depois
+de mais dois boots o `med_select` esgota os dois slots, restaura os contadores e reinicia em A.
+
+**A placa desliga sozinha depois de muito tempo ligada** (relato do operador, 08/10). Isso explica ao
+menos parte dos reinícios desta tarde. Ela está em observação só com a alimentação da própria placa,
+sem o AFE. Causa desconhecida. Não confundir com o reset de SoC da §9.15, que tinha causa e correção
+conhecidas.
+
+**O AFE continuou mudo depois de realimentado**: ID `0xFF`, DRDY `0`, com o firmware v2 (`4e380bc0…`),
+e o RIF certo ("all belong to this core"). O DRDY é saída do conversor, lida como GPIO, sem nenhum
+código de SPI no caminho, e em repouso alimentado fica em 1 (lido assim de manhã). Em 0, ele aponta
+para alimentação ou fiação, não para o firmware. Não verificado com multímetro.
+
+**Estado ao fim da tarde**: slot B, M33 `offline`, `eeg-acquisition.service` parado à mão. Testes
+interrompidos pelo operador.
+
+#### A noite de 08/10: o AFE consertado, e o firmware v2 no silício
+
+**A causa do AFE mudo era um resistor mal soldado na placa do AFE** (achado e corrigido pelo
+operador). Confirmado primeiro pela ponte USB, no host, com o `scripts/afe-alive.py`. Antes do
+conserto: MISO `ff` em todos os modos SPI e o DRDY parado em alto depois do START. Depois do conserto:
+ID `0x3E` nos modos 1, 2 e 3, e o DRDY desce com o START. O parágrafo final do script, a "Leitura",
+continua dizendo que o DOUT não chega à MISO mesmo nessa execução aprovada. Isso é defeito do
+script, não da placa, e não foi corrigido.
+
+**A placa voltou sozinha ao slot A**, como previsto: os dois slots esgotaram as tentativas, o
+`med_select` restaurou os contadores (`BOOT_A_LEFT=2`, `BOOT_B_LEFT=3` ao chegar) e a chave SSH voltou
+a ser a do slot A (`5ywK7…`, a mesma conferida no início do dia). Cada reinício com a imagem `usb`
+gasta uma tentativa de novo.
+
+**O firmware v2 (`4e380bc0…`) contra o conversor, pelo `amp-bench`:**
+
+| Teste | Resultado |
+|---|---|
+| prescrição de fábrica (lead-off e BIAS `true`, sinal `off`) | **aceita**; relido `CONFIG3 ec`, `SENS ff ff ff ff`, `CONFIG4 02` |
+| layout da palavra de status contra `LOFF_STAT` | **confere no silício**: `P 42 N 00` pelos dois caminhos. `0x42` não é zero nem simétrico |
+| 180 quadros com a prescrição de fábrica, sem eletrodos | 0 CRC, 0 lacunas, monitorado `ff/ff`; entradas positivas soltas em 173–180 dos 180 quadros, negativas em ~110; as 16 soltas ao mesmo tempo em 107 quadros; amostras no fundo de escala, +187,5 mV |
+| sinal de teste interno, 120 s (regressão do v2) | 2.143 quadros, 0 lacunas, 0 CRC, 0 perdas, 0 status inválido; os 8 canais dentro da especificação, iguais aos da manhã; monitorado `0000`; arquivo de 72 + 2143 × 496 bytes |
+| lead-off com o sinal de teste | **recusado** na placa: `afe.lead_off_detection: on the test signal, no electrodes` |
+
+**O que isto fecha.** O layout `[SBAS499?]` da palavra de status deixa de ser leitura do datasheet:
+foi a peça que respondeu, pelos dois caminhos e com um valor que distingue os campos. Também se viu,
+pela primeira vez, a prescrição de fábrica cumprida, e não recusada.
+
+**O que isto não significa.** Que a detecção acerta um eletrodo que se solta de um paciente: não há
+eletrodos na bancada, e "tudo solto" é o resultado trivial. O `P 42` da conferência, que vira tudo
+solto nos quadros, é compatível com entradas flutuando que demoram a derivar sob 6 nA. Isso é
+interpretação, não medida. O BIAS derivado foi programado e relido, mas não medido eletricamente.
+
+**Ainda aberto, visto de novo**: um `bad status 00 00 00` na **conversão 1** da execução com a
+prescrição de fábrica (descartado e contado), e nenhum na execução de 120 s com o sinal de teste. O
+mesmo apareceu na tarde, na segunda configuração do serviço. É um padrão (a primeira conversão
+depois de certas configurações), e não foi investigado.
+
+A taxa pelo relógio do M33 foi **249,950** conversões/s, contra 250,031 de manhã. Os intervalos entre
+quadros ficaram em 55.991–56.022 µs, contra 55.986–56.000. Entre as duas medidas a placa do AFE foi
+retrabalhada e a bancada mudou. A diferença é registrada e não explicada.
+
+#### A Fase 4 no cartão: gravado do zero, adquirindo sozinho
+
+Imagem `amp` v2 (`make stm32 KEY=development KERNEL=med`, 08/10 13:42) gravada com `bmaptool`.
+**Sem `sgdisk -e`**: o GPT de reserva ficou no fim da imagem, com o mesmo efeito da §9.7. Foi
+corrigido depois dos quatro boots da tabela abaixo, no host. O desktop tinha montado sozinho
+`med-boot` e os dois slots quando o cartão entrou, e o `sgdisk -e` rodou com eles montados (ele só
+reescreve os cabeçalhos do GPT). O `eject` desmontou antes de remover. No boot seguinte, o quinto,
+não houve nenhuma linha de GPT no `dmesg`, onde antes havia "Alt. header is not at the end of the
+device" a cada boot, nem aviso de ext4. A aquisição saiu igual às outras quatro: autoteste em
+12,3 s, `READY=1` em 12,5 s, slot confirmado em 13,1 s, `NRestarts=0`. A placa não tem `sgdisk`
+para conferir o GPT diretamente; a evidência é a ausência do aviso. O cartão novo deu uma chave SSH
+nova (`CBZ/9s3n…`), aceita no primeiro uso depois de conferido o MAC.
+
+| | 1º boot do cartão | reinício 1 | reinício 2 | reinício 3 |
+|---|---|---|---|---|
+| M33 carregado pelo udev | 7,7 s | 8,4 s | 8,0 s | 8,1 s |
+| autoteste aprovado, com a prescrição de fábrica | 22,2 s | 12,3 s | 12,1 s | 12,1 s |
+| `READY=1` | 22,4 s | 12,5 s | 12,3 s | 12,3 s |
+| slot confirmado (`rauc-mark-good`) | 23,0 s | 13,2 s | 12,9 s | 12,9 s |
+| `NRestarts` do serviço | 0 | 0 | 0 | 0 |
+| `BOOT_A_LEFT` depois da confirmação | 3 | 3 | 3 | 3 |
+
+Nenhum comando na placa entre gravar e medir: os quatro boots saíram de um `systemctl reboot` e de
+uma verificação só de leitura (`build/med-bench/phase4-boots.log`). O primeiro boot é 10 s mais
+lento porque provisiona o `/data`. **A confirmação do slot vem depois da aquisição, nos quatro.**
+É a política de 04/10 funcionando como foi desenhada, e é também o que encerra o ciclo de
+fallback que a imagem `usb` sem a ponte tinha causado à tarde.
+
+**O que isto não significa.** A enumeração não variou: o M33 foi `remoteproc1` e o canal `rpmsg0`
+nos quatro boots. Seguir pelo nome está implementado, mas não foi testado contra uma troca de índice.
+O `weston.service` falha nos quatro (§9.9), e a HMI, com o aviso de eletrodo solto, não foi vista na
+tela. A injeção de falha da Fase 4 (tirar o firmware da imagem) não foi feita, porque depende da
+política de reinício (`StartLimit*`), que não existe.
+
+**Dois achados do primeiro boot.**
+
+- **A auditoria de contato registrou 8 eventos em 4 s e depois parou.** Com as entradas abertas, o
+  conjunto de eletrodos soltos mudou quadro a quadro enquanto elas derivavam, e cada mudança é uma
+  transição. Não é uma inundação, mas não há limite de taxa: um eletrodo de contato ruim, oscilando,
+  produziria um registro por quadro. Aberto.
+- **O journal do primeiro boot começa em 20,6 s**, no instante em que o `systemd-timesyncd` salta o
+  relógio de 2025-05-29 para 2026-10-09. Tudo antes disso falta, inclusive a linha do carregador do
+  M33 e o provisionamento do `/data`. Nos três reinícios seguintes a linha das 8 s está lá. Isso
+  restringe a hipótese da manhã (o boot inteiro sumido) ao **primeiro salto de relógio**, e não a
+  todo boot. Não investigado.
+
 ## 10. Estado ao fim deste registro
 
 **Construído e verificado por inspeção**: `med-image-eeg` para `stm32mp25-disco`, `.wic` de
@@ -1319,6 +1816,9 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
 | **O dispositivo escolhe o slot sozinho** (§9.11) | `rauc.slot=A` na cmdline de um cartão recém-gravado, sem `fw_setenv` |
 | **`rauc-mark-good` roda no boot** (§9.11) | `active (exited)`, e `BOOT_A_LEFT` volta a 3 depois de o bootloader decrementá-lo |
 | **A troca A/B, ponta a ponta** (§9.11) | `rauc install` → `BOOT_ORDER=B A` → reboot → `Booted from: rootfs.1 (B)`, com A ainda `good` |
+| **O M33 carrega firmware assinado pelo OP-TEE** (§9.13) | `state=running`, canais rpmsg criados; dois bits trocados → `TEE_ERROR_SECURITY` e `TEE_ERROR_SIGNATURE_INVALID` |
+| **O M33 lê o ADS1299 pelo SPI6** (§9.15) | RIF do SPI6, pinos e EXTI 8 em CID2 no FIP; ID `0x3E` lido pelo M33; com o conversor sem alimentação, `0xFF` e recusa |
+| **O M33 adquire do ADS1299** (§9.16) | 120 s, DRDY por interrupção: 0 lacunas, 0 perdas, gerador de teste dentro da especificação nos 8 canais; o mesmo com o A35 carregado |
 
 **Continua sem evidência de execução na placa** — cada item com causa conhecida:
 
@@ -1331,7 +1831,7 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
 | Atualização que troca a versão do kernel | `med-boot` é compartilhada; o kernel está fora dos slots | não suportado pelo esquema atual (`BOOT_SLOT_AB_STM32MP2.md` §5.4) |
 | RAUC instalar, marcar e ativar slot | ~~`fw_env.config` ausente~~ e ~~`DM_VERITY` ausente no kernel~~ → ambos resolvidos; falta `rauc.slot=` na cmdline para o `mark-good` rodar sozinho | **`rauc install` executado e conferido byte a byte** (§9.10); automação do `mark-good` depende do script de U-Boot |
 | HMI Qt | quatro defeitos em série: seat, permissão do `/dev/galcore`, ocioso de 300 s, timing não-CEA | **resolvido e visto na tela** (§9.9 e `BRINGUP_HMI_STM32MP2.md`); 3 correções ainda voláteis |
-| Caminho AMP / `rpmsg` | `MED_AMP_FIRMWARE` vazio; firmware do ADS1299 não existe — e agora sabe-se que terá de ser **assinado** (§9.7) | não implementado |
+| Caminho AMP / `rpmsg` | firmware nosso, assinado, adquirindo sintético pelo serviço (§9.14); SPI6 no M33 pelo RIF, ID do conversor lido (§9.15) | **aquisição do conversor medida pelo `amp-bench`** (§9.16); falta o firmware na imagem e o serviço como leitor (Fase 4) |
 | Serviço de aquisição estável | sem firmware no M33, o autoteste do driver `rpmsg` falha | **medido**: 163 reinícios, período de 2,500 s (§9.9) |
 | Carimbo de tempo confiável | sem RTC inicializado, sem NTP antes de `/data` | **defeito novo, não tratado** (§9.7) |
 | Custódia real de chave | sem TPM alcançável (§7) | investigado, não implementado |

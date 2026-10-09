@@ -10,6 +10,9 @@
 > Onde uma seção diz "não executada", é porque a fase correspondente não aconteceu e a seção existe
 > para que a ausência tenha lugar em vez de ser silêncio.
 >
+> **Como repetir**: o passo a passo para refazer as fases no host, do zero, com o valor esperado de
+> cada uma, está no `ROTEIRO_BANCADA_AFE.md`.
+>
 > **Numeração**: as §1 a §10 correspondem, uma a uma, às fases do
 > `implementation_plan_afe_bench.md` — que já aponta para elas por número. A §11 é o catálogo de
 > defeitos, no formato do `BRINGUP_STM32MP2.md` §11. A §12 registra a migração dos drivers para a
