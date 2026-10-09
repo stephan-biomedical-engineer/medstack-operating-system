@@ -79,9 +79,21 @@ local_conf_header:
     # a sample's timestamp is when the host was told, one bus frame and one
     # wakeup after the conversion. That is an error of phase, not of date, and
     # no arithmetic downstream can undo it.
-    MED_EEG_DRIVER = "iio"
-    MED_EEG_ADDRESS = "/dev/med-afe-eeg0"
-    MED_EEG_LINK = "usb"
+    #
+    # 2026-10-07: back to "amp". The signed-firmware blocker above is gone - it
+    # was the OSTL FIP's choice, and meta-st signs our firmware the way it signs
+    # its own (implementation_plan_m33_firmware.md §3.3, BRINGUP_STM32MP2.md
+    # §9.13-§9.14). Choosing "amp" also hands SPI6, the hat's GPIOs and DRDY's
+    # EXTI line to the M33 in the OP-TEE devicetree (meta-med-afe-ads1299,
+    # external-dt_%.bbappend), which reaches a board only with the FIP.
+    #
+    # A name, not an index: med-m33-firmware's udev rule links it to the rpmsgN
+    # the M33's "rpmsg-raw" channel got, whatever N is (phase 4 of that plan).
+    # The firmware is started on boot by the same package, when the m33
+    # remoteproc appears.
+    MED_EEG_DRIVER = "rpmsg"
+    MED_EEG_ADDRESS = "/dev/med-amp0"
+    MED_EEG_LINK = "amp"
     MED_EEG_REQUIRE_ENCRYPTION = "true"
 
     # U-Boot is what actually selects the boot slot on this SoC, and it is the
@@ -148,10 +160,11 @@ local_conf_header:
     # to prevent.
     DISTRO_FEATURES:append = " tpm2"
 
-    # Co-processor firmware is a BSP artefact. Point this at the recipe that
-    # packages the Cortex-M4 image and packagegroup-med-amp will pull it in
-    # without meta-med-app ever naming a machine.
-    # MED_AMP_FIRMWARE = "<bsp-firmware-recipe>"
+    # The co-processor firmware, pulled in by packagegroup-med-amp without
+    # meta-med-app ever naming a machine. It installs the signed image in
+    # /lib/firmware, and the unit and udev rule that start it when the M33
+    # appears and name its channel /dev/med-amp0.
+    MED_AMP_FIRMWARE = "med-m33-firmware"
 
     # ---------------------------------------------------------------------
     # A GPU deste alvo, e o que aceitar a EULA significa
