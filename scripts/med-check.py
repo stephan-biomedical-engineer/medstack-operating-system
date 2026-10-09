@@ -281,6 +281,35 @@ EEG_CHECKS = [
     ("sandbox-exposure", "o sandbox do serviço não regrediu",
      "systemd-analyze security eeg-acquisition.service --no-pager 2>&1 | tail -3",
      check_exposure),
+
+    # O que o registro clínico precisa saber de uma sessão
+    # (implementation_plan_bdf.md, Fase 1). O conversor que deriva o BDF não
+    # pode tocar numa sessão viva e tem de distinguir uma sessão encerrada de
+    # uma interrompida; as duas asserções abaixo verificam os dois marcadores
+    # de que ele depende, no alvo, e não a intenção do código.
+    ("session-live-marker", "a sessão sendo gravada está marcada como viva em /run",
+     'L=$(cat /run/medplatform/session); S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'echo "viva=$L recente=${S##*/session-}"; '
+     'test -n "$L" && test "$L" = "${S##*/session-}" && echo LIVE_OK',
+     rx(r"LIVE_OK")),
+
+    # A ÚLTIMA desta lista, de propósito: é a única que reinicia o serviço, e
+    # um reinício abre uma sessão nova. O fechamento é comparado com o próprio
+    # registro de auditoria da sessão (MED_FRAMES do AcquisitionStopped), não
+    # com um número esperado: o marcador tem de dizer o mesmo que a trilha, e
+    # é a concordância que se verifica.
+    ("session-closed", "uma sessão encerrada tem closed.json que bate com a auditoria",
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'systemctl restart eeg-acquisition.service; '
+     'F=$(sed -n "s/.*\\"frames\\": \\([0-9]*\\).*/\\1/p" $S/closed.json); '
+     'J=$(journalctl -b -o export MED_AUDIT_EVENT=ACQUISITION_STOPPED '
+     'MED_SESSION=${S##*/session-} | sed -n "s/^MED_FRAMES=//p"); '
+     'M=$(grep -c "\\"full_scale_uv\\": [0-9]" $S/metadata.json); '
+     'test -e /run/medplatform/session && N=$(cat /run/medplatform/session); '
+     'echo "closed=$F auditoria=$J escala=$M nova=$N"; '
+     'test -n "$F" && test "$F" = "$J" && test "$M" = 1 && '
+     'test "$N" != "${S##*/session-}" && echo CLOSED_OK',
+     rx(r"CLOSED_OK")),
 ]
 
 PROFILES = {
