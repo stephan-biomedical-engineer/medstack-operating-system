@@ -50,7 +50,7 @@ void testLogger() {
             AuditEvent::PatientDataExported,  AuditEvent::UpdateStarted,
             AuditEvent::UpdateSucceeded,      AuditEvent::UpdateFailed,
             AuditEvent::SafetyLimitViolation, AuditEvent::DeviceFault,
-            AuditEvent::SecurityEvent,
+            AuditEvent::SecurityEvent,        AuditEvent::ElectrodeContactChanged,
         };
 
         std::vector<std::string> names;

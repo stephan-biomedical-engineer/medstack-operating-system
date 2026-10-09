@@ -15,6 +15,7 @@ void testTypes();
 void testConfiguration();
 void testStorage();
 void testDevice();
+void testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD
 void testLogger();
 void testUpdate();
@@ -27,6 +28,7 @@ int main() {
     testConfiguration();
     testStorage();
     testDevice();
+    testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD
     testLogger();
     testUpdate();
