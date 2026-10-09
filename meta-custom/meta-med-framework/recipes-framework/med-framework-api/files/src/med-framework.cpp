@@ -6,6 +6,8 @@
 
 #include <openssl/evp.h>
 
+#include <unistd.h>
+
 #include <cstdio>
 #include <ctime>
 
@@ -65,6 +67,38 @@ std::string formatTimestamp(Timestamp timestamp) {
         return {};
     }
     std::snprintf(buffer + used, sizeof(buffer) - used, ".%03uZ", millis);
+    return std::string(buffer);
+}
+
+bool clockSynchronized() noexcept {
+    // systemd-timesyncd creates this file once it has synchronised the clock,
+    // and nothing else does. Asking the kernel instead (adjtimex() and its
+    // STA_UNSYNC flag) would answer for any NTP client, but every service in
+    // this platform runs with ProtectClock=yes, which filters adjtimex out
+    // entirely - reading included. The file is readable from inside that
+    // sandbox, and this platform's time source is the one that writes it.
+    return ::access("/run/systemd/timesync/synchronized", F_OK) == 0;
+}
+
+std::string utcOffset(Timestamp timestamp) {
+    const std::time_t seconds =
+        static_cast<std::time_t>(toUnixMicros(timestamp) / 1000000ULL);
+
+    std::tm broken{};
+    if (localtime_r(&seconds, &broken) == nullptr) {
+        return {};
+    }
+
+    // Real offsets lie within a day either side of UTC; anything else is a
+    // broken zone database, and an empty answer says so instead of a number.
+    const long offset = broken.tm_gmtoff;
+    const long magnitude = offset < 0 ? -offset : offset;
+    if (magnitude >= 24L * 3600L) {
+        return {};
+    }
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "%c%02d:%02d", offset < 0 ? '-' : '+',
+                  static_cast<int>(magnitude / 3600), static_cast<int>((magnitude % 3600) / 60));
     return std::string(buffer);
 }
 

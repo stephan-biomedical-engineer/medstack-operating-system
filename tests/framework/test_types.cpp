@@ -6,6 +6,8 @@
 // this directory reports through it. A Result that took the success branch on
 // a failure would make the rest of the suite pass silently.
 
+#include <cstdlib>
+#include <ctime>
 #include <memory>
 #include <string>
 #include <vector>
@@ -128,6 +130,46 @@ void testTypes() {
         // gives, so the formatter must render it rather than hide it.
         CHECK_EQ(formatTimestamp(fromUnixMicros(0)),
                  std::string("1970-01-01T00:00:00.000Z"));
+    }
+
+    {
+        // The offset is the one formats defined in local time have to carry,
+        // so its spelling and its sign are an interface. Three zones: one on
+        // UTC, one west of it, and one with a half hour - the case an
+        // implementation that divided by 3600 and stopped would get wrong.
+        // POSIX TZ strings name the offset WEST of UTC, hence the inverted
+        // signs in the strings below.
+        const char* previous = std::getenv("TZ");
+        const std::string saved = previous != nullptr ? previous : "";
+        const Timestamp stamp = fromUnixMicros(1791513217000000ULL);
+
+        ::setenv("TZ", "UTC0", 1);
+        ::tzset();
+        CHECK_EQ(utcOffset(stamp), std::string("+00:00"));
+
+        ::setenv("TZ", "<-03>3", 1);
+        ::tzset();
+        CHECK_EQ(utcOffset(stamp), std::string("-03:00"));
+
+        ::setenv("TZ", "<+0530>-5:30", 1);
+        ::tzset();
+        CHECK_EQ(utcOffset(stamp), std::string("+05:30"));
+
+        if (previous != nullptr) {
+            ::setenv("TZ", saved.c_str(), 1);
+        } else {
+            ::unsetenv("TZ");
+        }
+        ::tzset();
+    }
+
+    {
+        // Not a check of the answer, which depends on this host's NTP client:
+        // only that asking is safe and does not depend on privileges a
+        // sandboxed service lacks. The answer is checked on the target, where
+        // the time source is known.
+        const bool synchronized = clockSynchronized();
+        CHECK(synchronized || !synchronized);
     }
 
     {

@@ -58,6 +58,19 @@ using Timestamp = Clock::time_point;
 /// This is the timestamp format written into audit records and stored data.
 std::string formatTimestamp(Timestamp timestamp);
 
+/// Whether the system clock is KNOWN to follow a time source - that is, whether
+/// the system's time synchronisation service has said so. False means "not
+/// known", never "wrong": a board with no initialised RTC and no network
+/// answers false, and so does one whose clock happens to be right by luck.
+/// A record that carries a date has to be able to say which of the two it is.
+bool clockSynchronized() noexcept;
+
+/// The local time's offset from UTC at `timestamp`, as "+HH:MM" or "-HH:MM",
+/// from the time zone the system is configured with. Records keep UTC (see
+/// formatTimestamp); this exists for the formats that are defined in local
+/// time and must therefore say which local time they used.
+std::string utcOffset(Timestamp timestamp);
+
 /// Microseconds since the Unix epoch - the wire format for AMP sample frames.
 std::uint64_t toUnixMicros(Timestamp timestamp) noexcept;
 
