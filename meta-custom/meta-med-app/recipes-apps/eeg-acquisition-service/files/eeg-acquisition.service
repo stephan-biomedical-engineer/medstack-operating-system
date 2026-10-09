@@ -70,17 +70,21 @@ ReadWritePaths=/data
 # The links the front-end can arrive on. Harmless on targets where the node
 # does not exist - DeviceAllow narrows, it does not require.
 #
-# The rpmsg entries name nodes; the industrial I/O one names a device CLASS,
-# "char-iio", resolved by systemd through /proc/devices. That difference is not
-# cosmetic. An IIO character device is numbered in probe order, so a node name
-# here would be the same race the udev rule exists to remove, and it would have
-# to be re-guessed for every board. A class is a statement about what kind of
-# hardware this service may talk to, which is what the sandbox is for.
+# Both name a device CLASS, resolved by systemd through /proc/devices, and not
+# a node. That difference is not cosmetic. An IIO character device and an rpmsg
+# endpoint are both numbered in probe order, so a node name here would be the
+# same race the udev rules exist to remove, and it would have to be re-guessed
+# for every board. A class is a statement about what kind of hardware this
+# service may talk to, which is what the sandbox is for.
 #
-# Exercised on hardware on 2026-10-04 (STM32MP257, the usb link): the service
-# opened its converter through this line and acquired.
-DeviceAllow=/dev/rpmsg0 rw
-DeviceAllow=/dev/rpmsg_ctrl0 rw
+# The rpmsg entry used to be "/dev/rpmsg0", plus /dev/rpmsg_ctrl0, which the
+# service never opens (it has no ioctl path). Once the address became a udev
+# link to whichever rpmsgN the co-processor's channel got, a node here would
+# have denied the device the link pointed at on any boot where N was not 0.
+#
+# char-iio exercised on hardware on 2026-10-04 (STM32MP257, the usb link): the
+# service opened its converter through this line and acquired.
+DeviceAllow=char-rpmsg_char rw
 DeviceAllow=char-iio rw
 
 # An industrial I/O front-end is configured by writing its sysfs attributes,
