@@ -368,6 +368,7 @@ check: $(TOOL)
 test:
 	@$(MAKE) --no-print-directory -C tests/framework check
 	@$(MAKE) --no-print-directory -C tests/mcp2210 check
+	@$(MAKE) --no-print-directory -C tests/m33-producer check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform
