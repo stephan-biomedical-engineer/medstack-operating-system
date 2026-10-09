@@ -53,6 +53,104 @@ std::uint32_t crc32(const void* data, std::size_t length) noexcept {
     return crc ^ 0xFFFFFFFFU;
 }
 
+void encodeFrame(const SampleFrame& frame, double sampleRateHz,
+                 std::vector<unsigned char>& out) {
+    const std::size_t sampleBytes = frame.samples.size() * sizeof(std::int32_t);
+    out.resize(sizeof(FrameHeader) + sampleBytes + sizeof(LeadOffBlock));
+
+    unsigned char* payload = out.data() + sizeof(FrameHeader);
+    for (std::size_t i = 0; i < frame.samples.size(); ++i) {
+        // Micro-units to int32 nano-units, rounded, and saturated rather than
+        // wrapped: a wrapped sample is a spike of the opposite sign that the
+        // CRC then certifies.
+        const double nano = std::round(static_cast<double>(frame.samples[i]) * 1000.0);
+        const std::int32_t raw =
+            nano >= 2147483647.0    ? INT32_MAX
+            : nano <= -2147483648.0 ? INT32_MIN
+                                    : static_cast<std::int32_t>(nano);
+        std::memcpy(payload + i * sizeof(std::int32_t), &raw, sizeof(raw));
+    }
+
+    LeadOffBlock block;
+    block.monitoredPositive = frame.leadOff.monitoredPositive;
+    block.monitoredNegative = frame.leadOff.monitoredNegative;
+    block.offPositive = frame.leadOff.offPositive;
+    block.offNegative = frame.leadOff.offNegative;
+    std::memcpy(payload + sampleBytes, &block, sizeof(block));
+
+    FrameHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.magic = kFrameMagic;
+    header.version = kFrameVersion;
+    header.channelCount = frame.channelCount;
+    header.samplesPerChannel = frame.samplesPerChannel;
+    header.sampleRateMilliHz = static_cast<std::uint32_t>(std::lround(sampleRateHz * 1000.0));
+    header.sequence = frame.sequence;
+    header.timestampMicros = toUnixMicros(frame.timestamp);
+    header.scaleNanoUnitsPerLsb = 1;
+    header.crc32 = crc32(payload, sampleBytes + sizeof(block));
+    std::memcpy(out.data(), &header, sizeof(header));
+}
+
+Result<SampleFrame> decodeFrame(const void* data, std::size_t length, double* sampleRateHz) {
+    const unsigned char* buffer = static_cast<const unsigned char*>(data);
+    if (buffer == nullptr || length < sizeof(FrameHeader)) {
+        return Result<SampleFrame>::fail(Status::IntegrityError, "short AMP frame");
+    }
+
+    FrameHeader header;
+    std::memcpy(&header, buffer, sizeof(header));
+    if (header.magic != kFrameMagic) {
+        return Result<SampleFrame>::fail(Status::IntegrityError, "bad AMP frame magic");
+    }
+    if (header.version != kFrameVersion) {
+        return Result<SampleFrame>::fail(
+            Status::NotSupported, "AMP frame version " + std::to_string(header.version) +
+                                      " is not supported by this framework build");
+    }
+
+    const std::size_t count =
+        static_cast<std::size_t>(header.channelCount) * header.samplesPerChannel;
+    const std::size_t sampleBytes = count * sizeof(std::int32_t);
+    if (count == 0 || length < sizeof(FrameHeader) + sampleBytes + sizeof(LeadOffBlock)) {
+        return Result<SampleFrame>::fail(Status::IntegrityError,
+                                         "AMP frame payload is truncated");
+    }
+
+    const unsigned char* payload = buffer + sizeof(FrameHeader);
+    if (crc32(payload, sampleBytes + sizeof(LeadOffBlock)) != header.crc32) {
+        return Result<SampleFrame>::fail(Status::IntegrityError,
+                                         "AMP frame failed its CRC check");
+    }
+
+    SampleFrame frame;
+    frame.sequence = header.sequence;
+    frame.timestamp = fromUnixMicros(header.timestampMicros);
+    frame.channelCount = header.channelCount;
+    frame.samplesPerChannel = header.samplesPerChannel;
+    frame.samples.resize(count);
+
+    // nano-units per LSB -> micro-units (the unit info() reports).
+    const double scale = static_cast<double>(header.scaleNanoUnitsPerLsb) / 1000.0;
+    for (std::size_t i = 0; i < count; ++i) {
+        std::int32_t raw = 0;
+        std::memcpy(&raw, payload + i * sizeof(std::int32_t), sizeof(raw));
+        frame.samples[i] = static_cast<float>(raw * scale);
+    }
+
+    LeadOffBlock block;
+    std::memcpy(&block, payload + sampleBytes, sizeof(block));
+    frame.leadOff.monitoredPositive = block.monitoredPositive;
+    frame.leadOff.monitoredNegative = block.monitoredNegative;
+    frame.leadOff.offPositive = block.offPositive;
+    frame.leadOff.offNegative = block.offNegative;
+
+    if (sampleRateHz != nullptr) {
+        *sampleRateHz = header.sampleRateMilliHz / 1000.0;
+    }
+    return Result<SampleFrame>::ok(std::move(frame));
+}
+
 }  // namespace amp
 
 namespace {
@@ -589,63 +687,21 @@ public:
             return Result<SampleFrame>::fail(received.status(), received.message());
         }
 
-        const std::size_t length = received.value();
-        if (length < sizeof(amp::FrameHeader)) {
-            return Result<SampleFrame>::fail(Status::IntegrityError, "short AMP frame");
+        Result<SampleFrame> frame = amp::decodeFrame(buffer, received.value());
+        if (!frame) {
+            return frame;
         }
 
-        amp::FrameHeader header;
-        std::memcpy(&header, buffer, sizeof(header));
-
-        if (header.magic != amp::kFrameMagic) {
-            return Result<SampleFrame>::fail(Status::IntegrityError, "bad AMP frame magic");
-        }
-        if (header.version != amp::kFrameVersion) {
-            return Result<SampleFrame>::fail(
-                Status::NotSupported,
-                "AMP frame version " + std::to_string(header.version) +
-                    " is not supported by this framework build");
-        }
-
-        const std::size_t expected = static_cast<std::size_t>(header.channelCount) *
-                                     header.samplesPerChannel * sizeof(std::int32_t);
-        if (expected == 0 || length < sizeof(amp::FrameHeader) + expected) {
-            return Result<SampleFrame>::fail(Status::IntegrityError,
-                                             "AMP frame payload is truncated");
-        }
-
-        const unsigned char* payload = buffer + sizeof(amp::FrameHeader);
-        if (amp::crc32(payload, expected) != header.crc32) {
-            return Result<SampleFrame>::fail(Status::IntegrityError,
-                                             "AMP frame failed its CRC check");
-        }
-
-        SampleFrame frame;
-        frame.sequence = header.sequence;
-        frame.timestamp = fromUnixMicros(header.timestampMicros);
-        frame.channelCount = header.channelCount;
-        frame.samplesPerChannel = header.samplesPerChannel;
-        frame.samples.resize(static_cast<std::size_t>(header.channelCount) *
-                             header.samplesPerChannel);
-
-        // nano-units per LSB -> micro-units (the unit reported by info()).
-        const double scale = static_cast<double>(header.scaleNanoUnitsPerLsb) / 1000.0;
-        for (std::size_t i = 0; i < frame.samples.size(); ++i) {
-            std::int32_t raw = 0;
-            std::memcpy(&raw, payload + i * sizeof(std::int32_t), sizeof(raw));
-            frame.samples[i] = static_cast<float>(raw * scale);
-        }
-
-        if (header.sequence != 0 && lastSequence_ != 0 &&
-            header.sequence != lastSequence_ + 1) {
+        const std::uint64_t sequence = frame.value().sequence;
+        if (sequence != 0 && lastSequence_ != 0 && sequence != lastSequence_ + 1) {
             // Report the gap; the caller decides whether a discontinuity in a
             // recording is acceptable for its clinical use.
             lastError_ = "sequence gap: expected " + std::to_string(lastSequence_ + 1) +
-                         ", got " + std::to_string(header.sequence);
+                         ", got " + std::to_string(sequence);
         }
-        lastSequence_ = header.sequence;
+        lastSequence_ = sequence;
 
-        return Result<SampleFrame>::ok(std::move(frame));
+        return frame;
     }
 
     Status selfTest() override {
@@ -689,20 +745,53 @@ private:
             return sent;
         }
 
+        // The answer may not be the first thing on the channel. Frames the
+        // producer sent before it saw this message are still queued ahead of
+        // it - and on an rpmsg-raw channel the kernel keeps queueing them even
+        // while no one has the endpoint open (rpmsg_ept_cb has no notion of a
+        // reader), so a start() that follows a selfTest() can find a backlog
+        // from the session the self test opened. Those frames belong to no
+        // session and are discarded; anything that is neither a frame nor the
+        // answer is still a protocol error. The deadline is one deadline for
+        // the whole wait, not one per discarded message, so a producer that
+        // streams and never answers still fails in kControlAckTimeout.
+        //
+        // Measured before this existed (BRINGUP_STM32MP2.md §9.14): with
+        // frames left in the queue, the self test failed with "answered the
+        // control message with something else" against a healthy producer.
+        // Without them, it passed only because the service reopened the
+        // channel within the 56 ms before the producer's first frame.
         amp::ControlAck ack;
         std::memset(&ack, 0, sizeof(ack));
-        Result<std::size_t> received =
-            channel_->receive(&ack, sizeof(ack), kControlAckTimeout);
-        if (!received) {
-            lastError_ = "the front-end did not acknowledge its settings: " +
-                         received.message();
-            return received.status() == Status::Timeout ? Status::Timeout
-                                                        : received.status();
-        }
+        const auto deadline = std::chrono::steady_clock::now() + kControlAckTimeout;
+        for (;;) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto left = deadline > now
+                                  ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+                                  : std::chrono::milliseconds(0);
+            unsigned char buffer[2048];
+            Result<std::size_t> received = channel_->receive(buffer, sizeof(buffer), left);
+            if (!received) {
+                lastError_ = "the front-end did not acknowledge its settings: " +
+                             received.message();
+                return received.status() == Status::Timeout ? Status::Timeout
+                                                            : received.status();
+            }
 
-        if (received.value() < sizeof(ack) || ack.magic != amp::kControlAckMagic) {
-            lastError_ = "the front-end answered the control message with something else";
-            return Status::IntegrityError;
+            std::uint32_t magic = 0;
+            if (received.value() >= sizeof(magic)) {
+                std::memcpy(&magic, buffer, sizeof(magic));
+            }
+            if (magic == amp::kFrameMagic) {
+                ++framesDiscardedBeforeAck_;
+                continue;
+            }
+            if (received.value() < sizeof(ack) || magic != amp::kControlAckMagic) {
+                lastError_ = "the front-end answered the control message with something else";
+                return Status::IntegrityError;
+            }
+            std::memcpy(&ack, buffer, sizeof(ack));
+            break;
         }
         if (ack.version != amp::kControlVersion) {
             lastError_ = "the front-end speaks control protocol version " +
@@ -731,6 +820,10 @@ private:
     std::unique_ptr<MedicalIpcChannel> channel_;
     std::uint64_t lastSequence_ = 0;
     std::string lastError_;
+    /// Frames of an earlier session found queued ahead of a control answer.
+    /// Not reported anywhere yet; kept so that a debugger, or a later audit
+    /// field, can see how deep the backlog was.
+    std::uint64_t framesDiscardedBeforeAck_ = 0;
 };
 
 /// A front-end the Linux kernel drives, reached through the industrial I/O ABI.

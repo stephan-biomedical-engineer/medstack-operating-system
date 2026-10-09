@@ -64,6 +64,9 @@ enum class AuditEvent {
     SafetyLimitViolation,
     DeviceFault,
     SecurityEvent,
+    /// A monitored electrode lost or regained contact with the subject.
+    /// Appended, not inserted: the enumerators before it keep their values.
+    ElectrodeContactChanged,
 };
 
 const char* toString(Severity severity) noexcept;

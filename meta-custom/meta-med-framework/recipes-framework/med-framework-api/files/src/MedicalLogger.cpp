@@ -136,6 +136,7 @@ const char* toString(AuditEvent event) noexcept {
         case AuditEvent::SafetyLimitViolation: return "SAFETY_LIMIT_VIOLATION";
         case AuditEvent::DeviceFault:          return "DEVICE_FAULT";
         case AuditEvent::SecurityEvent:        return "SECURITY_EVENT";
+        case AuditEvent::ElectrodeContactChanged: return "ELECTRODE_CONTACT_CHANGED";
     }
     return "UNKNOWN";
 }

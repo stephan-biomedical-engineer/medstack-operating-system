@@ -29,7 +29,13 @@ SRC_URI = " \
 
 S = "${WORKDIR}/sources"
 
-DEPENDS = "systemd openssl"
+DEPENDS = "systemd openssl med-amp-abi"
+
+# MedicalDevice.h includes med_amp_abi.h, so whoever builds against this
+# library's headers needs that one too. Not a third external dependency: it is
+# this project's own wire format, in a recipe of its own because the firmware
+# on the real-time core consumes it as well (see med-amp-abi_1.0.0.bb).
+RDEPENDS:${PN}-dev += "med-amp-abi-dev"
 
 inherit cmake pkgconfig features_check
 

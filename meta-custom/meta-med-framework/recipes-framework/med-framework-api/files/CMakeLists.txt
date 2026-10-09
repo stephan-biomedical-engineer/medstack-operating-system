@@ -25,6 +25,17 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 find_package(OpenSSL REQUIRED)
 
+# The AMP wire format is not a dependency in the sense the two above are: it is
+# this project's own header, packaged by med-amp-abi so that the firmware on the
+# real-time core can include the same definition. MedicalDevice.h includes it,
+# so it is part of this library's public interface. find_path rather than a
+# hard-coded path, so that it is found in a cross sysroot and on a host alike.
+find_path(MED_AMP_ABI_INCLUDE_DIR med_amp_abi.h PATH_SUFFIXES medplatform)
+if(NOT MED_AMP_ABI_INCLUDE_DIR)
+    message(FATAL_ERROR "med_amp_abi.h not found: build med-amp-abi first, or set "
+                        "MED_AMP_ABI_INCLUDE_DIR to the directory holding it")
+endif()
+
 add_library(medframework SHARED
     src/med-framework.cpp
     src/MedicalLogger.cpp
@@ -46,6 +57,7 @@ target_compile_options(medframework PRIVATE
 target_include_directories(medframework
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${MED_AMP_ABI_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "MedicalTypes.h"
+#include "med_amp_abi.h"
 
 namespace med {
 
@@ -63,6 +64,40 @@ struct DeviceInfo {
     std::string unit;
 };
 
+/// Electrode contact over one frame, one bit per channel input (bit c is
+/// channel c, first sixteen channels only).
+///
+/// An "off" bit means something only where its "monitored" bit is set. A
+/// front-end that does not check contact - a simulator, a link with no way to
+/// carry the status - reports nothing monitored, and that is not the same
+/// statement as "every electrode is attached". Treating a clear "off" as
+/// "attached" without looking at "monitored" is the defect this type exists to
+/// make hard to write; attached() does the comparison.
+struct LeadOff {
+    std::uint16_t monitoredPositive = 0;
+    std::uint16_t monitoredNegative = 0;
+    std::uint16_t offPositive = 0;
+    std::uint16_t offNegative = 0;
+
+    bool monitored() const noexcept {
+        return monitoredPositive != 0 || monitoredNegative != 0;
+    }
+    /// Electrodes that are both monitored and reported off.
+    std::uint16_t detachedPositive() const noexcept {
+        return static_cast<std::uint16_t>(offPositive & monitoredPositive);
+    }
+    std::uint16_t detachedNegative() const noexcept {
+        return static_cast<std::uint16_t>(offNegative & monitoredNegative);
+    }
+    bool operator==(const LeadOff& other) const noexcept {
+        return monitoredPositive == other.monitoredPositive &&
+               monitoredNegative == other.monitoredNegative &&
+               detachedPositive() == other.detachedPositive() &&
+               detachedNegative() == other.detachedNegative();
+    }
+    bool operator!=(const LeadOff& other) const noexcept { return !(*this == other); }
+};
+
 /// One block of samples from every channel, channel-interleaved:
 /// samples[i * channelCount + c] is sample i of channel c.
 struct SampleFrame {
@@ -71,6 +106,8 @@ struct SampleFrame {
     std::uint16_t channelCount = 0;
     std::uint32_t samplesPerChannel = 0;
     std::vector<float> samples;
+    /// Nothing monitored unless the driver's front-end checks contact.
+    LeadOff leadOff;
 
     /// Bounds checked accessor; returns 0 for an out of range request rather
     /// than reading past the buffer.
@@ -161,102 +198,61 @@ public:
     static std::vector<std::string> drivers();
 };
 
-/// Wire format of the AMP link. The firmware on the real-time core emits this
-/// header followed by `channelCount * samplesPerChannel` little-endian int32
-/// samples in LSB units; the "rpmsg" driver converts them with
-/// scaleNanoUnitsPerLsb. Fixed layout: both sides are compiled by different
-/// toolchains for different architectures.
+/// Wire format of the AMP link. The firmware on the real-time core emits a
+/// FrameHeader followed by `channelCount * samplesPerChannel` little-endian
+/// int32 samples; the "rpmsg" driver converts them with scaleNanoUnitsPerLsb.
+///
+/// The layout is not defined here. It lives in med_amp_abi.h, a C99
+/// freestanding header the firmware includes too, with the size and the offset
+/// of every field asserted at compile time - one definition for two compilers,
+/// two architectures and two languages. What follows only gives those types and
+/// constants their C++ names, so that nothing on this side spells the C ones.
 namespace amp {
 
-/// "MEEG" is a historical spelling and stays: the magic is ABI shared with
-/// firmware, and a frame is a frame whatever the device measures.
-constexpr std::uint32_t kFrameMagic = 0x4D454547U;  // "MEEG"
-constexpr std::uint16_t kFrameVersion = 1;
+constexpr std::uint32_t kFrameMagic = MED_AMP_FRAME_MAGIC;
+constexpr std::uint16_t kFrameVersion = MED_AMP_FRAME_VERSION;
 
-#pragma pack(push, 1)
-struct FrameHeader {
-    std::uint32_t magic;
-    std::uint16_t version;
-    std::uint16_t channelCount;
-    std::uint32_t samplesPerChannel;
-    std::uint32_t sampleRateMilliHz;
-    std::uint64_t sequence;
-    std::uint64_t timestampMicros;
-    /// Nanovolts per LSB of the int32 samples that follow.
-    ///
-    /// Producers are expected to deliver NANOVOLTS and set this to 1, not to
-    /// send raw converter counts with a rounded step. The reason is
-    /// arithmetic: a high-resolution converter's step is rarely a whole number
-    /// of nanovolts - 22.35 nV, say - and an integer field can only say 22, a
-    /// 1.6% gain error on every sample of every trace, invisible because the
-    /// waveform still looks plausible. One multiplication at the producer
-    /// removes it and costs no ABI change: an int32 of nanovolts spans
-    /// +-2.1 V.
-    ///
-    /// The field stays, and stays honest: a producer that genuinely has an
-    /// integer step may still declare it.
-    std::int32_t scaleNanoUnitsPerLsb;
-    std::uint32_t crc32;  ///< over the sample payload only
-};
-#pragma pack(pop)
+using FrameHeader = ::med_amp_frame_header;
+using LeadOffBlock = ::med_amp_lead_off;
 
-static_assert(sizeof(FrameHeader) == 40, "AMP frame header layout is ABI");
+/// Serialise a frame in the wire format: header, samples as int32 nanovolts
+/// (scaleNanoUnitsPerLsb = 1), then the lead-off block, with the CRC over
+/// everything after the header. `out` is resized to fit.
+///
+/// Samples are in micro-units (SampleFrame's convention); one that does not fit
+/// an int32 of nano-units (beyond +-2.147 units) is saturated, never wrapped.
+void encodeFrame(const SampleFrame& frame, double sampleRateHz,
+                 std::vector<unsigned char>& out);
+
+/// Parse and verify one frame. Fails with IntegrityError on a short buffer, a
+/// bad magic, a truncated payload or a CRC that does not close, and with
+/// NotSupported on another version. On success the samples are in micro-units
+/// and *sampleRateHz, when given, receives the header's rate.
+///
+/// The one decoder: the rpmsg driver and the HMI both call it, so a frame is
+/// judged by the same code wherever it is read.
+Result<SampleFrame> decodeFrame(const void* data, std::size_t length,
+                                double* sampleRateHz = nullptr);
 
 /// Control channel: the settings the application prescribes and the front-end
-/// has to program into a converter's registers.
-///
-/// A second message type on the same link, with the same discipline as the
-/// frame header - fixed layout, packed, size asserted - because it crosses the
-/// same boundary between two toolchains and two architectures. It is
-/// deliberately a list of opaque key/value strings and not a struct of named
-/// settings: the framework must not acquire an opinion about what a front-end
-/// has, and a struct would need a new field, and therefore a new ABI, for
-/// every converter.
-constexpr std::uint32_t kControlMagic = 0x4D435452U;   // "MCTR"
-constexpr std::uint32_t kControlAckMagic = 0x4D435441U;  // "MCTA"
-constexpr std::uint16_t kControlVersion = 1;
+/// has to program, and the producer's mandatory answer. See med_amp_abi.h for
+/// why it is a list of opaque strings and why it holds at most 8 options.
+constexpr std::uint32_t kControlMagic = MED_AMP_CONTROL_MAGIC;
+constexpr std::uint32_t kControlAckMagic = MED_AMP_CONTROL_ACK_MAGIC;
+constexpr std::uint16_t kControlVersion = MED_AMP_CONTROL_VERSION;
 
-/// Sized against the transport, not against taste: a stock rpmsg buffer is 512
-/// bytes with about 496 usable, and 8 options of 56 bytes plus a 16 byte
-/// header is 464. Needing a ninth option is a protocol change - a producer
-/// that reads a truncated option list would program a converter from half a
-/// prescription, so the framework refuses to send rather than trimming.
-constexpr std::uint16_t kControlMaxOptions = 8;
-constexpr std::size_t kControlKeySize = 32;
-constexpr std::size_t kControlValueSize = 24;
-constexpr std::size_t kControlDetailSize = 64;
+constexpr std::uint16_t kControlMaxOptions = MED_AMP_CONTROL_MAX_OPTIONS;
+constexpr std::size_t kControlKeySize = MED_AMP_CONTROL_KEY_SIZE;
+constexpr std::size_t kControlValueSize = MED_AMP_CONTROL_VALUE_SIZE;
+constexpr std::size_t kControlDetailSize = MED_AMP_CONTROL_DETAIL_SIZE;
 
-#pragma pack(push, 1)
-struct ControlOption {
-    char key[kControlKeySize];      ///< NUL terminated
-    char value[kControlValueSize];  ///< NUL terminated
-};
+using ControlOption = ::med_amp_control_option;
+using ControlMessage = ::med_amp_control_message;
+using ControlAck = ::med_amp_control_ack;
 
-struct ControlMessage {
-    std::uint32_t magic;
-    std::uint16_t version;
-    std::uint16_t optionCount;
-    std::uint32_t crc32;  ///< over the first optionCount options only
-    std::uint32_t reserved;
-    ControlOption options[kControlMaxOptions];
-};
-
-/// The producer's answer. Not optional: an option the front-end did not
-/// understand must come back as a refusal, because the alternative is a device
-/// acquiring at a gain nobody prescribed.
-struct ControlAck {
-    std::uint32_t magic;
-    std::uint16_t version;
-    /// 0 accepted; otherwise 1 + the index of the first rejected option.
-    std::uint16_t rejectedIndex;
-    char detail[kControlDetailSize];
-};
-#pragma pack(pop)
-
-static_assert(sizeof(ControlOption) == 56, "AMP control option layout is ABI");
-static_assert(sizeof(ControlMessage) == 464, "AMP control message layout is ABI");
-static_assert(sizeof(ControlAck) == 72, "AMP control ack layout is ABI");
-
+/// Table-driven, and deliberately a second implementation of the
+/// med_amp_crc32 the firmware uses: tests/framework holds the two equal on the
+/// standard check vector and on frame-sized buffers.
 std::uint32_t crc32(const void* data, std::size_t length) noexcept;
 
 }  // namespace amp
