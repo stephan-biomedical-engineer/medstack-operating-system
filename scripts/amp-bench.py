@@ -13,6 +13,15 @@ recorded with `dd`. The board side is scripts/amp-bench.sh.
                                                    converter's internal test signal
     amp-bench.py leadoff CAPTURE                   a capture on the electrode inputs:
                                                    integrity, and what lead-off said
+    amp-bench.py tone CAPTURE --hz F (--uv A | --below A) [--tolerance T]
+                                                   an external sine on the inputs: its
+                                                   amplitude and phase on every channel,
+                                                   or - with --below - its absence
+    amp-bench.py levels CAPTURE [--full-scale-uv F]
+                                                   where each channel sits: mean, extremes,
+                                                   and how much of the time at full scale
+    amp-bench.py bdf SESSION_DIR                   the clinical file(s) eeg-record-export
+                                                   derived, against the raw.bin beside them
 
 Everything here is written from med_amp_abi.h and med_producer.h, NOT from the
 framework's code, so that it is a second reading of the format and not the
@@ -21,7 +30,9 @@ polynomial, reflection and final XOR the header specifies, from a source
 outside this repository.
 """
 
+import datetime
 import math
+import os
 import struct
 import sys
 import zlib
@@ -265,6 +276,231 @@ def leadoff(path):
     return 0 if good and not bad and not gaps else 1
 
 
+def sine_fit(values, cycles_per_sample):
+    """Least squares of a + b*sin + c*cos at a known frequency: amplitude,
+    phase (degrees) and the rms of what the fit leaves."""
+    w = 2.0 * math.pi * cycles_per_sample
+    sn = [math.sin(w * i) for i in range(len(values))]
+    cs = [math.cos(w * i) for i in range(len(values))]
+    one = [1.0] * len(values)
+    basis = (one, sn, cs)
+    m = [[sum(x * y for x, y in zip(a, b)) for b in basis] for a in basis]
+    r = [sum(x * y for x, y in zip(a, values)) for a in basis]
+    for i in range(3):                      # Gauss-Jordan, 3x3
+        pivot = m[i][i]
+        m[i] = [x / pivot for x in m[i]]; r[i] /= pivot
+        for j in range(3):
+            if j != i:
+                f = m[j][i]
+                m[j] = [x - f * y for x, y in zip(m[j], m[i])]; r[j] -= f * r[i]
+    a, b, c = r
+    rest = [v - a - b * x - c * y for v, x, y in zip(values, sn, cs)]
+    return (math.hypot(b, c), math.degrees(math.atan2(c, b)),
+            math.sqrt(sum(x * x for x in rest) / len(rest)))
+
+
+def tone(path, hz, expect_uv, below_uv, tolerance):
+    """An external sine on the electrode inputs. With --uv, every channel must
+    carry it at that peak amplitude, in phase with channel 1. With --below, no
+    channel may: the same capture judged for the signal's absence, which is
+    the control that says the first verdict was about the connection and not
+    about pickup.
+
+    Fitted in 2 s blocks and reported as the median, so that the generator's
+    frequency error against the converter's clock - a slow phase drift - costs
+    nothing; the first second is dropped as settling."""
+    acks, frames = parse(open(path, 'rb').read())
+    bad = gaps = 0
+    prev, rate, per_ch = None, None, None
+    for h, body in frames:
+        magic, ver, ch, spc, mhz, seq, ts, scale, crc = h
+        if ver not in FRAME_VERSIONS or zlib.crc32(body) & 0xFFFFFFFF != crc:
+            bad += 1; continue
+        if prev is not None and seq != prev + 1:
+            gaps += 1
+        prev, rate = seq, mhz / 1000.0
+        per_ch = per_ch or [[] for _ in range(ch)]
+        vals = struct.unpack('<%di' % (ch * spc), body[:ch * spc * 4])
+        for i in range(spc):
+            for c in range(ch):
+                per_ch[c].append(vals[i * ch + c] * scale / 1000.0)   # uV
+    if not per_ch:
+        print('nenhum quadro válido'); print('VEREDITO: FALHOU'); return 1
+    n = len(per_ch[0])
+    print('quadros %d (%d amostras/canal a %g/s), lacunas %d, CRC/versão errados %d'
+          % (len(frames), n, rate, gaps, bad))
+    block, skip = int(2 * rate), int(rate)
+    starts = list(range(skip, n - block + 1, block))
+    if len(starts) < 3:
+        print('captura curta: são precisos pelo menos 7 s'); print('VEREDITO: FALHOU'); return 1
+    median = lambda v: sorted(v)[len(v) // 2]
+    fits = [[sine_fit(v[s0:s0 + block], hz / rate) for s0 in starts] for v in per_ch]
+    ok = gaps == 0 and bad == 0
+    any_railed = False
+    print('canal  amplitude(uV pico)  fase vs canal 1 (graus)  resíduo rms(uV)  saturado')
+    for c, v in enumerate(per_ch):
+        amp = median([f[0] for f in fits[c]])
+        rel = median([(f[1] - g[1] + 180.0) % 360.0 - 180.0 for f, g in zip(fits[c], fits[0])])
+        rms = median([f[2] for f in fits[c]])
+        # A channel stuck on one value fits a small "amplitude" too. It does
+        # not carry the tone, and it could not show it either: reported, and
+        # counted against --uv only.
+        railed = max(v[skip:]) == min(v[skip:])
+        any_railed = any_railed or railed
+        if expect_uv is not None:
+            good = (abs(amp - expect_uv) <= tolerance * expect_uv and abs(rel) <= 5.0
+                    and rms <= 0.1 * expect_uv and not railed)
+        else:
+            good = amp <= below_uv
+        ok = ok and good
+        print('  %d   %16.2f  %22.2f  %15.2f  %s  %s' % (c + 1, amp, rel, rms,
+              'SIM' if railed else 'não', '' if good else '<- FORA'))
+    if expect_uv is not None:
+        print('critério: %.1f uV de pico +-%.0f%%, fase +-5 graus, resíduo <= 10%% da amplitude'
+              % (expect_uv, 100 * tolerance))
+    else:
+        print('critério: amplitude a %g Hz <= %.1f uV de pico' % (hz, below_uv))
+        if any_railed:
+            print('atenção: há canal parado num valor só. Ele não carrega o sinal, mas também '
+                  'não poderia mostrá-lo.')
+    print('VEREDITO:', 'OK' if ok else 'FALHOU')
+    return 0 if ok else 1
+
+
+def levels(path, full_scale_uv):
+    """Where each channel sits, with nothing judged: the DC level, the
+    extremes and the share of samples at either end of the scale. For a bench
+    question that is about a level and not about a waveform - which input is
+    tied where."""
+    acks, frames = parse(open(path, 'rb').read())
+    per_ch, bad = None, 0
+    for h, body in frames:
+        magic, ver, ch, spc, mhz, seq, ts, scale, crc = h
+        if ver not in FRAME_VERSIONS or zlib.crc32(body) & 0xFFFFFFFF != crc:
+            bad += 1; continue
+        per_ch = per_ch or [[] for _ in range(ch)]
+        vals = struct.unpack('<%di' % (ch * spc), body[:ch * spc * 4])
+        for i in range(spc):
+            for c in range(ch):
+                per_ch[c].append(vals[i * ch + c] * scale / 1000.0)   # uV
+    if not per_ch:
+        print('nenhum quadro válido'); return 1
+    print('quadros %d (%d amostras/canal), CRC/versão errados %d; fundo de escala +-%.0f uV'
+          % (len(frames), len(per_ch[0]), bad, full_scale_uv))
+    print('canal    média(mV)     mín(mV)     máx(mV)   no topo   no fundo')
+    edge = 0.999 * full_scale_uv
+    for c, v in enumerate(per_ch):
+        top = sum(1 for x in v if x >= edge) / len(v)
+        bottom = sum(1 for x in v if x <= -edge) / len(v)
+        print('  %d   %11.3f %11.3f %11.3f   %6.1f%%   %6.1f%%'
+              % (c + 1, sum(v) / len(v) / 1000, min(v) / 1000, max(v) / 1000, 100 * top, 100 * bottom))
+    return 0
+
+
+def bdf_files(directory):
+    import glob
+    single = os.path.join(directory, 'record.bdf')
+    if os.path.exists(single):
+        return [single]
+    return sorted(glob.glob(os.path.join(directory, 'record-[0-9][0-9][0-9]*.bdf')))
+
+
+def read_bdf(path):
+    """A BDF+ file by the EDF/EDF+/BDF+ texts, independently of the writer:
+    header numbers, every sample as a 24-bit code, and each record's onset."""
+    data = open(path, 'rb').read()
+    head = lambda o, n: data[o:o + n].decode('ascii').strip()
+    if data[0:8] != b'\xffBIOSEMI':
+        raise ValueError('%s: not BDF' % path)
+    ns, nrec = int(head(252, 4)), int(head(236, 8))
+    duration, hbytes = float(head(244, 8)), int(head(184, 8))
+    start = datetime.datetime.strptime(head(168, 8) + ' ' + head(176, 8), '%d.%m.%y %H.%M.%S')
+    spr = [int(head(256 + ns * 216 + 8 * i, 8)) for i in range(ns)]
+    labels = [head(256 + 16 * i, 16) for i in range(ns)]
+    if labels[-1] != 'BDF Annotations':
+        raise ValueError('%s: the last signal is not the annotation signal' % path)
+    record_bytes = 3 * sum(spr)
+    records, onsets = [], []
+    for r in range(nrec):
+        o = hbytes + r * record_bytes
+        signals = []
+        for s in range(ns - 1):
+            raw = data[o:o + 3 * spr[s]]
+            signals.append([int.from_bytes(raw[3 * i:3 * i + 3], 'little', signed=True)
+                            for i in range(spr[s])])
+            o += 3 * spr[s]
+        tal = data[o:o + 3 * spr[-1]]
+        onsets.append(float(tal[:tal.index(b'\x14')].decode()))
+        records.append(signals)
+    if len(data) != hbytes + nrec * record_bytes:
+        raise ValueError('%s: %d bytes, the header says %d' %
+                         (path, len(data), hbytes + nrec * record_bytes))
+    return {'reserved': head(192, 5), 'duration': duration, 'start': start,
+            'records': records, 'onsets': onsets, 'labels': labels[:-1]}
+
+
+def bdf(directory):
+    """The clinical file(s) against the record they were derived from: every
+    code a whole number of steps at the scale metadata.json declares, every
+    record a valid frame of raw.bin in order, a new file exactly where the
+    sequence breaks, and each file's start where the sequence puts it."""
+    import json
+    meta = json.load(open(os.path.join(directory, 'metadata.json')))
+    lsb = meta['full_scale_uv'] * 1000.0 / 2 ** (meta['resolution_bits'] - 1)
+    ch = meta['channels']
+    acks, frames = parse(open(os.path.join(directory, 'raw.bin'), 'rb').read())
+    valid = [(h, body) for h, body in frames
+             if h[1] in FRAME_VERSIONS and zlib.crc32(body) & 0xFFFFFFFF == h[8]]
+    stretches = []
+    for h, body in valid:
+        if not stretches or h[5] != stretches[-1][-1][0][5] + 1:
+            stretches.append([])
+        stretches[-1].append((h, body))
+
+    files = bdf_files(directory)
+    bad, compared, worst = 0, 0, 0.0
+    if len(files) != len(stretches):
+        print('FALHA: %d arquivo(s) para %d trecho(s) contínuo(s)' % (len(files), len(stretches)))
+        return 1
+    previous = None
+    for path, stretch in zip(files, stretches):
+        f = read_bdf(path)
+        name = os.path.basename(path)
+        if f['reserved'] != 'BDF+C' or len(f['records']) != len(stretch):
+            print('FALHA: %s: %s com %d registros para %d quadros' %
+                  (name, f['reserved'], len(f['records']), len(stretch)))
+            return 1
+        for r, (h, body) in enumerate(stretch):
+            spc = h[3]
+            nv = struct.unpack_from('<%di' % (ch * spc), body)
+            for s in range(ch):
+                for i in range(spc):
+                    v = nv[i * ch + s]
+                    code = round(v / lsb)
+                    worst = max(worst, abs(v - code * lsb))
+                    compared += 1
+                    if f['records'][r][s][i] != code:
+                        bad += 1
+            if abs(f['onsets'][r] - (f['onsets'][0] + r * f['duration'])) > 1e-6:
+                print('FALHA: %s: o registro %d começa em %.6f' % (name, r, f['onsets'][r]))
+                return 1
+        begins = f['start'] + datetime.timedelta(seconds=f['onsets'][0])
+        if previous is not None:
+            expected = (stretch[0][0][5] - previous[1]) * f['duration']
+            got = (begins - previous[0]).total_seconds()
+            if abs(got - expected) > 1e-3:
+                print('FALHA: %s começa %.6f s depois do anterior; a sequência diz %.6f s' %
+                      (name, got, expected))
+                return 1
+        previous = (begins, stretch[0][0][5])
+        print('%s: %d registros, sequência %d..%d, início %s' %
+              (name, len(stretch), stretch[0][0][5], stretch[-1][0][5], begins.isoformat()))
+    print('quadros no raw.bin %d, válidos %d; códigos comparados %d, diferentes %d; '
+          'pior resíduo %.3f nV (passo %.4f nV)' %
+          (len(frames), len(valid), compared, bad, worst, lsb))
+    return 0 if bad == 0 and worst <= 0.5 + 1e-9 else 1
+
+
 def main(argv):
     if len(argv) >= 3 and argv[1] == 'control':
         pairs = [a.split('=', 1) for a in argv[3:]]
@@ -275,6 +511,16 @@ def main(argv):
         return converter(argv[2], seconds)
     if len(argv) >= 3 and argv[1] == 'leadoff':
         return leadoff(argv[2])
+    if len(argv) >= 3 and argv[1] == 'tone':
+        opt = lambda name: float(argv[argv.index(name) + 1]) if name in argv else None
+        if opt('--hz') is None or (opt('--uv') is None) == (opt('--below') is None):
+            print('tone: --hz F e exatamente um de --uv A ou --below A'); return 2
+        return tone(argv[2], opt('--hz'), opt('--uv'), opt('--below'), opt('--tolerance') or 0.1)
+    if len(argv) >= 3 and argv[1] == 'levels':
+        fs = float(argv[argv.index('--full-scale-uv') + 1]) if '--full-scale-uv' in argv else 187500.0
+        return levels(argv[2], fs)
+    if len(argv) >= 3 and argv[1] == 'bdf':
+        return bdf(argv[2])
     if len(argv) >= 3 and argv[1] == 'analyse':
         seconds = float(argv[argv.index('--seconds') + 1]) if '--seconds' in argv else None
         return analyse(argv[2], seconds, '--internal' in argv)

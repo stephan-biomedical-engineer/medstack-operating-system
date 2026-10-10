@@ -20,6 +20,12 @@ Before=boot-complete.target
 # crash-looping unit look active between attempts (CLAUDE.md, acq-active).
 Type=notify
 ExecStart=/usr/bin/eeg-acquisition-service --config /etc/medplatform/eeg.conf
+# Every time acquisition stops - asked to, or crashed - the session it was
+# writing is finished, and its clinical file is due (implementation_plan_bdf.md).
+# --no-block: the stop does not wait for the conversion, and neither does a
+# restart. "+" because this sandbox has no way to reach the service manager,
+# by design; the command is the one thing run outside it.
+ExecStopPost=+/usr/bin/systemctl start --no-block eeg-record-export.service
 Restart=on-failure
 RestartSec=2s
 

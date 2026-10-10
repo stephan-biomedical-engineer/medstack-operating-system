@@ -18,11 +18,17 @@ pkg_check_modules(MEDFRAMEWORK REQUIRED IMPORTED_TARGET medframework)
 
 add_executable(eeg-acquisition-service src/main.cpp)
 
-target_compile_options(eeg-acquisition-service PRIVATE
-    -Wall -Wextra -Wpedantic -Wshadow -Wconversion
-)
+# The clinical file of a finished session (implementation_plan_bdf.md). A
+# second program and not a thread of the first: acquisition never waits for
+# it, and it never runs in acquisition's path. Same single dependency.
+add_executable(eeg-record-export src/export_main.cpp src/record_export.cpp)
 
-target_link_libraries(eeg-acquisition-service PRIVATE PkgConfig::MEDFRAMEWORK)
+foreach(target eeg-acquisition-service eeg-record-export)
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic -Wshadow -Wconversion
+    )
+    target_link_libraries(${target} PRIVATE PkgConfig::MEDFRAMEWORK)
+endforeach()
 
-install(TARGETS eeg-acquisition-service
+install(TARGETS eeg-acquisition-service eeg-record-export
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

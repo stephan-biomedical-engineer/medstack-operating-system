@@ -21,6 +21,7 @@
 // portability metric of the thesis reports.
 
 #include <csignal>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -154,18 +155,81 @@ std::map<std::string, std::string> driverOptions(const med::MedicalConfiguration
 
 /// The electrodes in a pair of masks, 1-based as an operator counts channels:
 /// "1+ 3-" is channel 1's positive input and channel 3's negative one.
-std::string describeElectrodes(std::uint16_t positive, std::uint16_t negative) {
+std::string describeElectrodes(std::uint16_t positive, std::uint16_t negative,
+                               bool referential) {
     std::string out;
     for (unsigned channel = 0; channel < 16; ++channel) {
         const unsigned bit = 1U << channel;
         if ((positive & bit) != 0) {
             out += (out.empty() ? "" : " ") + std::to_string(channel + 1) + "+";
         }
-        if ((negative & bit) != 0) {
+        if ((negative & bit) != 0 && !referential) {
             out += (out.empty() ? "" : " ") + std::to_string(channel + 1) + "-";
         }
     }
+    // In a referential montage every inverting input is the one reference
+    // electrode: whichever bit carries it, there is one thing to name, and
+    // "1-" would point the operator at a channel instead of at the electrode
+    // all of them depend on.
+    if (referential && negative != 0) {
+        out += (out.empty() ? "" : " ") + std::string("REF");
+    }
     return out.empty() ? "none" : out;
+}
+
+/// A JSON string literal. Every value in the session metadata comes from a
+/// sealed configuration, the framework or the clock, so none should need
+/// escaping - and "should" is not a property a record format can rest on.
+std::string jsonString(const std::string& value) {
+    std::string out = "\"";
+    for (const char c : value) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char escaped[8];
+                    std::snprintf(escaped, sizeof(escaped), "\\u%04x",
+                                  static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out += escaped;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out + "\"";
+}
+
+/// Whether `text` is a number JSON can carry as written. Stricter than the
+/// configuration's own parser on purpose: strtod also takes "inf", "nan" and
+/// hexadecimal, none of which is JSON.
+bool isJsonNumber(const std::string& text) {
+    if (text.empty() || !(text[0] == '-' || (text[0] >= '0' && text[0] <= '9'))) {
+        return false;
+    }
+    for (const char c : text) {
+        if (!((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' ||
+              c == 'E')) {
+            return false;
+        }
+    }
+    char* end = nullptr;
+    std::strtod(text.c_str(), &end);
+    return end != nullptr && *end == '\0';
+}
+
+/// A configuration value as JSON: a number where the sealed file has one, a
+/// string otherwise, null where the key is absent - an absent declaration has
+/// to read as absent, so that whatever consumes the metadata refuses rather
+/// than assumes.
+std::string jsonValue(const med::MedicalConfiguration& config, const std::string& key) {
+    const med::Result<std::string> text = config.getString(key);
+    if (!text) {
+        return "null";
+    }
+    return isJsonNumber(text.value()) ? text.value() : jsonString(text.value());
 }
 
 std::string readMachineId() {
@@ -310,6 +374,28 @@ int main(int argc, char** argv) {
     }
     med::MedicalStorage& storage = *storageResult.value();
 
+    // Volatile state, through the same API and on the unit's RuntimeDirectory:
+    // it is not a patient record and is not encrypted, so encryption is not
+    // required of it. Required to exist, though. The program that derives the
+    // clinical file treats a session with no close marker as interrupted
+    // unless this directory names it as live, so a service that ran without
+    // it would have its own live session converted, and marked interrupted,
+    // underneath it.
+    med::StorageConfig runtimeConfig;
+    runtimeConfig.root = config.getString("storage.runtime", "/run/medplatform");
+    runtimeConfig.nameSpace = "";
+    runtimeConfig.requireEncryptedBacking = false;
+    med::Result<std::unique_ptr<med::MedicalStorage>> runtimeResult =
+        med::MedicalStorage::open(runtimeConfig);
+    if (!runtimeResult) {
+        logger.audit(med::AuditEvent::DeviceFault, "runtime state is unusable",
+                     {{"status", med::toString(runtimeResult.status())},
+                      {"detail", runtimeResult.message()}});
+        std::fprintf(stderr, "eeg-acquisition-service: %s\n", runtimeResult.message().c_str());
+        return 1;
+    }
+    med::MedicalStorage& runtime = *runtimeResult.value();
+
     // ------------------------------------------------------------------- ipc
     med::IpcEndpoint endpoint;
     endpoint.transport = med::IpcTransport::UnixSeqpacket;
@@ -374,6 +460,19 @@ int main(int argc, char** argv) {
     const std::string sessionDir = "session-" + sessionId;
     const med::DeviceInfo info = device.info();
     const std::string link = config.getString("acquisition.link", "unknown");
+    const med::Timestamp sessionStart = med::Clock::now();
+
+    // Named as live BEFORE its directory exists, so that there is no instant
+    // at which the session is on disk, unclosed and unclaimed - which is what
+    // an interrupted one looks like.
+    {
+        const med::Status claimed = runtime.writeString("session", sessionId + "\n");
+        if (claimed != med::Status::Ok) {
+            logger.audit(med::AuditEvent::DeviceFault, "cannot mark the session as live",
+                         {{"session", sessionId}, {"status", med::toString(claimed)}});
+            return 1;
+        }
+    }
 
     {
         std::string metadata;
@@ -396,7 +495,60 @@ int main(int argc, char** argv) {
         metadata += "  \"sample_rate_hz\": " + std::to_string(info.sampleRateHz) + ",\n";
         metadata += "  \"unit\": \"" + info.unit + "\",\n";
         metadata += "  \"config_digest\": \"" + config.digest() + "\",\n";
-        metadata += "  \"software_version\": \"" + std::string(med::frameworkVersion()) + "\"\n";
+        metadata += "  \"software_version\": \"" + std::string(med::frameworkVersion()) + "\",\n";
+
+        // What the clinical file is derived from (implementation_plan_bdf.md,
+        // D7): the scale the samples were quantised at. The program that
+        // converts this session reads it here and nowhere else - not from an
+        // eeg.conf that may have changed since - and refuses a session where
+        // it is null.
+        metadata += "  \"full_scale_uv\": " + jsonValue(config, "record.full_scale_uv") + ",\n";
+        metadata += "  \"resolution_bits\": " + jsonValue(config, "record.resolution_bits") + ",\n";
+
+        // The montage the link actually configured, and the names the
+        // operator declared for the electrodes. null where nothing was
+        // declared: generic labels, which is a statement about the record and
+        // not a gap in it.
+        metadata += "  \"montage\": " + jsonValue(config, "record.montage") + ",\n";
+        metadata += "  \"prefiltering\": " + jsonValue(config, "record.prefiltering") + ",\n";
+        {
+            const std::string declared = config.getString("montage.electrodes", "");
+            std::string list;
+            std::size_t begin = declared.find_first_not_of(' ');
+            while (begin != std::string::npos) {
+                const std::size_t end = declared.find(' ', begin);
+                list += (list.empty() ? "" : ", ") +
+                        jsonString(declared.substr(begin, end - begin));
+                begin = end == std::string::npos ? end : declared.find_first_not_of(' ', end);
+            }
+            metadata += "  \"electrodes\": " + (list.empty() ? std::string("null") : "[" + list + "]") +
+                        ",\n";
+        }
+        metadata += "  \"reference\": " + jsonValue(config, "montage.reference") + ",\n";
+
+        // The prescription the front-end was given, in the application's own
+        // words. The config digest identifies it only for whoever still has
+        // the file; this survives the file.
+        {
+            std::string prescription;
+            for (const std::string& key : config.keys()) {
+                if (key.rfind("afe.", 0) == 0) {
+                    prescription += std::string(prescription.empty() ? "" : ",\n") + "    " +
+                                    jsonString(key) + ": " + jsonValue(config, key);
+                }
+            }
+            metadata += "  \"prescription\": {" +
+                        (prescription.empty() ? std::string() : "\n" + prescription + "\n  ") +
+                        "},\n";
+        }
+
+        // The date is only as good as the clock (implementation_plan_bdf.md,
+        // D8). This board has no initialised RTC; the record says whether a
+        // time source vouched for the clock, and which local time the
+        // formats defined in local time will use.
+        metadata += "  \"clock_synchronized\": " +
+                    std::string(med::clockSynchronized() ? "true" : "false") + ",\n";
+        metadata += "  \"utc_offset\": " + jsonString(med::utcOffset(sessionStart)) + "\n";
         metadata += "}\n";
         storage.writeString(sessionDir + "/metadata.json", metadata);
     }
@@ -422,6 +574,9 @@ int main(int argc, char** argv) {
     /// read it again, with the unit "inactive" rather than "failed".
     bool deviceFault = false;
     med::LeadOff lastContact;
+    // What the link configured (the recipe derives it; see record.montage in
+    // the metadata), so that the audit names the electrode the bits mean.
+    const bool referential = config.getString("record.montage", "") == "referential";
 
     while (g_stopRequested == 0) {
         // Non-blocking: a viewer connecting or leaving must never stall the
@@ -461,9 +616,11 @@ int main(int argc, char** argv) {
                          {{"session", sessionId},
                           {"sequence", std::to_string(frame.value().sequence)},
                           {"monitored", describeElectrodes(contact.monitoredPositive,
-                                                           contact.monitoredNegative)},
+                                                           contact.monitoredNegative,
+                                                           referential)},
                           {"detached", describeElectrodes(contact.detachedPositive(),
-                                                          contact.detachedNegative())}});
+                                                          contact.detachedNegative(),
+                                                          referential)}});
         }
         lastContact = contact;
 
@@ -514,6 +671,32 @@ int main(int argc, char** argv) {
     }
 
     device.stop();
+
+    // The close marker, in the session directory: the only thing on disk that
+    // says the record ended because the service ended it, and how. Written
+    // before the live marker is dropped, so that a session is never unclosed
+    // and unclaimed at the same time. A session without it, and not named as
+    // live, was interrupted - power loss, a killed process - and the clinical
+    // file derived from it will say so.
+    {
+        std::string closed;
+        closed += "{\n";
+        closed += "  \"session\": " + jsonString(sessionId) + ",\n";
+        closed += "  \"closed\": " + jsonString(med::formatTimestamp(med::Clock::now())) + ",\n";
+        closed += "  \"reason\": " +
+                  jsonString(deviceFault ? "front-end fault" : "stop requested") + ",\n";
+        closed += "  \"frames\": " + std::to_string(frames) + ",\n";
+        closed += "  \"dropped\": " + std::to_string(dropped) + ",\n";
+        closed += "  \"viewer_missed\": " + std::to_string(viewerMissed) + "\n";
+        closed += "}\n";
+        const med::Status written = storage.writeString(sessionDir + "/closed.json", closed);
+        if (written != med::Status::Ok) {
+            logger.error("session close marker could not be written",
+                         {{"session", sessionId}, {"status", med::toString(written)}});
+        }
+    }
+    runtime.remove("session");
+
     logger.audit(med::AuditEvent::AcquisitionStopped, "acquisition session stopped",
                  {{"session", sessionId},
                   {"reason", deviceFault ? "front-end fault" : "stop requested"},

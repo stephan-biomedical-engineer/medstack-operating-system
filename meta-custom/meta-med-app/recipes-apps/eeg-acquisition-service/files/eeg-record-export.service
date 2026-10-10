@@ -1,0 +1,53 @@
+[Unit]
+Description=MedPlatform EEG clinical file export (BDF+)
+Documentation=file:/etc/medplatform/eeg.conf
+# Derives the clinical file of every finished session (implementation_plan_bdf.md).
+# Started twice: once at boot, for whatever an interruption left behind, and by
+# the acquisition unit's ExecStopPost each time acquisition stops. Ordered AFTER
+# acquisition at boot, never before it: converting hours of record before the
+# service reports ready would delay the A/B slot confirmation, which waits for
+# acquisition (D4).
+Wants=data.mount
+After=data.mount systemd-journald.service eeg-acquisition.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/eeg-record-export --config /etc/medplatform/eeg.conf
+
+# Background work on a device whose foreground is real-time acquisition: it
+# yields the CPU and the disk to everything else.
+Nice=10
+IOSchedulingClass=idle
+
+# Its own audit chain state, beside the acquisition service's.
+StateDirectory=medplatform
+StateDirectoryMode=0700
+
+# The acquisition service's sandbox, minus what only acquisition needs: no
+# real-time scheduling and no device at all - this program reads a record and
+# writes a file, both on /data.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+ReadWritePaths=/data
+
+[Install]
+WantedBy=multi-user.target

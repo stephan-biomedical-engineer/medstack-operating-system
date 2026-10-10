@@ -17,6 +17,7 @@ SRC_URI = " \
     file://src;subdir=sources \
     file://eeg.conf \
     file://eeg-acquisition.service \
+    file://eeg-record-export.service \
 "
 
 S = "${WORKDIR}/sources"
@@ -27,7 +28,10 @@ inherit cmake pkgconfig systemd features_check
 
 REQUIRED_DISTRO_FEATURES = "systemd"
 
-SYSTEMD_SERVICE:${PN} = "eeg-acquisition.service"
+# The exporter is in the same package on purpose: the EEG's device-specific
+# delta is a number the thesis reports (RESULTS.md), and a clinical file is
+# part of the same device application, not a new one.
+SYSTEMD_SERVICE:${PN} = "eeg-acquisition.service eeg-record-export.service"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # The knobs that make the same application binary serve every target and every
@@ -61,6 +65,8 @@ do_install:append() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/eeg-acquisition.service \
         ${D}${systemd_system_unitdir}/eeg-acquisition.service
+    install -m 0644 ${WORKDIR}/eeg-record-export.service \
+        ${D}${systemd_system_unitdir}/eeg-record-export.service
 }
 
 # The afe.* block of eeg.conf is this device's prescription, in its own words,
@@ -85,6 +91,7 @@ do_install:append() {
 # safety table.
 python do_derive_device_options() {
     import os
+    import re
 
     config = os.path.join(d.getVar('D') + d.getVar('sysconfdir'), 'medplatform', 'eeg.conf')
     link = d.getVar('MED_EEG_LINK')
@@ -108,10 +115,12 @@ python do_derive_device_options() {
             key, value = stripped.split('=', 1)
             values[key.strip()] = value.strip()
 
-    if any(key.startswith('device.option.') for key in values):
-        bb.fatal("eeg.conf already contains device.option.* lines. They are derived "
-                 "from the afe.* prescription for MED_EEG_LINK and must not be "
-                 "written by hand - two sources for one setting can disagree.")
+    for prefix in ('device.option.', 'record.'):
+        if any(key.startswith(prefix) for key in values):
+            bb.fatal("eeg.conf already contains %s* lines. They are derived "
+                     "from the afe.* prescription for MED_EEG_LINK and must not be "
+                     "written by hand - two sources for one setting can disagree."
+                     % prefix)
 
     def required(key):
         if key not in values:
@@ -136,6 +145,12 @@ python do_derive_device_options() {
     def compact(x):
         return '%.10g' % x
 
+    # The converter class this application was designed for resolves 24 bits on
+    # every link: the simulated converter quantises to it, the co-processor's
+    # firmware and the kernel driver read it. One number, so that the record's
+    # declaration and the simulator's behaviour cannot drift apart.
+    resolution_bits = 24
+
     gain = number('afe.gain')
     reference_uv = number('afe.reference_uv')
     lead_off = boolean('afe.lead_off_detection')
@@ -144,6 +159,10 @@ python do_derive_device_options() {
     if test_signal not in ('off', 'internal'):
         bb.fatal("eeg.conf: afe.test_signal must be 'off' or 'internal', not '%s'"
                  % test_signal)
+    montage = required('afe.montage')
+    if montage not in ('bipolar', 'referential'):
+        bb.fatal("eeg.conf: afe.montage must be 'bipolar' or 'referential', not '%s'"
+                 % montage)
     if gain <= 0 or reference_uv <= 0:
         bb.fatal("eeg.conf: afe.gain and afe.reference_uv must be positive")
 
@@ -153,7 +172,7 @@ python do_derive_device_options() {
         options = [
             ('unit', 'uV'),
             ('full_scale', compact(reference_uv / gain)),
-            ('resolution_bits', '24'),
+            ('resolution_bits', str(resolution_bits)),
             ('noise_rms', '0.14'),
             # amplitude uV @ frequency Hz @ phase step per channel, rad
             ('tones', '20@10@0.4, 5@50@0, 2@0.3@0.4'),
@@ -174,6 +193,11 @@ python do_derive_device_options() {
         # input_mux and test_signal are the driver's own. Two prescriptions have
         # no attribute at all, and are checked against what the driver does at
         # probe instead of being passed and ignored.
+        if montage != 'bipolar':
+            bb.fatal("afe.montage = %s cannot be honoured on link '%s': the kernel "
+                     "driver offers no control that connects the inverting inputs to "
+                     "a common reference, so the front-end would record bipolar "
+                     "under a record that says otherwise" % (montage, link))
         if not lead_off:
             bb.fatal("afe.lead_off_detection = false cannot be honoured on link '%s': "
                      "the kernel driver enables the lead-off comparators at probe and "
@@ -204,6 +228,84 @@ python do_derive_device_options() {
         bb.fatal("MED_EEG_LINK = '%s' has no front-end option table; known links are "
                  "simulated, amp, spi and usb" % link)
 
+    # What the record says about itself (implementation_plan_bdf.md, D7 and
+    # D10). The clinical file is derived from the raw record by a separate
+    # program, and that program must not reconstruct the scale from an eeg.conf
+    # that may not be the one the session ran with - so the session's metadata
+    # carries it, and it is derived here, once, by the same table that decides
+    # what the link is told.
+    #
+    # The montage is what the link DOES, not what anyone wishes. By this point
+    # afe.montage is that: "amp" forwards it and the producer answers for it
+    # (a producer that cannot connect the reference refuses, and the service
+    # does not start), "spi"/"usb" were refused above for anything but
+    # bipolar, and "simulated" has no inputs, so either is what it does.
+
+    # Where the operator put each electrode. Not part of the afe.* prescription
+    # on purpose: do_derive forwards every afe.* key to the producer, and a
+    # converter has no use for the name of a scalp position - nor would eight
+    # of them fit in a control message's value.
+    #
+    # Optional. Without it the clinical file gets generic labels, which is a
+    # valid file and an honest one; with it, every name is checked here,
+    # because a label that does not fit the file's 16-character field would
+    # otherwise be truncated into a different electrode's name.
+    electrodes = values.get('montage.electrodes', '').split()
+    reference = values.get('montage.reference', '')
+    name = re.compile(r'^[A-Za-z0-9]+$')
+    if electrodes:
+        try:
+            channels = int(required('acquisition.channels'))
+        except ValueError:
+            bb.fatal("eeg.conf: acquisition.channels = '%s' is not an integer"
+                     % values['acquisition.channels'])
+        if len(electrodes) != channels:
+            bb.fatal("eeg.conf: montage.electrodes names %d electrodes for %d channels"
+                     % (len(electrodes), channels))
+        for electrode in electrodes:
+            if montage == 'bipolar':
+                parts = electrode.split('-')
+                if len(parts) != 2 or not all(name.match(p) for p in parts):
+                    bb.fatal("eeg.conf: montage.electrodes entry '%s' is not a pair "
+                             "'A-B', and the montage is bipolar: each channel "
+                             "measures between two electrodes" % electrode)
+                label = 'EEG ' + electrode
+            else:
+                if not name.match(electrode):
+                    bb.fatal("eeg.conf: montage.electrodes entry '%s' is not a "
+                             "single electrode name" % electrode)
+                label = 'EEG %s-%s' % (electrode, reference)
+            if len(label) > 16:
+                bb.fatal("eeg.conf: the label '%s' is %d characters, and the "
+                         "clinical file's label field holds 16" % (label, len(label)))
+    if montage == 'bipolar' and reference:
+        bb.fatal("eeg.conf: montage.reference is set, and the montage is bipolar: "
+                 "there is no common reference to name")
+    if montage == 'referential' and electrodes and not name.match(reference):
+        bb.fatal("eeg.conf: montage.reference = '%s' is not an electrode name"
+                 % reference)
+
+    record = [
+        ('full_scale_uv', compact(reference_uv / gain)),
+        ('resolution_bits', str(resolution_bits)),
+        ('montage', montage),
+    ]
+
+    # The converter's own filtering, for the clinical file's "prefiltering"
+    # field: DC-coupled, and the -3 dB band of its sinc3 decimation filter at
+    # the configured rate (SBAS499C Tables 1-4, the same at every gain - checked
+    # in implementation_plan_bdf.md phase 0). Only the converter's: whatever
+    # anti-aliasing the front-end board adds is not known and is not claimed.
+    # The simulated link filters nothing and declares nothing.
+    if link != 'simulated':
+        bandwidth = {250: 65, 500: 131, 1000: 262, 2000: 524, 4000: 1048,
+                     8000: 2096, 16000: 4193}
+        rate = number('acquisition.sample_rate_hz')
+        if rate not in bandwidth:
+            bb.fatal("eeg.conf: acquisition.sample_rate_hz = %s is not a rate the "
+                     "converter offers" % values['acquisition.sample_rate_hz'])
+        record.append(('prefiltering', 'HP:DC LP:%dHz' % bandwidth[rate]))
+
     with open(config, 'a') as handle:
         handle.write("\n# --- device options, derived at build time for this link ------------------\n"
                      "# Generated by do_derive_device_options from the afe.* prescription above.\n"
@@ -211,8 +313,12 @@ python do_derive_device_options() {
                      "# Link: %s\n" % link)
         for key, value in options:
             handle.write("device.option.%s = %s\n" % (key, value))
+        handle.write("\n# --- what the record declares about itself, derived for this link ---------\n")
+        for key, value in record:
+            handle.write("record.%s = %s\n" % (key, value))
 
-    bb.note("derived %d device options for link %s" % (len(options), link))
+    bb.note("derived %d device options and %d record declarations for link %s"
+            % (len(options), len(record), link))
 }
 addtask derive_device_options after do_install before do_seal_configuration
 do_derive_device_options[fakeroot] = "1"
@@ -291,4 +397,5 @@ do_seal_configuration[depends] += "virtual/fakeroot-native:do_populate_sysroot"
 FILES:${PN} += " \
     ${sysconfdir}/medplatform \
     ${systemd_system_unitdir}/eeg-acquisition.service \
+    ${systemd_system_unitdir}/eeg-record-export.service \
 "

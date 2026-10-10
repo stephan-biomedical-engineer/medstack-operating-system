@@ -248,11 +248,15 @@ EEG_CHECKS = [
     # Tolerância de 10% e janela de 20 s: sob QEMU sem tempo real, a taxa
     # instantânea oscila; o que esta asserção procura é a ordem de grandeza
     # errada (62% de perda), não jitter.
+    #
+    # O quadro é cabeçalho (40), amostras e, desde a v2 do formato, o bloco de
+    # 8 bytes de contato de eletrodo. Sem os 8 a asserção superestimava a taxa
+    # em ~1,6% - a favor de passar, que é o lado errado para errar.
     ("acq-sample-rate", "a taxa entregue é a configurada, com a HMI conectada",
      "C=/etc/medplatform/eeg.conf; "
      "g() { grep \"^$1\" $C | cut -d= -f2 | tr -d ' '; }; "
      "N=$(g acquisition.samples_per_frame); CH=$(g acquisition.channels); "
-     "R=$(g acquisition.sample_rate_hz); FB=$((40 + CH * N * 4)); "
+     "R=$(g acquisition.sample_rate_hz); FB=$((40 + CH * N * 4 + 8)); "
      "S=$(ls -d /data/eeg/session-* | tail -n 1); "
      "A=$(stat -c %s $S/raw.bin); sleep 20; B=$(stat -c %s $S/raw.bin); "
      "ACH=$(( (B - A) / FB * N / 20 )); "
@@ -293,8 +297,9 @@ EEG_CHECKS = [
      'test -n "$L" && test "$L" = "${S##*/session-}" && echo LIVE_OK',
      rx(r"LIVE_OK")),
 
-    # A ÚLTIMA desta lista, de propósito: é a única que reinicia o serviço, e
-    # um reinício abre uma sessão nova. O fechamento é comparado com o próprio
+    # Perto do fim, de propósito: é a única que reinicia o serviço, e um
+    # reinício abre uma sessão nova. Só a record-bdf vem depois, porque usa a
+    # sessão que esta fecha. O fechamento é comparado com o próprio
     # registro de auditoria da sessão (MED_FRAMES do AcquisitionStopped), não
     # com um número esperado: o marcador tem de dizer o mesmo que a trilha, e
     # é a concordância que se verifica.
@@ -310,6 +315,26 @@ EEG_CHECKS = [
      'test -n "$F" && test "$F" = "$J" && test "$M" = 1 && '
      'test "$N" != "${S##*/session-}" && echo CLOSED_OK',
      rx(r"CLOSED_OK")),
+
+    # O arquivo clínico da sessão que a session-closed encerrou
+    # (implementation_plan_bdf.md, Fase 3): o ExecStopPost da aquisição dispara
+    # o conversor, que não bloqueia a parada - daí a espera limitada pelo
+    # export.json. O número de registros vem do próprio cabeçalho BDF+ (offset
+    # 236, 8 octetos) e é comparado com os quadros do closed.json, que a
+    # session-closed já comparou com a auditoria: três fontes, um número. O
+    # selo é conferido por quem o lê, não por quem o escreveu.
+    ("record-bdf", "a sessão encerrada ganhou o BDF+, selado, um registro por quadro",
+     'S=$(ls -d /data/eeg/session-* | tail -n 2 | head -n 1); '
+     'for i in $(seq 1 60); do test -e $S/export.json && break; sleep 1; done; '
+     'F=$(sed -n "s/.*\\"frames\\": \\([0-9]*\\).*/\\1/p" $S/closed.json); '
+     'R=$(dd if=$S/record.bdf bs=1 skip=236 count=8 2>/dev/null | tr -d " "); '
+     'C=$(cd $S && sha256sum -c record.bdf.sha256 2>&1); '
+     'X=$(systemctl show eeg-record-export.service -p Result --value); '
+     'echo "quadros=$F registros=$R selo=$C unidade=$X"; '
+     'grep -q "\\"status\\": \\"converted\\"" $S/export.json && test -n "$F" && '
+     'test "$F" = "$R" && test "$C" = "record.bdf: OK" && test "$X" = success && '
+     'echo BDF_OK',
+     rx(r"BDF_OK")),
 ]
 
 PROFILES = {
