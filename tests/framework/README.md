@@ -37,6 +37,8 @@ de segundos em vez de um build de imagem.
 | `test_types.cpp` | `Status`, `Result<T>`, conversões de tempo |
 | `test_configuration.cpp` | tipos, forma do arquivo, selo de integridade, limites de segurança |
 | `test_storage.cpp` | recusa por criptografia, escrita/leitura, contenção de caminho |
+| `test_biosignal.cpp` | o escritor BDF+: cabeçalho campo a campo, códigos de volta exatos, TALs, `+C`/`+D`, recusas, selo conferido pelo `sha256sum` |
+| `bdf_oracle.py` | **fora do `make check`**: um segundo leitor, de outra pessoa, dos arquivos que `test_biosignal.cpp` escreve (abaixo) |
 | `test_device.cpp` | fábrica, vocabulário de opções por driver, aritmética do simulador, ABI do enlace AMP |
 | `test_logger.cpp` | vocabulário de auditoria e cadeia de hash — **só com `libsystemd-dev`** |
 
@@ -90,6 +92,34 @@ Vale registrar o que a **primeira** execução pegou, antes de qualquer injeçã
 biblioteca certa — a grafia é `SCREAMING_SNAKE_CASE` porque vira valor de campo
 do journal. A asserção foi corrigida e ampliada: hoje ela cobra que **todo**
 `Status` tenha grafia, que nenhuma se repita e que todas sigam a convenção.
+
+## O leitor independente do BDF+
+
+`test_biosignal.cpp` foi escrito a partir da mesma leitura da especificação
+que escreveu o escritor, então sozinho ele prova consistência, não correção. O
+`bdf_oracle.py` pergunta a dois leitores que ninguém aqui escreveu — o
+pyedflib, sobre a EDFlib que o EDFbrowser usa, e o MNE — o que os arquivos
+dizem, e compara com o que o teste escreveu:
+
+```bash
+python3 -m venv V && V/bin/pip install pyedflib mne
+mkdir S && MED_BDF_SAMPLE_DIR=S build/med-framework-tests
+V/bin/python -I bdf_oracle.py S
+```
+
+Os dois leitores vivem num venv descartável e não são dependência de nada. Por
+isso o oráculo fica fora do `make check`: ele exige pacotes que a suíte não pode
+exigir.
+
+**O que ele já pegou** (2026-10-09, `implementation_plan_bdf.md` Fase 2):
+
+- **Um limite errado no próprio teste.** O valor físico que um leitor
+  reconstrói difere do verdadeiro em até **1 LSB** no fundo de escala, porque o
+  máximo 187499,9776 µV só cabe como `187500`. O teste aceitava erro relativo de
+  1×10⁻⁶ na inclinação, o que admitiria 16 LSB. Hoje o limite é o exato.
+- **Um erro compartilhado.** Com o *byte order* das amostras invertido no
+  escritor **e** no leitor do teste, `make check` continua 1424/0 e o oráculo
+  falha os 8 canais. É a injeção que mostra para que ele serve.
 
 ## O que esta suíte **não** cobre
 

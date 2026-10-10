@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 #include <type_traits>
 
@@ -265,12 +266,54 @@ void testAmpAbi() {
         SampleFrame big;
         big.channelCount = 1;
         big.samplesPerChannel = 2;
-        big.samples = {3.0e6F, -3.0e6F};  // 3 V in microvolts: beyond int32 nV
+        big.samples = {3.0e6, -3.0e6};  // 3 V in microvolts: beyond int32 nV
         std::vector<unsigned char> out;
         amp::encodeFrame(big, 250.0, out);
         std::int32_t raw[2];
         std::memcpy(raw, out.data() + sizeof(amp::FrameHeader), sizeof(raw));
         CHECK_EQ(static_cast<long long>(raw[0]), 2147483647LL);
         CHECK_EQ(static_cast<long long>(raw[1]), -2147483648LL);
+    }
+
+    medtest::section("ABI do enlace AMP: o registro é cópia do produtor, código a código");
+    {
+        // The service records a frame by decoding it and encoding it again,
+        // so what reaches raw.bin is encode(decode(what the producer sent)).
+        // That has to be the producer's bytes, for every value a 24-bit
+        // converter can deliver - here all 2^24 codes at gain 24 on a 4.5 V
+        // reference, converted to nanovolts exactly as the firmware does
+        // (afe_code_to_nv). With samples held as float, 12736188 of them came
+        // back changed by up to 8 nV; the codec test above never saw it,
+        // because its values are halves of a microvolt, which a float carries
+        // exactly. Values chosen to be easy are the ones that cannot fail.
+        const double lsbNv = 4500000.0 * 1000.0 / (24.0 * 8388608.0);
+        SampleFrame geometry;
+        geometry.channelCount = 8;
+        geometry.samplesPerChannel = 14;
+        std::vector<unsigned char> sent;
+        std::vector<unsigned char> again;
+        long long changed = 0;
+        for (long long base = -8388608; base <= 8388607; base += 112) {
+            SampleFrame produced = geometry;
+            produced.samples.resize(112);
+            for (int i = 0; i < 112; ++i) {
+                const long long code = std::min(base + i, 8388607LL);
+                const double nv = static_cast<double>(code) * lsbNv;
+                produced.samples[static_cast<std::size_t>(i)] =
+                    static_cast<double>(static_cast<std::int32_t>(nv < 0 ? nv - 0.5 : nv + 0.5)) /
+                    1000.0;
+            }
+            amp::encodeFrame(produced, 250.0, sent);
+            Result<SampleFrame> received = amp::decodeFrame(sent.data(), sent.size(), nullptr);
+            if (!received) {
+                ++changed;
+                continue;
+            }
+            amp::encodeFrame(received.value(), 250.0, again);
+            if (again != sent) {
+                ++changed;
+            }
+        }
+        CHECK_EQ(changed, 0LL);
     }
 }

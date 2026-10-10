@@ -160,7 +160,7 @@ void testDevice() {
             CHECK(frame.isOk());
             if (frame.isOk()) {
                 const double step = 300.0 / 32768.0;
-                for (const float sample : frame.value().samples) {
+                for (const double sample : frame.value().samples) {
                     const double codes = sample / step;
                     CHECK_MSG(std::fabs(sample) <= 300.0 &&
                                   std::fabs(codes - std::floor(codes + 0.5)) < 1e-3,
@@ -200,7 +200,7 @@ void testDevice() {
             CHECK(frame.isOk());
             if (frame.isOk()) {
                 bool allZero = true;
-                for (const float sample : frame.value().samples) {
+                for (const double sample : frame.value().samples) {
                     allZero = allZero && sample == 0.0F;
                 }
                 CHECK_MSG(allZero, "o simulador sem opções inventou um sinal");
@@ -417,8 +417,8 @@ void testDevice() {
 
             // The bounds-checked accessor returns 0 rather than reading past
             // the buffer.
-            CHECK_EQ(f.at(99, 0), 0.0F);
-            CHECK_EQ(f.at(0, 9999), 0.0F);
+            CHECK_EQ(f.at(99, 0), 0.0);
+            CHECK_EQ(f.at(0, 9999), 0.0);
             CHECK_EQ(f.at(0, 0), f.samples[0]);
         }
         CHECK_MSG(framesRead >= 3, "o simulador não entregou três quadros");
@@ -455,7 +455,7 @@ void testDevice() {
             if (!frame.isOk()) {
                 continue;
             }
-            for (const float sample : frame.value().samples) {
+            for (const double sample : frame.value().samples) {
                 if (std::fabs(sample) > limit * 1.001) {
                     sawOverflow = true;
                 }
@@ -496,7 +496,7 @@ void testDevice() {
             if (!frame.isOk()) {
                 continue;
             }
-            for (const float sample : frame.value().samples) {
+            for (const double sample : frame.value().samples) {
                 any = true;
                 offLevel = offLevel || std::fabs(std::fabs(sample) - amplitude) > 1e-3;
             }

@@ -14,6 +14,7 @@
 void testTypes();
 void testConfiguration();
 void testStorage();
+void testBiosignal();
 void testDevice();
 void testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD
@@ -27,6 +28,7 @@ int main() {
     testTypes();
     testConfiguration();
     testStorage();
+    testBiosignal();
     testDevice();
     testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD

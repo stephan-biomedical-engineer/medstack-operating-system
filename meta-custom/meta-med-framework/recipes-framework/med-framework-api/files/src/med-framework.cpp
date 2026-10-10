@@ -109,17 +109,32 @@ const char* frameworkVersion() noexcept {
 namespace internal {
 
 std::string sha256Hex(const void* data, std::size_t length) {
-    EVP_MD_CTX* context = EVP_MD_CTX_new();
-    if (context == nullptr) {
-        return {};
-    }
+    Sha256 digest;
+    digest.update(data, length);
+    return digest.finishHex();
+}
 
+Sha256::Sha256() : context_(EVP_MD_CTX_new()), ok_(false) {
+    ok_ = context_ != nullptr &&
+          EVP_DigestInit_ex(static_cast<EVP_MD_CTX*>(context_), EVP_sha256(), nullptr) == 1;
+}
+
+Sha256::~Sha256() {
+    EVP_MD_CTX_free(static_cast<EVP_MD_CTX*>(context_));
+}
+
+void Sha256::update(const void* data, std::size_t length) {
+    if (ok_ && length > 0) {
+        ok_ = EVP_DigestUpdate(static_cast<EVP_MD_CTX*>(context_), data, length) == 1;
+    }
+}
+
+std::string Sha256::finishHex() {
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int digestLength = 0;
-    const bool ok = EVP_DigestInit_ex(context, EVP_sha256(), nullptr) == 1 &&
-                    EVP_DigestUpdate(context, data, length) == 1 &&
-                    EVP_DigestFinal_ex(context, digest, &digestLength) == 1;
-    EVP_MD_CTX_free(context);
+    const bool ok =
+        ok_ && EVP_DigestFinal_ex(static_cast<EVP_MD_CTX*>(context_), digest, &digestLength) == 1;
+    ok_ = false;
 
     if (!ok) {
         return {};

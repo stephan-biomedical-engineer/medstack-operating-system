@@ -41,6 +41,7 @@ add_library(medframework SHARED
     src/MedicalLogger.cpp
     src/MedicalIPC.cpp
     src/MedicalStorage.cpp
+    src/MedicalStorageBiosignal.cpp
     src/MedicalConfiguration.cpp
     src/MedicalUpdate.cpp
     src/MedicalDevice.cpp

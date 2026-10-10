@@ -105,18 +105,26 @@ struct SampleFrame {
     Timestamp timestamp{};
     std::uint16_t channelCount = 0;
     std::uint32_t samplesPerChannel = 0;
-    std::vector<float> samples;
+    /// Double and not float, and the difference is the record's integrity.
+    /// A float has 24 bits of mantissa: near a 24-bit converter's full scale
+    /// it rounds to 1/64 uV, and the record path decodes a frame into these
+    /// values and encodes them back. With float, 76% of the 2^24 codes came
+    /// back up to 8 nV away from what the producer sent - recoverable, since 8
+    /// nV is under half a step, but no longer a copy of the measurement
+    /// (implementation_plan_bdf.md, phase 3). A double carries every int32 of
+    /// nanovolts exactly.
+    std::vector<double> samples;
     /// Nothing monitored unless the driver's front-end checks contact.
     LeadOff leadOff;
 
     /// Bounds checked accessor; returns 0 for an out of range request rather
     /// than reading past the buffer.
-    float at(std::uint16_t channel, std::uint32_t index) const noexcept {
+    double at(std::uint16_t channel, std::uint32_t index) const noexcept {
         const std::size_t offset =
             static_cast<std::size_t>(index) * channelCount + channel;
         if (channel >= channelCount || index >= samplesPerChannel ||
             offset >= samples.size()) {
-            return 0.0F;
+            return 0.0;
         }
         return samples[offset];
     }

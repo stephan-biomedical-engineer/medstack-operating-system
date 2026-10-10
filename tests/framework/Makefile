@@ -48,6 +48,7 @@ LIB_SOURCES := \
 	$(FRAMEWORK)/src/med-framework.cpp \
 	$(FRAMEWORK)/src/MedicalConfiguration.cpp \
 	$(FRAMEWORK)/src/MedicalStorage.cpp \
+	$(FRAMEWORK)/src/MedicalStorageBiosignal.cpp \
 	$(FRAMEWORK)/src/MedicalDevice.cpp \
 	$(FRAMEWORK)/src/MedicalIPC.cpp
 
@@ -56,6 +57,7 @@ TEST_SOURCES := \
 	test_types.cpp \
 	test_configuration.cpp \
 	test_storage.cpp \
+	test_biosignal.cpp \
 	test_device.cpp \
 	test_amp_abi.cpp
 

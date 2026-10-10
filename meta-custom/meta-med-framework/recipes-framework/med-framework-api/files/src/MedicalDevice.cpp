@@ -63,7 +63,7 @@ void encodeFrame(const SampleFrame& frame, double sampleRateHz,
         // Micro-units to int32 nano-units, rounded, and saturated rather than
         // wrapped: a wrapped sample is a spike of the opposite sign that the
         // CRC then certifies.
-        const double nano = std::round(static_cast<double>(frame.samples[i]) * 1000.0);
+        const double nano = std::round(frame.samples[i] * 1000.0);
         const std::int32_t raw =
             nano >= 2147483647.0    ? INT32_MAX
             : nano <= -2147483648.0 ? INT32_MIN
@@ -135,7 +135,7 @@ Result<SampleFrame> decodeFrame(const void* data, std::size_t length, double* sa
     for (std::size_t i = 0; i < count; ++i) {
         std::int32_t raw = 0;
         std::memcpy(&raw, payload + i * sizeof(std::int32_t), sizeof(raw));
-        frame.samples[i] = static_cast<float>(raw * scale);
+        frame.samples[i] = raw * scale;
     }
 
     LeadOffBlock block;
@@ -368,7 +368,7 @@ public:
                     value += options_.noiseRms * noise_(random_);
                 }
                 frame.samples[static_cast<std::size_t>(i) * config_.channelCount + c] =
-                    static_cast<float>(quantise(value));
+                    quantise(value);
             }
         }
         sampleIndex_ += config_.samplesPerFrame;
@@ -1345,7 +1345,7 @@ private:
                 }
                 frame.samples[static_cast<std::size_t>(sample) * config_.channelCount +
                               channel] =
-                    static_cast<float>(static_cast<double>(raw) * scaleMicrovoltsPerLsb_);
+                    static_cast<double>(raw) * scaleMicrovoltsPerLsb_;
             }
         }
 

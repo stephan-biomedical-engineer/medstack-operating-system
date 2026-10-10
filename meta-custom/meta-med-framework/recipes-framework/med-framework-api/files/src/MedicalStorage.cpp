@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -351,6 +352,64 @@ Result<std::vector<std::uint8_t>> MedicalStorage::read(const std::string& relati
     ::close(fd);
 
     return ReadResult::ok(std::move(content));
+}
+
+Result<std::vector<std::uint8_t>> MedicalStorage::read(const std::string& relativePath,
+                                                       std::uint64_t offset,
+                                                       std::size_t length) const {
+    using ReadResult = Result<std::vector<std::uint8_t>>;
+
+    if (!isSafeRelativePath(relativePath)) {
+        return ReadResult::fail(Status::InvalidArgument, "unsafe path: " + relativePath);
+    }
+    if (offset > static_cast<std::uint64_t>(INT64_MAX)) {
+        return ReadResult::fail(Status::OutOfRange, "offset beyond any file");
+    }
+
+    const std::string target = basePath_ + "/" + relativePath;
+    const int fd = ::open(target.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        return ReadResult::fail(statusFromErrno(errno),
+                                "open " + relativePath + ": " + std::strerror(errno));
+    }
+
+    std::vector<std::uint8_t> content(length);
+    std::size_t got = 0;
+    while (got < length) {
+        const ssize_t n = ::pread(fd, content.data() + got, length - got,
+                                  static_cast<off_t>(offset + got));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            const int saved = errno;
+            ::close(fd);
+            return ReadResult::fail(statusFromErrno(saved), std::strerror(saved));
+        }
+        if (n == 0) {
+            break;
+        }
+        got += static_cast<std::size_t>(n);
+    }
+    ::close(fd);
+
+    content.resize(got);
+    return ReadResult::ok(std::move(content));
+}
+
+Result<std::uint64_t> MedicalStorage::size(const std::string& relativePath) const {
+    if (!isSafeRelativePath(relativePath)) {
+        return Result<std::uint64_t>::fail(Status::InvalidArgument, "unsafe path: " + relativePath);
+    }
+    struct stat info = {};
+    if (::lstat((basePath_ + "/" + relativePath).c_str(), &info) != 0) {
+        return Result<std::uint64_t>::fail(statusFromErrno(errno), std::strerror(errno));
+    }
+    if (!S_ISREG(info.st_mode)) {
+        return Result<std::uint64_t>::fail(Status::InvalidArgument,
+                                           relativePath + " is not a regular file");
+    }
+    return Result<std::uint64_t>::ok(static_cast<std::uint64_t>(info.st_size));
 }
 
 Result<std::string> MedicalStorage::readString(const std::string& relativePath) const {

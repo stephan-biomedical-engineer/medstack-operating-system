@@ -236,4 +236,48 @@ void testStorage() {
         CHECK_STATUS(store->writeString("a/b/c/record.json", "{}"), Status::Ok);
         CHECK(store->exists("a/b/c/record.json"));
     }
+
+    medtest::section("MedicalStorage - leitura por faixa");
+    {
+        // The derived clinical file reads a session record in pieces, because
+        // hours of acquisition do not fit in memory. Each piece has to be the
+        // bytes at that place, and the end of the file has to read as such,
+        // not as an error.
+        TempDir dir;
+        StorageConfig config;
+        config.root = dir.path();
+        config.nameSpace = "r";
+        config.requireEncryptedBacking = false;
+        std::unique_ptr<MedicalStorage> store = MedicalStorage::open(config).take();
+        CHECK(store != nullptr);
+        if (store) {
+            std::vector<std::uint8_t> content(100000);
+            for (std::size_t i = 0; i < content.size(); ++i) {
+                content[i] = static_cast<std::uint8_t>((i * 7 + i / 256) & 0xFF);
+            }
+            CHECK_STATUS(store->write("raw.bin", content.data(), content.size()), Status::Ok);
+
+            Result<std::uint64_t> size = store->size("raw.bin");
+            CHECK(size.isOk());
+            CHECK_EQ(static_cast<long long>(size.value()), 100000LL);
+
+            Result<std::vector<std::uint8_t>> middle = store->read("raw.bin", 65530, 20);
+            CHECK(middle.isOk());
+            CHECK(middle.value() ==
+                  std::vector<std::uint8_t>(content.begin() + 65530, content.begin() + 65550));
+
+            Result<std::vector<std::uint8_t>> tail = store->read("raw.bin", 99990, 64);
+            CHECK(tail.isOk());
+            CHECK_EQ(static_cast<long long>(tail.value().size()), 10LL);
+            CHECK(tail.value() == std::vector<std::uint8_t>(content.end() - 10, content.end()));
+
+            Result<std::vector<std::uint8_t>> past = store->read("raw.bin", 100000, 64);
+            CHECK(past.isOk());
+            CHECK(past.value().empty());
+
+            CHECK_STATUS(store->read("../escape", 0, 4).status(), Status::InvalidArgument);
+            CHECK(!store->size("nada.bin").isOk());
+            CHECK_STATUS(store->size("").status(), Status::InvalidArgument);
+        }
+    }
 }
