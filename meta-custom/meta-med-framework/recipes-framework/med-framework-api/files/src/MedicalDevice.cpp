@@ -836,15 +836,25 @@ private:
 ///
 /// Everything this driver knows is the IIO ABI - a character device, a buffer,
 /// scan elements, a scale, a sampling frequency - and nothing about the part
-/// behind it. The scale in particular is READ from the kernel and never
-/// computed here: a conversion constant in userspace would be a datasheet
-/// leaking two layers above the only one allowed to know it.
+/// behind it. No conversion constant lives here: a datasheet number in
+/// userspace would be leaking two layers above the only one allowed to know
+/// it. The scale is the kernel's, with one limit that was found on hardware:
+/// the kernel prints it as short decimal text, and samples scaled by that text
+/// are off the converter's grid (see iio::exactStep). A configuration that
+/// declares the range and the resolution gets the exact step, and the kernel's
+/// text becomes the check on that declaration instead of the multiplier.
 ///
 /// Options are the names of the device's own sysfs attributes, written and
 /// then read back ("hardwaregain = 24"). Which attributes a device has is
 /// decided by its kernel driver, and the configuration that names them is the
 /// application's - so a front-end with a private attribute is configured
 /// without this file learning its name.
+///
+/// Two options are not attributes and are never written to the device. They
+/// are the same two words the simulated converter takes, and they go together:
+///
+///   full_scale       the device reads +-this, in microvolts
+///   resolution_bits  over this many bits, so a step is full_scale / 2^(bits-1)
 ///
 /// No libiio. The framework has exactly two external dependencies and that is
 /// a property of the architecture, not an accident of packaging: everything
@@ -854,7 +864,34 @@ public:
     static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config) {
         using DeviceResult = Result<std::unique_ptr<MedicalDevice>>;
 
+        double fullScale = 0.0;
+        unsigned int resolutionBits = 0;
         for (const std::pair<const std::string, std::string>& entry : config.driverOptions) {
+            double number = 0.0;
+            if (entry.first == "full_scale") {
+                if (!parseNumber(entry.second, number)) {
+                    return DeviceResult::fail(Status::InvalidArgument,
+                                              "full_scale is not a number");
+                }
+                if (number <= 0.0) {
+                    return DeviceResult::fail(Status::OutOfRange,
+                                              "full_scale must be positive");
+                }
+                fullScale = number;
+                continue;
+            }
+            if (entry.first == "resolution_bits") {
+                if (!parseNumber(entry.second, number) || number != std::floor(number)) {
+                    return DeviceResult::fail(Status::InvalidArgument,
+                                              "resolution_bits is not a whole number");
+                }
+                if (number < 2.0 || number > 32.0) {
+                    return DeviceResult::fail(Status::OutOfRange,
+                                              "resolution_bits must be between 2 and 32");
+                }
+                resolutionBits = static_cast<unsigned int>(number);
+                continue;
+            }
             // An attribute NAME, never a path: no '/', no '.', so an option
             // can reach this device's own directory and nothing else in sysfs.
             if (!isAttributeName(entry.first)) {
@@ -876,7 +913,20 @@ public:
             }
         }
 
-        return DeviceResult::ok(std::unique_ptr<MedicalDevice>(new IioDevice(config)));
+        // A range without a resolution, or the reverse, declares no step.
+        if ((fullScale > 0.0) != (resolutionBits > 0)) {
+            return DeviceResult::fail(Status::InvalidArgument,
+                                      "full_scale and resolution_bits declare a step "
+                                      "together; one was given without the other");
+        }
+
+        std::unique_ptr<IioDevice> device(new IioDevice(config));
+        if (resolutionBits > 0) {
+            device->declaredBits_ = resolutionBits;
+            device->declaredStep_ =
+                fullScale / std::ldexp(1.0, static_cast<int>(resolutionBits) - 1);
+        }
+        return DeviceResult::ok(std::unique_ptr<MedicalDevice>(std::move(device)));
     }
 
     ~IioDevice() override { stop(); }
@@ -1151,6 +1201,9 @@ private:
         // configured correctly from a map, and that belongs fixed in the
         // driver rather than papered over here.
         for (const std::pair<const std::string, std::string>& entry : config_.driverOptions) {
+            if (entry.first == "full_scale" || entry.first == "resolution_bits") {
+                continue;
+            }
             if (::access(attributePath(entry.first).c_str(), F_OK) != 0) {
                 lastError_ = "the front-end has no attribute '" + entry.first + "'";
                 return Status::NotSupported;
@@ -1192,9 +1245,8 @@ private:
             }
         }
 
-        // Scale, read from the kernel and never computed. in_voltage0_scale is
-        // millivolts per LSB; the frames this framework hands out are in
-        // microvolts.
+        // Scale. in_voltage0_scale is millivolts per LSB, as decimal text; the
+        // frames this framework hands out are in microvolts.
         std::string scaleText;
         if (!readSysfs("in_voltage0_scale", scaleText)) {
             lastError_ = "the front-end does not publish a scale, so its samples "
@@ -1205,6 +1257,19 @@ private:
         if (!(scaleMicrovoltsPerLsb_ > 0.0)) {
             lastError_ = "the front-end published a scale of '" + scaleText + "'";
             return Status::IntegrityError;
+        }
+
+        // With a declared step the text above is evidence, not the multiplier:
+        // the declaration is exact and the text is not, and the two have to
+        // agree as far as the text goes. A gain the configuration and the
+        // device understand differently stops here.
+        if (declaredStep_ > 0.0) {
+            const Result<double> exact = iio::exactStep(declaredStep_, scaleText);
+            if (!exact.isOk()) {
+                lastError_ = exact.message();
+                return exact.status();
+            }
+            scaleMicrovoltsPerLsb_ = exact.value();
         }
 
         return Status::Ok;
@@ -1285,6 +1350,11 @@ private:
             lastError_ = "unsupported sample format '" + type + "'";
             return Status::NotSupported;
         }
+        if (declaredBits_ != 0 && realBits != declaredBits_) {
+            lastError_ = "the configuration declares " + std::to_string(declaredBits_) +
+                         " bits and the front-end converts " + std::to_string(realBits);
+            return Status::IntegrityError;
+        }
         realBits_ = realBits;
 
         const std::size_t voltageBytes =
@@ -1358,6 +1428,8 @@ private:
     std::string chipName_;
     int fd_ = -1;
     double scaleMicrovoltsPerLsb_ = 0.0;
+    double declaredStep_ = 0.0;
+    unsigned int declaredBits_ = 0;
     unsigned int realBits_ = 24;
     bool hasTimestamp_ = false;
     std::size_t scanSize_ = 0;
@@ -1386,6 +1458,51 @@ const bool kBuiltinDriversRegistered = [] {
 }();
 
 }  // namespace
+
+namespace iio {
+
+Result<double> exactStep(double declaredStep, const std::string& publishedScale) {
+    // A plain positive decimal and nothing else, because the precision of the
+    // text is read off its digits: an exponent or a sign would make "the last
+    // digit printed" mean something this function does not compute.
+    std::size_t decimals = 0;
+    bool seenPoint = false;
+    for (const char c : publishedScale) {
+        if (c == '.' && !seenPoint) {
+            seenPoint = true;
+        } else if (c >= '0' && c <= '9') {
+            decimals += seenPoint ? 1U : 0U;
+        } else {
+            return Result<double>::fail(Status::IntegrityError,
+                                        "the front-end published a scale of '" +
+                                            publishedScale + "'");
+        }
+    }
+    double published = 0.0;
+    if (!parseNumber(publishedScale, published) || !(published > 0.0) ||
+        !(declaredStep > 0.0)) {
+        return Result<double>::fail(Status::IntegrityError,
+                                    "the front-end published a scale of '" + publishedScale +
+                                        "'");
+    }
+
+    // Milli-units to micro-units, and one unit of the last digit printed. The
+    // text may be truncated or rounded; either way it is within that of the
+    // number it came from.
+    const double publishedMicro = published * 1000.0;
+    const double lastDigit = 1000.0 * std::pow(10.0, -static_cast<double>(decimals));
+    if (std::fabs(publishedMicro - declaredStep) > lastDigit * (1.0 + 1e-9)) {
+        std::ostringstream reason;
+        reason.precision(10);
+        reason << "the configuration declares a step of " << declaredStep * 1000.0
+               << " nano-units and the front-end publishes " << publishedMicro * 1000.0
+               << ": the two do not describe the same converter setting";
+        return Result<double>::fail(Status::IntegrityError, reason.str());
+    }
+    return Result<double>::ok(declaredStep);
+}
+
+}  // namespace iio
 
 bool MedicalDeviceFactory::registerDriver(const std::string& name, Constructor constructor) {
     if (name.empty() || !constructor) {

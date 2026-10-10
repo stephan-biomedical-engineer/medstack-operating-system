@@ -15,8 +15,8 @@
 > com os pinos e o `fdt apply` no bootcmd).
 >
 > Executado inteiro, com o link `amp`, em 2026-10-09: os valores esperados da Fase 4 vêm dessa
-> execução. Com o link `usb` a Fase 4 ainda **não** foi executada pelo serviço na placa, e o critério
-> vem do datasheet (ver a tabela da Fase 4).
+> execução. Com o link `usb` a Fase 4 foi executada em 2026-10-10 (`BRINGUP_AFE.md` §6.8), e
+> encontrou um defeito que só ela podia ver: o arquivo clínico era recusado em toda sessão do link.
 
 ---
 
@@ -93,6 +93,16 @@ make stm32 KEY=development KERNEL=med LINK=usb
 
 O primeiro é o `amp` (o padrão). O segundo é o `usb`.
 
+**O `KEY=development` não é opcional.** Sem ele o perfil cai em `tpm2`, que recusa provisionar o
+`/data`, e a imagem constrói verde e nunca adquire. Para conferir no artefato:
+`grep '^KEY_SOURCE' build/tmp-glibc/work/stm32mp25_disco-med-linux/med-image-eeg/1.0/rootfs/usr/libexec/medplatform/med-data-provision.sh`.
+
+Se a placa já roda uma imagem do **mesmo link e do mesmo commit do `linux-med`** e só o espaço de
+usuário mudou, o caminho mais curto é um bundle em vez de regravar o cartão (o `/data` fica, e um
+slot que não adquire volta sozinho): `make bundle BOARD=stm32 KEY=development KERNEL=med LINK=usb`,
+copiar com `ssh $B 'cat > /run/update.raucb' < ...raucb`, conferir o sha256 dos dois lados,
+`rauc install /run/update.raucb` e `reboot`. O slot novo gera outra chave SSH.
+
 ### 1.3 Conferir o manifesto — obrigatório
 
 **Os dois links geram o mesmo nome de arquivo.** O último build vence sem aviso. Em 2026-10-09
@@ -168,6 +178,9 @@ não está documentado se a ponte e o header dividem as linhas SPI do conversor.
 
 No `usb`, use cabo **de dados, curto**. Um cabo ruim dá `error -71` na enumeração e nada mais
 (`ROTEIRO_BANCADA_AFE.md`).
+
+No `usb`, plugue a ponte **antes** de ligar a placa. Plugada depois, a aquisição sobe mas o slot
+não é confirmado (`BRINGUP_AFE.md` §6.8), e cada boot assim gasta uma tentativa.
 
 Ligue a placa. O boot até a aquisição leva ~13 s, ou ~23 s no primeiro boot de um cartão novo
 (ele provisiona o `/data`).
@@ -298,7 +311,8 @@ ssh $B 'mkdir -p /run/med-bench && sed -e "s/^afe.test_signal = off/afe.test_sig
 ```
 
 Esperado: `afe.test_signal = internal`, `device.option.input_mux = test_signal` e
-`device.option.test_signal = 1x_slow`.
+`device.option.test_signal = 1x_slow`. A linha `afe.lead_off_detection = true` também aparece e
+não muda.
 
 **Se alguma linha não mudou, pare.** O `sed` não casou com o arquivo instalado, e o teste
 gravaria a config de fábrica achando que é a de teste.
@@ -389,21 +403,26 @@ Em `$D` ficam `overview.png`, `zoom-3s.png`, `samples_uV.csv` (tempo e 8 canais 
 
 **Critério de aprovação da Fase 4:**
 
-| Medida | Critério | `amp`, 2026-10-09 | `usb` |
+| Medida | Critério | `amp`, 2026-10-09 | `usb`, 2026-10-10 |
 |---|---|---|---|
-| lacunas / CRC errado | 0 / 0 | 0 / 0 | não medido pelo serviço |
-| `dropped` no `closed.json` | 0 | 0 | não medido |
-| amplitude, cada canal | 1875 µV ±20% (1500–2250) | 1859,3–1860,1 µV | não medido |
-| período, cada canal | 256 ± 2 conversões | 256,00 | não medido |
-| BDF contra `raw.bin` | 0 códigos diferentes, selo `OK` | 0 em 85.232 | não medido |
-| veredito do `converter` | `VEREDITO: OK` | OK | não medido |
+| lacunas / CRC errado | 0 / 0 | 0 / 0 | 0 / 0 |
+| `dropped` no `closed.json` | 0 | 0 | 0 |
+| amplitude, cada canal | 1875 µV ±20% (1500–2250) | 1859,3–1860,1 µV | 1859,3–1860,1 µV |
+| período, cada canal | 256 ± 2 conversões | 256,00 | 255,78 e 256,09 (duas sessões) |
+| BDF contra `raw.bin` | 0 códigos diferentes, selo `OK` | 0 em 85.232 | 0 em 182.000 |
+| veredito do `converter` | `VEREDITO: OK` | OK | OK |
+
+A coluna `usb` é da imagem com a correção da escala (`BRINGUP_AFE.md` §6.8). Numa imagem anterior
+a ela o `record.bdf` não existe e o `export.json` da sessão diz `refused`.
 
 Ao ler o `converter` no `usb`, três diferenças:
 
 - **A linha "taxa pelo relógio do M33" não é do M33.** No `usb`, o carimbo de cada quadro é a hora
   em que o host foi avisado. A linha mede o relógio do Linux e o jitter do USB, não o conversor.
 - **A perda do link aparece como amostras que faltam, não como lacuna.** Ela é contada pelo driver
-  (`lost_samples`), e os quadros continuam com a sequência contínua (`BRINGUP_AFE.md` §6.5). Com o
+  (`lost_samples`), e os quadros continuam com a sequência contínua (`BRINGUP_AFE.md` §6.5). **Só
+  se o GP6 da ponte contar bordas**: com ele provisionado para o LED, o `dmesg` diz `this link
+  cannot report lost samples`, e o período é o único indício. Com o
   governador `performance` ela foi ≤ 0,003% em 30 min. Uma perda maior desloca as bordas e pode
   tirar o período da tolerância de ±2.
 - **O link entrega no máximo 250 leituras/s**, em qualquer ODR. Esta fase usa 250 SPS. Acima disso
@@ -556,6 +575,8 @@ ainda derivando 1,4 µV/s.
 | 2, `amp` | `m33` não `running` | firmware ausente: a imagem não é `amp` | §1.1 e §1.3 |
 | 2, `usb` | sem `/dev/med-afe-eeg0` e sem linha `mcp2210` no `dmesg` | a imagem não é `usb` (sem os módulos), ou a ponte não enumerou | §1.1. A ponte aparece no barramento mesmo sem driver: `cat /sys/bus/usb/devices/*/idVendor` deve listar `04d8` |
 | 2, `usb` | `error -71` no `dmesg` | cabo USB | trocar por um cabo de dados curto |
+| 3, `usb` | serviço ativo, `NRestarts` > 0 e `BOOT_<slot>_LEFT` abaixo de 3 | a ponte foi plugada depois do boot: a aquisição subiu no reinício e o slot não foi confirmado | `systemctl start rauc-mark-good.service`, e conferir `fw_printenv`. **Não reiniciar antes** |
+| 4 | `VEREDITO: OK` mas sem `record.bdf` | o exportador recusou a sessão | `cat $S/export.json` diz o motivo. "not a whole number of steps" numa imagem `usb`/`spi` é a escala de `BRINGUP_AFE.md` §6.8: a imagem é anterior à correção |
 | 2, `usb` | `mcp2210 ... ready` mas sem `self test passed` | o conversor não respondeu pela ponte | no PC, o `scripts/afe-alive.py` separa "chip morto" de "DOUT não chega à MISO" (`ROTEIRO_BANCADA_AFE.md`) |
 | 3 | `ActiveState=activating` e `NRestarts` subindo | o front-end falha no autoteste: laço de 2,5 s, que **nunca** chega a `failed` | ver o motivo com `journalctl -u eeg-acquisition -b -o export \| grep MED_DETAIL`. Parar o laço com `systemctl stop eeg-acquisition`, e **não** reiniciar a placa em série (regra 3 do §0) |
 | 3 | `Booted from: rootfs.1 (B)` sem ninguém ter instalado nada | fallback: três boots sem aquisição esgotaram o slot A | esperado, com front-end ausente. Corrigida a causa, a placa volta sozinha |

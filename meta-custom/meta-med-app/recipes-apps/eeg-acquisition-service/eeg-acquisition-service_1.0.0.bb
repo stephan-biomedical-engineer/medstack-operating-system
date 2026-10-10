@@ -221,6 +221,15 @@ python do_derive_device_options() {
             # makes the driver refuse the option and the service refuse to
             # start, which is the right outcome for a montage nobody applied.
             ('montage', montage),
+            # Not attributes, and never written to the device: the range and
+            # the resolution, from which the framework takes the exact step.
+            # The kernel publishes its scale as short text (five significant
+            # digits for this converter), and a record scaled by that text is
+            # off the converter's grid - the clinical file's converter refused
+            # every session of this link for it, on the board, on 2026-10-10.
+            # The kernel's text is still read, as the check on these two.
+            ('full_scale', compact(reference_uv / gain)),
+            ('resolution_bits', str(resolution_bits)),
         ]
 
     else:

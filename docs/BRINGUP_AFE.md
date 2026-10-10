@@ -29,6 +29,7 @@
 | Amostra real adquirida | **sim, pelo link `usb`**: no PC (30 min, §6.3) e na placa (30 min, §6.5) |
 | Link `spi` (`DRDY` como interrupção) | **nunca rodou** |
 | Link `amp` (Cortex-M33) | **nenhuma amostra**: não existe firmware |
+| Arquivo clínico pelo link `usb` | **sim, desde 2026-10-10**: antes, toda sessão era recusada pela escala em texto do kernel (§6.8) |
 | Vazão do link `usb` | **250 leituras/s**, em qualquer ODR e qualquer clock SPI; a 16 kSPS, 1,56% do que o conversor produz (§6.7) |
 
 **Os drivers foram validados?** Funcionam em silício, no PC e no alvo, pelo link `usb` a 250 SPS.
@@ -995,6 +996,106 @@ o serviço parado, deu **28–29 códigos**, perto dos 23 do PC. Os 49–205 ant
 no boot e no replug, enquanto o serviço tentava partir. A hipótese nova, ao lado da alimentação: a
 atividade concorrente durante o autoteste. Não foi testada.
 
+### 6.8 A Fase 4 pelo serviço, e a escala que o kernel publica em texto · **2026-10-10, na placa**
+
+A Fase 4 do `ROTEIRO_PLACA.md` (§7: o gerador interno gravado pelo serviço real), pela primeira vez
+com o link `usb`. Imagem `make stm32 KEY=development KERNEL=med LINK=usb`, repositório em `47aa278`
+(hoje `65bb76a`) mais a correção desta seção, `linux-med` em `19187a49b91a` (hoje `983c5cf63b54`,
+§12.7; o primeiro kernel com o atributo
+`montage` **carregado**: `cat /run/med-afe/eeg0/montage` devolveu `bipolar`). Chave SRB1 em GNDA.
+
+**O sinal passou, e o arquivo clínico foi recusado.** Sessão `2026-10-10T19:20:20.448Z`, 314 s,
+5613 quadros:
+
+| Medida | Critério | Medido |
+|---|---|---|
+| lacunas / CRC errado / `dropped` | 0 / 0 / 0 | 0 / 0 / 0 |
+| amplitude, 8 canais | 1875 µV ±20% | 1859,2–1860,0 µV |
+| período, 8 canais | 256 ± 2 conversões | 256,09 |
+| `record.bdf` | existe, selo confere | **não existe**: `clinical file refused` |
+
+O motivo, do `export.json`: `sample of frame 1 (1852920.000000 nV) is not a whole number of steps
+of 22.351742 nV`. A sessão de fábrica que rodou antes (entradas abertas) foi recusada pelo mesmo
+motivo. **Nenhuma sessão do link `usb` virava arquivo clínico**, e isso nunca tinha sido visto
+porque a Fase 4 nunca tinha rodado neste link.
+
+**A causa.** O driver `iio` do framework multiplicava cada código pela escala lida de
+`in_voltage0_scale`. O kernel publica esse número como texto decimal em milivolts, com nove casas:
+`0.000022351` (lido na placa). São cinco algarismos significativos de um passo que vale
+22,3517418 nV. As amostras gravadas ficavam numa grade de 22,351 nV: 1852920 ÷ 22,351 = 82900,99 e
+644849 ÷ 22,351 = 28851,01, inteiros; pelo passo declarado, 82898,24 e 28850,06. O erro é de
+0,0033% na amplitude, e passa da tolerância do exportador (0,5 nV) acima de ~674 códigos, ou
+~15 µV. O exportador fez o que devia. No `amp` não acontece, porque as amostras chegam na grade
+exata; os testes de host não viam, porque o `simulated` quantiza na grade exata e nenhum deles
+passava por uma escala lida como texto.
+
+**A correção** (framework e receita do serviço; nenhuma linha no kernel). O driver `iio` aceita
+`full_scale` e `resolution_bits`, as mesmas duas palavras do `simulated`, derivadas no build pelo
+`do_derive_device_options` para `spi` e `usb`. Não são atributos e nunca são escritas no
+dispositivo. Com elas o passo é `full_scale / 2^(bits−1)`, exato, e o texto do kernel passa de
+multiplicador a conferência (`med::iio::exactStep`): os dois têm de concordar até uma unidade do
+último dígito impresso, e os bits declarados têm de ser os do `scan_elements/..._type`; senão o
+serviço não inicia. A tolerância do exportador não foi tocada.
+
+| Verificação | Resultado |
+|---|---|
+| `make test` | framework 1472, produtor do M33 211, exportador 82; 0 falhas |
+| injeção: conferência com a tolerância desligada | 5 falhas, todas na seção nova de `test_device.cpp`, nenhuma outra |
+| `eeg.conf` selado da imagem | `device.option.full_scale = 187500`, `device.option.resolution_bits = 24`; sidecar confere |
+| `make check` no QEMU (`make qemu KERNEL=med`) | **25/26 e, repetida em seguida, 26/26**. A falha da primeira foi `acq-sample-rate` (`RATE_LOW`), logo depois do build, com a carga do host acima de 3. A causa não foi estabelecida: uma falha e uma aprovação na mesma imagem dizem que a verificação oscila, não por quê. O driver em uso ali é o `simulated`, que a correção não toca |
+
+**Entregue por RAUC**, não por regravação: a mudança é só de espaço de usuário e o kernel é o
+mesmo commit, então os módulos do slot novo carregam no kernel do `med-boot`. `make bundle
+BOARD=stm32 KEY=development KERNEL=med LINK=usb`, `rauc install` → `BOOT_ORDER=B A` → `reboot` →
+`Booted from: rootfs.1 (B)`, `NRestarts=0`, `BOOT_B_LEFT=3` depois do boot. O `/data` atravessou a
+troca com as sessões recusadas dentro.
+
+**Depois da correção**, sessão `2026-10-10T20:34:45.245Z`, 91 s, 1625 quadros:
+
+| Medida | Critério | Medido |
+|---|---|---|
+| lacunas / CRC errado / `dropped` | 0 / 0 / 0 | 0 / 0 / 0 |
+| amplitude, 8 canais | 1875 µV ±20% | 1859,3–1860,1 µV (os números do `amp`, até a última casa) |
+| período, 8 canais | 256 ± 2 conversões | 255,78 |
+| BDF contra `raw.bin` | 0 códigos diferentes, selo `OK` | **0 em 182.000**; pior resíduo 0,500 nV |
+| sessão de fábrica (`20:30:26.768Z`, entradas abertas) | convertida | `converted`, 4589 registros |
+
+As três sessões gravadas pela imagem anterior continuam `refused`: a recusa é uma declaração sobre
+o registro e é definitiva.
+
+**O que isto não diz.**
+
+- **Que o link não perdeu amostras.** O driver avisou no probe: `GP6 is not provisioned to count
+  edges; no counter, and this link cannot report lost samples`. O GP6 está provisionado como saída
+  para o LED (§2.3.2), então `lost_samples` não existe nesta configuração. O período médio deu
+  256,09 numa sessão e 255,78 na outra, dos dois lados de 256, e houve intervalos entre quadros de
+  até 212 ms e 135 ms (nominal 56). Sem o contador não se separa perda de leitura repetida.
+- **Que a conferência pega qualquer discordância de escala.** Ela é tão fina quanto o texto: cinco
+  algarismos. Um ganho diferente (fator 2) é recusado; uma diferença abaixo de 0,0045% não aparece.
+- **Que o caminho do driver foi testado no host.** Ele lê `/sys` direto. Os testes cobrem a função
+  de conferência e a validação das opções; que o driver usa o passo exato ao converter, quem mostra
+  é o `record.bdf` desta seção.
+- **Nada sobre o link `spi`**, que recebe as mesmas duas opções e nunca rodou.
+- O resíduo de 0,500 nV é o arredondamento do quadro para nanovolts inteiros, no limite exato da
+  tolerância: o formato guarda nV, não códigos, e não há folga.
+
+**Dois achados do mesmo dia, sem correção.**
+
+1. **Plugar a ponte depois do boot deixa o slot sem confirmar, com a aquisição funcionando.** A
+   ponte entrou aos 34,7 s; o serviço fez seis voltas (`NRestarts=6`) e subiu. Mas
+   `BOOT_A_LEFT` ficou em 1 depois de dois boots assim: o `boot-complete.target` exige a aquisição,
+   a primeira tentativa falhou, e o systemd não refaz o alvo quando o serviço sobe no reinício,
+   então o `rauc-mark-good` não roda. `systemctl start rauc-mark-good.service` confirmou
+   (`BOOT_A_LEFT=3`). É a regra "a política não distingue software quebrado de front-end ausente"
+   com um caso novo: o front-end que chega atrasado. A leitura do mecanismo veio do comportamento
+   e das unidades, não do journal do alvo.
+2. **`led_gpio=6` no `med-afe-modprobe` sem o parâmetro no módulo.** O código do LED está só na
+   árvore de trabalho do `linux-med`; o kernel registrou `hid_mcp2210: unknown parameter 'led_gpio'
+   ignored` e seguiu. Inofensivo, e é a receita à frente do driver.
+
+O ruído do autoteste nos dois boots: 169 códigos (ponte plugada com o serviço em laço) e 48 (ponte
+presente desde o início). Coerente com a hipótese da §6.7, e ainda não é um teste dela.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
@@ -1379,6 +1480,28 @@ ST o usou. Uma pendência que deixa de importar é melhor que uma resolvida.
 
 ---
 
+### 12.7 Os hashes do `linux-med` mudaram em 2026-10-10
+
+As mensagens de seis commits ainda não publicados foram reescritas (um trailer removido; árvores,
+autoria e datas iguais), o que troca o hash deles. Este documento, o `BRINGUP_STM32MP2.md`, o
+`RESULTS.md` e o `ROTEIRO_BANCADA_AFE.md` **continuam citando os hashes antigos de propósito**:
+foram eles que entraram nos kernels medidos, e uma string como `6.6.129-gb8dbcb083402` é o que a
+placa imprimiu.
+
+| Citado nos registros | Hoje na árvore | Branch |
+|---|---|---|
+| `d658fd3ac242` | `c904353be66a` | `feature/ads1299-mcp2210-driver` |
+| `d982b35277a8` | `e577cc080449` | `feature/ads1299-mcp2210-driver` |
+| `a15bc5ed68c3` | `6d8312902fca` | `feature/ads1299-mcp2210-driver` |
+| `e9f382da54ba` | `2d1f7fb7efc1` | `board/medplatform-afe` |
+| `b8dbcb083402` | `c2291fd29166` | `board/medplatform-afe` |
+| `19187a49b91a` | `983c5cf63b54` | `board/medplatform-afe` |
+
+**Consequência na bancada**: o kernel no `med-boot` do cartão é o `6.6.129-g19187a49b91a`, e um
+build feito depois desta data produz módulos para `-g983c5cf63b54`. Um bundle novo instalaria um
+rootfs cujos módulos o kernel em execução recusa. A próxima entrega para a placa é por
+**regravação do cartão**, não por `rauc install`.
+
 ## 13. As regras que este trabalho acrescenta
 
 1. **Um defeito de posição de campo que preserva o valor de reset é invisível a toda verificação de
@@ -1413,3 +1536,12 @@ ST o usou. Uma pendência que deixa de importar é melhor que uma resolvida.
     Um símbolo sem prompt no `Kconfig` não pode ser ligado por fragmento nenhum; um símbolo que **não
     existe** naquela árvore é descartado em silêncio. A primeira é um mecanismo errado, a segunda é
     conteúdo no lugar errado. (D5)
+13. **Um número que atravessa uma interface de texto chega com a precisão do texto.** A escala do
+    IIO tem nove casas em milivolts, o que para um passo de 22 nV são cinco algarismos. Quem
+    multiplica por ela grava numa grade que não é a do conversor, com um erro pequeno demais para
+    qualquer critério de amplitude e grande demais para reconstruir códigos. Um valor exato vem de
+    uma declaração; o texto serve para conferi-la. (§6.8)
+14. **Uma fase que nunca rodou num link não está aprovada nele por ter rodado no outro.** A Fase 4
+    era "não medido" no `usb` havia uma semana, com 30 min de aquisição contínua registrados no
+    mesmo link. O defeito estava no único passo que essas medidas não davam: derivar o arquivo.
+    (§6.8)

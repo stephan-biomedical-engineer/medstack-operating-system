@@ -265,4 +265,25 @@ std::uint32_t crc32(const void* data, std::size_t length) noexcept;
 
 }  // namespace amp
 
+namespace iio {
+
+/// The exact quantisation step of an industrial I/O device, in micro-units.
+///
+/// A device publishes its scale as decimal text in milli-units per step, and
+/// the text is short: a 24-bit converter at +-187.5 mV prints "0.000022351",
+/// five significant digits of a step that is 22.3517418 nV. Samples multiplied
+/// by the printed number sit on a grid that is not the converter's, and a
+/// record on that grid cannot be turned back into codes - which is what a
+/// clinical file is made of.
+///
+/// So the step comes from the configuration (`declaredStep`, micro-units) and
+/// the device's text is what it is checked against: the two must agree to one
+/// unit of the last digit the device printed. Returns `declaredStep` when they
+/// do, IntegrityError when they do not or when the text is not a plain
+/// positive decimal. The check is as sharp as the text is long, and no
+/// sharper: a disagreement below the printed precision cannot be seen here.
+Result<double> exactStep(double declaredStep, const std::string& publishedScale);
+
+}  // namespace iio
+
 }  // namespace med

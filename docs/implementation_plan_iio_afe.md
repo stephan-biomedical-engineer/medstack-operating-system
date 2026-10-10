@@ -646,7 +646,7 @@ datasheet ou um vocabulário de classe de dispositivo atravessa a camada sem car
 
 | Onde | O quê |
 |---|---|
-| `MedicalDevice.cpp` | nenhum vocabulário de classe. `simulated`: `unit`, `full_scale`, `resolution_bits`, `noise_rms`, `tones`, `square`; `rpmsg`: nada, repassa e só confere se cabe na `ControlMessage`; `iio`: nomes de atributo sysfs (sem `/` nem `.`, `sampling_frequency` reservado), escritos e lidos de volta |
+| `MedicalDevice.cpp` | nenhum vocabulário de classe. `simulated`: `unit`, `full_scale`, `resolution_bits`, `noise_rms`, `tones`, `square`; `rpmsg`: nada, repassa e só confere se cabe na `ControlMessage`; `iio`: nomes de atributo sysfs (sem `/` nem `.`, `sampling_frequency` reservado), escritos e lidos de volta; desde 2026-10-10 também `full_scale` e `resolution_bits`, que não são atributos e dão o passo exato, com a escala do kernel como conferência (`BRINGUP_AFE.md` §6.8) |
 | `IioDevice::selfTest()` | identidade e canais com escala — só o que a ABI do IIO sabe dizer. Dispositivo ausente é reportado como possivelmente recusado pelo driver, com a causa no log do kernel |
 | `ti-ads1299.c` | `ads1299_self_test()` **no probe**: gerador interno em todas as entradas (amplitude em *códigos*, `ganho·2²³/1200`, independente de V<sub>REF</sub>, ±20%) e entradas em curto (≤ 10 µV p-p). Reprovou, não registra. É a convenção do IIO (`adis_self_test`, `ak8974_selftest`) e **não cria ABI** |
 | `eeg.conf` | o bloco `afe.*` continua sendo a prescrição, na língua da aplicação |

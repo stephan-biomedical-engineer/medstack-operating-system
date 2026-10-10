@@ -169,9 +169,14 @@ after a part: `simulated`, `rpmsg` (frames from a real-time co-processor) and `i
 Linux kernel drives, through the industrial I/O ABI). The `iio` driver was written against `open`,
 `read`, `poll` and sysfs text files rather than against `libiio`, so the framework still has exactly
 two external dependencies — `libsystemd` and `libcrypto` — which is a property the thesis claims and
-a third entry would end. The conversion scale is **read from the kernel** and never computed in
-userspace: a constant like "22.35 nV per LSB" in this layer would be a converter's datasheet leaking
-two layers above the only one allowed to know it.
+a third entry would end. No conversion constant lives in userspace: a number like "22.35 nV per
+LSB" in this layer would be a converter's datasheet leaking two layers above the only one allowed to
+know it. The scale is the kernel's, with a limit found on the board on 2026-10-10: the kernel
+publishes it as decimal text with five significant digits, and a record scaled by that text is off
+the converter's grid, so the clinical file was refused for every session of the `usb` link. A
+configuration now declares `full_scale` and `resolution_bits` (the simulated converter's two words,
+derived at build time), the step is exact, and the kernel's text is the check on the declaration
+rather than the multiplier (`med::iio::exactStep`, `BRINGUP_AFE.md` §6.8).
 
 Two things travel with a front-end and are worth knowing:
 

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -331,6 +332,87 @@ void testDevice() {
         valid.driverOptions["hardwaregain"] = "24";
         valid.driverOptions["test_signal"] = "off";
         CHECK(MedicalDeviceFactory::create(valid).isOk());
+    }
+
+    medtest::section("Driver iio - o passo exato, e a escala do kernel como conferência");
+
+    {
+        // Found on the board, 2026-10-10: a 24-bit converter at +-187500 uV
+        // publishes "0.000022351" mV per step, and every sample scaled by that
+        // text was refused by the clinical file's converter, because the step
+        // is 22.3517418 nV and the text says 22.351.
+        const double step = 187500.0 / 8388608.0;
+        const char* const observed = "0.000022351";
+
+        Result<double> exact = iio::exactStep(step, observed);
+        CHECK_MSG(exact.isOk(), exact.message());
+        CHECK_EQ(exact.value(), step);
+
+        // The defect itself, in numbers: the code the board recorded as
+        // 1852920 nV. On the exact grid it is a whole number of steps to within
+        // the half nanovolt the record's rounding allows; on the printed grid
+        // it is 61 nV away, which is what the refusal measured.
+        const double code = 82901.0;
+        const double stepNv = step * 1000.0;
+        const double onExact = std::round(code * stepNv);
+        CHECK(std::fabs(onExact - std::round(onExact / stepNv) * stepNv) <= 0.5);
+        const double onPrinted = std::round(code * std::strtod(observed, nullptr) * 1.0e6);
+        CHECK_EQ(onPrinted, 1852920.0);
+        CHECK(std::fabs(onPrinted - std::round(onPrinted / stepNv) * stepNv) > 0.5);
+
+        // Rounded instead of truncated is the same number to the same digit.
+        CHECK(iio::exactStep(step, "0.000022352").isOk());
+        // The configuration and the device disagreeing on the gain: 12 and 6
+        // against a declared 24. This is what the check exists to stop.
+        CHECK_STATUS(iio::exactStep(step, "0.000044703").status(), Status::IntegrityError);
+        CHECK_STATUS(iio::exactStep(step, "0.000089406").status(), Status::IntegrityError);
+        // Two units of the last digit away is already a different setting.
+        CHECK_STATUS(iio::exactStep(step, "0.000022349").status(), Status::IntegrityError);
+        CHECK_STATUS(iio::exactStep(step, "0.000022354").status(), Status::IntegrityError);
+        // A longer text is a sharper check, not a looser one.
+        CHECK(iio::exactStep(step, "0.000022351741").isOk());
+        CHECK_STATUS(iio::exactStep(step, "0.000022351000").status(), Status::IntegrityError);
+        // Text whose precision cannot be read off its digits is refused.
+        const char* const unreadable[] = {"", "2.2351e-05", "-0.000022351", "0.0000.22351",
+                                          "0", "0.000000000", "abc", "0.000022351 mV"};
+        for (const char* text : unreadable) {
+            CHECK_MSG(iio::exactStep(step, text).status() == Status::IntegrityError,
+                      std::string("escala aceita: '") + text + "'");
+        }
+        CHECK_STATUS(iio::exactStep(0.0, observed).status(), Status::IntegrityError);
+
+        // The two options go together, are numbers, and are not attributes.
+        DeviceConfig both = baseConfig("iio");
+        both.driverOptions["full_scale"] = "187500";
+        both.driverOptions["resolution_bits"] = "24";
+        CHECK(MedicalDeviceFactory::create(both).isOk());
+
+        DeviceConfig rangeOnly = baseConfig("iio");
+        rangeOnly.driverOptions["full_scale"] = "187500";
+        CHECK_STATUS(MedicalDeviceFactory::create(rangeOnly).status(), Status::InvalidArgument);
+
+        DeviceConfig bitsOnly = baseConfig("iio");
+        bitsOnly.driverOptions["resolution_bits"] = "24";
+        CHECK_STATUS(MedicalDeviceFactory::create(bitsOnly).status(), Status::InvalidArgument);
+
+        const struct {
+            const char* key;
+            const char* value;
+            Status expected;
+        } bad[] = {
+            {"full_scale", "abc", Status::InvalidArgument},
+            {"full_scale", "0", Status::OutOfRange},
+            {"full_scale", "-187500", Status::OutOfRange},
+            {"resolution_bits", "23.5", Status::InvalidArgument},
+            {"resolution_bits", "1", Status::OutOfRange},
+            {"resolution_bits", "33", Status::OutOfRange},
+        };
+        for (const auto& entry : bad) {
+            DeviceConfig config = both;
+            config.driverOptions[entry.key] = entry.value;
+            CHECK_MSG(MedicalDeviceFactory::create(config).status() == entry.expected,
+                      std::string(entry.key) + " = '" + entry.value + "'");
+        }
     }
 
     medtest::section("Driver simulado - a aritmética do conversor");
