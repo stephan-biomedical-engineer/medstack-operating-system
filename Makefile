@@ -106,6 +106,43 @@ ifneq ($(KERNEL),)
     $(warning ./linux-med has uncommitted changes; the build uses commit $(MED_KERNEL_SRCREV) without them)
   endif
 endif
+# Which link carries the analogue front-end to the board. A parameter on the
+# existing targets, in the shape of KEY and KERNEL, and not a second set of
+# targets: what differs between a USB bench image and the product is one word.
+#
+#   make stm32 KERNEL=med                the profile's own answer ("amp")
+#   make stm32 KERNEL=med LINK=usb       the converter behind the USB bridge
+#   make bundle BOARD=stm32 KERNEL=med LINK=usb    and its update, the same link
+#
+# Only MED_EEG_LINK crosses into bitbake; kas/project-eeg-stm32mp2.yml derives
+# the driver and the device node from it, so they cannot disagree.
+#
+# Refused rather than ignored everywhere but the board image: the QEMU profile
+# assigns its link with "=", which beats a passthrough variable, so LINK there
+# would build green with the parameter silently dropped - the failure the KEY
+# comment above describes. And refused without KERNEL=med for the links Linux
+# drives, whose drivers exist only in ./linux-med: ST's kernel has neither, so
+# the image would build and the converter would never appear.
+LINK ?=
+ifneq ($(LINK),)
+  ifeq ($(filter $(LINK),amp usb spi),)
+    $(error LINK must be "amp", "usb" or "spi", not "$(LINK)")
+  endif
+  ifneq ($(filter-out stm32 parse bundle,$(MAKECMDGOALS)),)
+    $(error LINK applies to the board image only: make stm32, or parse/bundle with BOARD=stm32)
+  endif
+  ifneq ($(filter parse bundle,$(MAKECMDGOALS)),)
+    ifneq ($(BOARD),stm32)
+      $(error LINK=$(LINK) on parse/bundle needs BOARD=stm32)
+    endif
+  endif
+  ifneq ($(LINK),amp)
+    ifneq ($(KERNEL),med)
+      $(error LINK=$(LINK) needs KERNEL=med: its drivers live only in ./linux-med)
+    endif
+  endif
+endif
+
 BOARD_CFG     := $(if $(filter stm32,$(BOARD)),$(STM32_CFG),$(QEMU_CFG))
 BOARD_MACHINE := $(shell awk '/^machine:/{print $$2}' $(BOARD_CFG))
 
@@ -126,6 +163,8 @@ ifeq ($(NATIVE),1)
   TOOL         :=
   KEY_ENV      := $(if $(KEY),MED_DATA_KEY_SOURCE=$(KEY),)
   KEY_ARGS     :=
+  LINK_ENV     := $(if $(LINK),MED_EEG_LINK=$(LINK),)
+  LINK_ARGS    :=
   KERNEL_ARGS  :=
   export MED_KERNEL_GIT MED_KERNEL_SRCREV
   # native: kas reads MED_BENCH from the environment directly
@@ -139,6 +178,9 @@ else
   endif
   KEY_ENV  :=
   KEY_ARGS := $(if $(KEY),--runtime-args "-e MED_DATA_KEY_SOURCE=$(KEY)",)
+  # Same gap as the key's, for the link.
+  LINK_ENV  :=
+  LINK_ARGS := $(if $(LINK),--runtime-args "-e MED_EEG_LINK=$(LINK)",)
   # Same gap as KEY_ARGS closes, for the pair that says where the kernel comes
   # from, and it had been left open. kas-base.yml lists MED_KERNEL_GIT and
   # MED_KERNEL_SRCREV under "env:", which makes kas forward them into bitbake -
@@ -183,9 +225,10 @@ help:
 	@echo "  qemu        build $(IMAGE) for qemux86-64"
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
 	@echo "              add KERNEL=med to build the kernel fork in ./linux-med at its HEAD"
+	@echo "              add LINK=usb (or spi) for the front-end's other links; default amp"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
-	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY= as the image"
+	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY=/KERNEL=/LINK= as the image"
 	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
 	@echo "  bundle-disk    wrap the bundle in a disk the QEMU guest can mount"
 	@echo "  shell       interactive build environment"
@@ -240,10 +283,12 @@ risks: $(TOOL)
 	@grep -H LAYERSERIES_COMPAT layers/meta-qt6/conf/layer.conf
 
 parse: $(TOOL)
-	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -p"
-	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -n $(IMAGE)"
-	$(KAS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c \
+	$(LINK_ENV) $(KAS) $(LINK_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -p"
+	$(LINK_ENV) $(KAS) $(LINK_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake -n $(IMAGE)"
+	$(LINK_ENV) $(KAS) $(LINK_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c \
 	  "bitbake -e virtual/kernel | grep -E '^(PV|MED_AFE_KCONFIG|KERNEL_MODULE_AUTOLOAD)=' || true"
+	$(LINK_ENV) $(KAS) $(LINK_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c \
+	  "bitbake -e eeg-acquisition-service | grep -E '^MED_(EEG_LINK|EEG_DRIVER|EEG_ADDRESS|AMP_FIRMWARE)=' || true"
 
 framework: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake med-framework-api"
@@ -255,7 +300,7 @@ qemu: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(QEMU_CFG)
 
 stm32: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)
+	$(KEY_ENV) $(LINK_ENV) $(KAS) $(KEY_ARGS) $(LINK_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)
 
 tomograph: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(TOMO_CFG)
@@ -269,13 +314,18 @@ tomograph: $(TOOL)
 # med-data-provision.sh looks for a key that is not on this board. It would
 # build, sign, verify and install, and fail on the next boot.
 #
+# LINK too: the rootfs carries eeg.conf, the front-end's modules and the M33
+# firmware, all chosen by it. A bundle of the wrong link installs cleanly and
+# leaves a slot that never confirms, so the device falls back on its own
+# (BRINGUP_STM32MP2.md §9.16) - correct, and an hour lost at the bench.
+#
 # KERNEL too, for the same reason: the rootfs carries /lib/modules, and the
 # kernel that loads them lives on med-boot, which no bundle replaces. A bundle
 # built without KERNEL=med for a board flashed with it ships ST's modules for a
 # kernel that is not running - every front-end module refused at load, after a
 # signed, verified, successful install.
 bundle: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake med-bundle-eeg"
+	$(KEY_ENV) $(LINK_ENV) $(KAS) $(KEY_ARGS) $(LINK_ARGS) $(KERNEL_ARGS) shell $(BOARD_CFG) -c "bitbake med-bundle-eeg"
 
 # Verifies with the *device's* keyring settings, which is the whole point: with
 # rauc's defaults this same bundle fails with "unsuitable certificate purpose",
@@ -358,7 +408,9 @@ check: $(TOOL)
 # reports - so the bridge's transfer state machine, its stall bound and its
 # reply handling are exercised with no board, no USB and no cross toolchain.
 # It is the only thing in this repository that can see a defect in kernel code
-# before the hardware exists.
+# before the hardware exists. `tests/eeg-export` compiles the clinical-file
+# converter of the EEG application against the framework and feeds it damaged
+# session records - a wrong scale, a corrupted frame, a truncated tail.
 #
 # All three suites are complementary and none substitutes for another. `test`
 # sees a wrong LSB, a path that escapes its namespace, an option silently
@@ -369,6 +421,7 @@ test:
 	@$(MAKE) --no-print-directory -C tests/framework check
 	@$(MAKE) --no-print-directory -C tests/mcp2210 check
 	@$(MAKE) --no-print-directory -C tests/m33-producer check
+	@$(MAKE) --no-print-directory -C tests/eeg-export check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform

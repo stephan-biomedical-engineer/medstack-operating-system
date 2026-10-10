@@ -175,6 +175,15 @@ env:
   MED_KERNEL_GIT:
   MED_KERNEL_SRCREV:
 
+  # Which link carries the analogue front-end, for the board profile only:
+  # "make stm32 LINK=usb". Null default, same mechanism as the key source, and
+  # with the same requirement on the other end - kas/project-eeg-stm32mp2.yml
+  # declares it with "?=". The QEMU profile declares its link with "=" on
+  # purpose (it has no converter to reach), and so would drop this silently;
+  # the Makefile refuses LINK on every target but the board's instead of
+  # letting that happen.
+  MED_EEG_LINK:
+
   # Bench-only kernel symbols, same null-default mechanism. MED_BENCH=1 adds
   # med-kernel-bench.cfg, which today means CONFIG_SPI_SPIDEV - a userspace path
   # to the converter's SPI bus, which phase 2 of the bench plan needs and which
