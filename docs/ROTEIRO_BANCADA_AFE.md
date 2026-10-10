@@ -11,8 +11,9 @@
 > **como** rodar, e cita a seção do registro de onde vem cada valor esperado.
 >
 > **Escopo**: o link `usb`, num host x86-64. A placa STM32MP257 tem outro caminho (imagem
-> construída com `make stm32 KERNEL=med`, sem `python3` no alvo), registrado no `BRINGUP_AFE.md`
-> §6.4–§6.7. As fases que pedem instrumento (2, 8-A, 8-B, critério 6 da Fase 1) também não estão
+> construída com `make stm32 KERNEL=med LINK=usb`, sem `python3` no alvo), registrado no
+> `BRINGUP_AFE.md` §6.4–§6.7, e a rotina de bancada na placa, para os links `usb` e `amp`, é o
+> `ROTEIRO_PLACA.md`. As fases que pedem instrumento (2, 8-A, 8-B, critério 6 da Fase 1) também não estão
 > aqui: elas não foram executadas e não têm valor esperado para conferir.
 
 Executado até a Fase 4 em 2026-10-05: Ubuntu 24.04, kernel `6.8.0-146-generic`, `linux-med` em

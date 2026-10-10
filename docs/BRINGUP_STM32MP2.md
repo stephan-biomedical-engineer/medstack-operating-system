@@ -1784,6 +1784,176 @@ política de reinício (`StartLimit*`), que não existe.
   restringe a hipótese da manhã (o boot inteiro sumido) ao **primeiro salto de relógio**, e não a
   todo boot. Não investigado.
 
+### 9.17 Décima primeira sessão (2026-10-10): a montagem referencial, do registrador à chave
+
+**O marco: com `afe.montage = referential` a chave interna do SRB1 fecha, e com `bipolar` ela
+abre — visto no sinal, num canal com as duas entradas definidas e sete canais de controle.** O
+caminho até aí teve três rodadas cegas, e elas ficam registradas abaixo na ordem em que
+aconteceram, porque o motivo de não enxergarem é a parte que se reaproveita.
+
+**Primeiro, o registrador: o conversor aceitou e devolveu `MISC1 = 20h`, e a sessão virou um BDF+
+com rótulos `EEG n-REF`.** É a Fase 5 do `implementation_plan_bdf.md`, pelo
+link `amp`, numa imagem gravada no dia (`make stm32 KEY=development KERNEL=med`). O procedimento é o
+`ROTEIRO_PLACA.md` §7.7: a config selada não muda, o teste roda por uma cópia em `/run`.
+
+Antes, as Fases 1 a 3 do roteiro passaram na config de fábrica: `degraded` só pelo `weston`,
+`m33 running`, `NRestarts=0`, `front-end self test passed`, slot A confirmado com `BOOT_A_LEFT=3`.
+Foi também a primeira vez que o firmware recebeu a prescrição de seis chaves no silício.
+
+| Medida | Referencial | De volta ao bipolar |
+|---|---|---|
+| `[afe] configured`, `SENS` | `ff 00 ff 01` | `ff ff ff ff` |
+| `MISC1` relido | `20` | `00` |
+| `lead-off check`, palavra de status e `LOFF_STAT` | `P ff N 9f` pelos dois | `P ff N 01` pelos dois |
+| `MED_MONITORED` | `1+ 2+ 3+ 4+ 5+ 6+ 7+ 8+ REF` | os 16, `1+ 1-` … `8+ 8-` |
+| `MED_DETACHED`, sem eletrodos | os oito `+` e `REF` | todos menos `6-` |
+| `metadata.json` | `"montage": "referential"`, `"reference": null` | — |
+
+A sessão referencial (`session-2026-10-10T13:00:16.155Z`) foi fechada pelo restart e convertida
+sozinha: `status converted`, **3842 quadros, 0 CRC errado, 0 faltando, 0 reinícios**, um
+`record.bdf` de 3842 registros, primeiro rótulo `EEG 1-REF`, e `sha256sum -c` `OK` na placa.
+
+**O que isto não significa.**
+
+- **Não prova que a chave fechou.** O readback diz que o registrador guardou o byte. A prova é
+  sinal: um gerador no pino SRB1 aparecendo nos oito canais. Não foi feito.
+- **O `lead-off check` não serve de evidência da chave**, embora tenha mudado. Com o SRB1 fechado as
+  oito entradas inversoras são um nó, e oito comparadores concordando seria o esperado; vieram
+  `9f`. Mas a leitura é um instantâneo tirado logo depois de ligar as fontes: no bipolar o mesmo
+  instantâneo deu `N 01` e segundos depois a auditoria reportava sete das oito entradas negativas
+  soltas. O instantâneo mede o transitório, e o que ele garante é só o que foi feito para garantir,
+  que a palavra de status e os registradores têm o mesmo layout.
+- **`6-` preso no bipolar não é um achado.** As entradas estão abertas.
+- `BIAS_SENSN = 0` continua sendo decisão não medida.
+
+**A tentativa de provar a chave com as entradas abertas, e por que ela não respondeu.** A chave
+manual de SRB1 da placa do AFE estava em GNDA. A previsão era: no referencial, a chave interna
+liga as oito entradas negativas ao pino SRB1, que está em 0 V, e os canais cravam no topo da
+escala; no bipolar, não. Duas medidas, nenhuma conclusiva.
+
+- *Multímetro no conector dos eletrodos.* Leituras de 1,4–1,5 V em todas as entradas, nas duas
+  montagens, e diferentes a cada toque da ponteira. O nó é de alta impedância e tem os capacitores
+  do filtro diferencial: o multímetro (10 MΩ) mede a própria descarga. Além disso a placa foi
+  reiniciada entre as leituras, e um boot devolve o bipolar, então nem a montagem de cada leitura
+  é conhecida. Descartada.
+- *O próprio conversor* (`scripts/montage-bench.sh`: três sessões de 48 s seguidas, bipolar,
+  referencial, bipolar, lead-off desligado, sem reboot; `MISC1` relido `00`, `20`, `00`). Médias de
+  1 s, em mV:
+
+  | Sessão | ch1, ch2 | ch3 | ch6 | ch7 | ch8 |
+  |---|---|---|---|---|---|
+  | bipolar, início → fim | 187,5 (topo) | 187,5 → 187,5 | 187,5 → 187,5 | 187,5 → 187,5 | 187,5 → 187,5 |
+  | referencial, início → fim | topo | 187,5 → 166,1 | 187,5 → 140,2 | 184,2 → 107,9 | 187,5 → 153,6 |
+  | bipolar, início → fim | topo | 159,2 → 102,1 | 150,8 → 134,2 | 117,5 → 95,8 | 149,2 → 121,9 |
+
+  O que se vê é **uma descarga lenta que atravessa as três sessões**: o lead-off de fábrica tinha
+  afastado P de N em cada canal, e sem as fontes de corrente a diferença cai alguns mV por segundo.
+  Na troca de montagem não há degrau além de ~10 mV. A previsão (referencial cravado no topo,
+  bipolar não) **não se confirmou**: a sessão mais cravada foi a primeira bipolar.
+
+Isso não prova que a chave não fecha. Com as entradas positivas abertas, o canal é a diferença
+entre dois nós que ninguém define, e três explicações cabem nos números: a chave interna não fecha;
+o pino SRB1 não está em GNDA como se supôs (a topologia da chave da PCB não foi conferida no
+esquemático); ou as entradas positivas estão perto de 0 V. **Entradas flutuantes não respondem a
+esta pergunta.** O teste que responde define os dois lados com fios: as `INnP` e o eletrodo de
+referência ligados ao BIAS (2,45–2,66 V medidos), chave manual em "eletrodo". No referencial o
+canal é BIAS − BIAS e tem de ficar em zero, com ruído de µV; no bipolar, não. Não foi feito.
+
+**Segunda rodada, com a chave manual movida a cada montagem** (`montage-bench.sh`, um passo por
+vez, lead-off desligado, sem reboot): bipolar com a chave em GNDA (90 s), referencial com a chave
+em "eletrodo" e nada ligado no pino (1002 s), bipolar com a chave em GNDA (78 s). `MISC1` relido
+`00`, `20`, `00`. Os dados estão em `build/med-bench/srb1b/`.
+
+- A descarga lenta é a mesma da primeira rodada e tem o mesmo relógio: o canal 7 sai do topo ~60 s
+  depois de o lead-off ser desligado, nas duas rodadas, com montagens e posições de chave
+  diferentes naquele instante. **Ela não depende nem da montagem nem da chave.**
+- Em ~5 min os canais 1 a 4 assentam todos em **8,0–8,4 mV**, e os 5 a 8 seguem caindo devagar
+  (29, 68, 29 e 45 mV ao fim de 1000 s). Na troca para o bipolar, **nenhum canal se move mais que
+  0,3 mV**.
+- Aos 989 s da sessão referencial, a chave manual foi levada de "eletrodo" a GNDA com o
+  referencial ainda ligado. Há um transitório de ~5 mV nos oito canais ao mesmo tempo, e depois
+  cada canal volta ao valor que tinha, a menos de 0,2 mV. **Pôr o pino SRB1 em GNDA com o
+  `MISC1 = 20h` não mudou nenhum canal.**
+- O ruído é de 2,4–4,2 mV rms, com correlação 1,00 entre os oito canais, nas duas montagens: é
+  captação da rede, igual em forma em todos.
+
+O terceiro ponto é o mais forte até aqui, e é contra a hipótese de trabalho. Se a chave interna
+ligasse as entradas negativas ao pino SRB1, e a chave manual pusesse esse pino em 0 V, mover a
+chave manual teria deslocado todos os canais de uma vez e para ficar. Não deslocou. Sobram: a
+chave interna não tem o efeito que o registrador diz; a chave manual não liga o que se supôs; ou
+todas as entradas já estão perto de GNDA, fora da faixa de modo comum, e o que o conversor entrega
+nessa condição não é a diferença entre os pinos. **Com entradas abertas e sem o esquemático da
+placa do AFE, a bancada não separa as três**, e não vale gravar mais sessões assim.
+
+**O esquemático da placa do AFE respondeu o que a bancada não respondia** (`schematic.pdf`,
+folha `eeg_input`, lido depois das duas rodadas). As três explicações acima estavam todas erradas,
+porque a previsão ignorava um componente.
+
+- Cada entrada tem 4,99 kΩ em série e **um capacitor de 4,7 nF entre P e N do mesmo canal**
+  (C13–C20). Não há nenhum resistor para GNDA nem para o BIAS: sem eletrodo, P e N não têm caminho
+  DC para lugar nenhum.
+- A chave manual (SW2) liga o pino SRB1 ao pino 13 do DB25 (`IN_SRB`) por 4,99 kΩ, ou a GNDA por
+  **1 MΩ** (R28; o rótulo `NC` desse lado é a mesma rede do símbolo de GNDA ao lado do conector, o
+  que bate com o 0 V medido ali). O SRB1 tem ainda 4,7 nF para GNDA (C21).
+
+Então, com a entrada positiva aberta, o canal mede a **carga do capacitor entre P e N**. Quando a
+chave interna prende N a outro potencial, P vai junto pelo capacitor e a diferença não muda. O
+lead-off de fábrica carrega esse capacitor até o canal saturar, e sem ele a carga escoa pela fuga:
+é a descarga lenta das duas rodadas, igual em qualquer montagem e com a chave em qualquer posição.
+**O teste com entradas abertas era cego por construção**, e o resultado dele não diz nada, nem a
+favor nem contra a chave interna. A hipótese do "resistor de ~10 MΩ para o BIAS", levantada para
+explicar o multímetro, também era falsa.
+
+O teste que enxerga a chave descarrega o capacitor por ela: BIAS (pino 1) ligado por fio ao
+`IN_SRB` (pino 13) e a uma entrada positiva. No referencial os dois lados daquele canal ficam no
+BIAS, e ele vai a zero no primeiro instante.
+
+**A rodada que enxergou** (`build/med-bench/srb1c/`). Um fio em Y no DB25: `BIAS_DRV` (pino 1)
+ligado a `IN_SRB` (pino 13) e a `IN1P` (pino 24). Os canais 2 a 8 ficaram abertos, como controle.
+Lead-off desligado, sem reboot entre os passos, `MISC1` relido `00`, `20`, `00`.
+
+| Momento | Chave manual | Canal 1 | Canais 2 a 8 |
+|---|---|---|---|
+| bipolar, fim (107 s) | GNDA | 181,8 mV, descendo do topo; ruído 6 µV rms | no topo ou na descarga lenta |
+| referencial, **primeira amostra** | eletrodo | **0,039 mV**; ruído **0,4 µV rms** | sem degrau: 187,5 / 159 / 152 / … |
+| referencial, 191,6 s: a chave manual vai a GNDA | GNDA | de −0,09 mV a **+187,5 mV em 0,2 s** | voltam todos à carga que tinham |
+| bipolar, início | GNDA | 161,7 mV, subindo; ruído 6 µV rms | sem degrau (< 0,5 mV) |
+
+Dois degraus independentes no canal 1, e nenhum nos sete que não têm o fio:
+
+1. **Ao fechar** (`MISC1` de `00` a `20`): a entrada negativa do canal 1 passa a ser o SRB1, que
+   pelo fio é o BIAS, o mesmo nó da positiva. O canal cai de 181,8 mV a 39 µV na primeira amostra,
+   e o ruído cai 15 vezes, porque as duas entradas deixam de ser antenas.
+2. **Com a chave fechada, mover a chave manual**: o SRB1 sai do BIAS e vai a GNDA por 1 MΩ; a
+   entrada negativa vai junto e a positiva fica no BIAS. O canal crava no topo. Isso só acontece se
+   a entrada negativa estiver ligada ao pino SRB1.
+
+A volta ao bipolar solta a entrada negativa: o canal 1 sai do topo e o ruído volta a 6 µV.
+
+**O que isto não significa.** Foi visto no canal 1; os outros sete compartilham o registrador e a
+chave, mas não foram ligados. Não é uma medida de ganho nem de CMRR no referencial: o canal mediu
+zero contra zero. Os 0,4 µV rms são o desvio de uma janela de 1 s depois de tirar a reta, não o
+ruído de entrada da folha de dados. E `BIAS_SENSN = 0` continua sem medida.
+
+**Dois comportamentos sem explicação conferida.** Aos 14,6 s da sessão referencial, os canais 2 a
+8 foram todos ao fundo negativo da escala no mesmo décimo de segundo, com o canal 1 parado (de
++0,04 a −0,08 mV), e voltaram quando a chave manual foi a GNDA. A hipótese é o BIAS ter ido para
+perto de AVDD: no referencial as sete entradas positivas abertas são o que o amplificador de bias
+soma, e nada as define. Não foi medido, e é mais um motivo para medir o bias no referencial antes
+de trocar o padrão. E, no bipolar final, o canal 1 começou em 161,7 mV e não no topo, embora o
+capacitor estivesse carregado com 2,5 V.
+
+**Duas pendências que a sessão deixou.**
+
+- **A linha de base do trace veio vazia, e a causa foi achada no mesmo dia.** O `trace0` guarda
+  cerca de 12 linhas, e o firmware escreve uma linha de estado a cada 10 s (`[med] t=…s streaming=1
+  …`). A linha `[afe] configured` some em menos de dois minutos. **O trace só é evidência de uma
+  configuração se lido logo depois dela**, e os comandos do `ROTEIRO_PLACA.md` §7.7 leem em 6 s.
+  A mesma leitura mostrou `bad_status=2` em 276.081 conversões (18 min), contra 0 em 29.894 na
+  §9.16: duas palavras de status fora de sincronia, sem lacuna e sem `lost`. Não investigado.
+- **`BOOT_B_LEFT=0` num cartão recém-gravado**, com `BOOT_ORDER=A B`. Não se sabe se é o estado de
+  fábrica que a imagem de ambiente escreve ou resto de outra coisa. Não afetou a sessão.
+
 ## 10. Estado ao fim deste registro
 
 **Construído e verificado por inspeção**: `med-image-eeg` para `stm32mp25-disco`, `.wic` de

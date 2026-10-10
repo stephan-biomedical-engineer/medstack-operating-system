@@ -1,9 +1,9 @@
 # Plano de Implementação — O registro clínico do EEG em BDF+, com montagem referencial por padrão
 
-> **Status**: **Fases 0 e 1 executadas** (2026-10-09, §6): toda constante do formato e do conversor
-> foi conferida, e três delas mudaram o texto; o metadado da sessão carrega escala, montagem,
-> prescrição e relógio, e a sessão tem marcador de viva e de encerrada, com `make check` 25/25.
-> Nenhum BDF é gerado ainda. O plano foi escrito em 2026-10-09, no dia em que o
+> **Status**: **Fases 0 a 3 executadas** (2026-10-09, §6). Toda sessão encerrada no QEMU ganha um
+> BDF+ selado, um `+C` por trecho contínuo, conferido no alvo (`make check` 26/26) e por três
+> leitores que não são o escritor. No caminho, o registro deixou de passar as amostras por `float`.
+> Faltam a placa (Fase 4), a montagem referencial (Fase 5) e paciente e operador (Fase 6). O plano foi escrito em 2026-10-09, no dia em que o
 > serviço passou 11 h adquirindo pelo link `amp` na placa e a única forma de olhar uma amostra era
 > `od` sobre o `raw.bin`. O que já existe e este plano usa: o `raw.bin` de cada sessão em
 > `/data/eeg/session-<id>/`, com CRC por quadro, sequência e carimbo do M33 (`med_amp_abi.h`); o
@@ -103,8 +103,15 @@ segundos ("recommended to be a whole number of seconds") e admite registros mais
 allowed", com até 15 MB por registro. D3 não viola nenhuma das duas especificações. Ela só se afasta
 de uma recomendação do EDF+ que o BDF+ não repete, e o risco que sobra é de leitor, não de formato.
 
-O arquivo é **BDF+C** quando a sessão não tem lacuna, que é o caso comum e o que todo leitor
-suporta, e **BDF+D** quando tem. No `+D`, o início de cada registro vem da sequência do quadro.
+~~O arquivo é **BDF+C** quando a sessão não tem lacuna, e **BDF+D** quando tem.~~ **Revisto em
+2026-10-09, depois da Fase 2:** todo arquivo é **BDF+C**, e uma sessão com lacuna vira **um arquivo
+por trecho contínuo** (`record-001.bdf`, `record-002.bdf`, …). Sem lacuna, continua sendo um
+`record.bdf` só. A Fase 2 mediu que o pyedflib recusa o `+D` e o MNE o concatena em silêncio,
+desalinhando toda anotação depois da lacuna. Com um `+C` por trecho, nenhum leitor desalinha nada. A
+lacuna fica dita duas vezes, no fim de um arquivo (`gap follows: N frames`) e no começo do seguinte
+(`after gap: …`), e o início de cada arquivo é o que a sequência dos quadros diz. Um produtor que
+reinicia a sequência também abre um trecho novo, com `gap unknown`, porque a duração da ausência não
+está no registro.
 
 **D4 — A conversão roda fora do processo de aquisição, e a aquisição nunca espera por ela.** Uma
 sessão de 12 h tem ~350 MB de `raw.bin`. Converter isso no caminho de parada do serviço atrasaria o
@@ -232,18 +239,22 @@ completado com espaços, com ponto como separador decimal e sem separador de mil
 | Campo | Bytes | Valor | Nota |
 |---|---|---|---|
 | rótulo | 16 | `EEG Fp1-A1A2` / `EEG Fp1-F3` / genérico (D10) | |
-| transdutor | 80 | `AgAgCl electrode` quando declarado, senão vazio | |
+| transdutor | 80 | vazio | nada no sistema declara o tipo de eletrodo, e o arquivo não inventa um (Fase 3) |
 | dimensão física | 8 | `uV` | |
 | mínimo / máximo físico | 8 + 8 | `−full_scale`, `+full_scale − 1 LSB` | ver a nota abaixo |
 | mínimo / máximo digital | 8 + 8 | `−8388608`, `8388607` | |
 | pré-filtragem | 80 | `HP:DC LP:65Hz` a 250 SPS | conferido: banda de −3 dB do filtro sinc³ é 65 Hz a 250 SPS (SBAS499C Tabelas 1–4, igual em todo ganho). É **só o filtro digital**: o RC antialiasing da placa do conversor não é conhecido e não entra no campo enquanto não for medido |
 | amostras por registro | 8 | `samplesPerChannel` (14 no `amp`) | |
 
-**O que o campo de 8 caracteres custa.** No ganho 24, o máximo físico exato é
-`8388607 × 22,3517 nV = 187.499,977 µV`, e o campo só comporta `187499.9`. A escala que um leitor
-reconstrói fica errada em ~4×10⁻⁷. É erro de arredondamento do formato, não do registro, e fica
-declarado aqui para ninguém medir e achar que é ganho do canal. Os códigos dentro do arquivo são
-exatos (D7).
+**O que o campo de 8 caracteres custa** (corrigido pela Fase 2). No ganho 24, o máximo físico exato
+é `8388607 × 22,3517 nV = 187.499,977 µV`, e o valor mais próximo que cabe em 8 caracteres é
+`187500`. O passo que um leitor reconstrói sai maior em 1/(2²⁴−1), cerca de 6×10⁻⁸. Pouco por
+código, mas multiplicado pelos 2²⁴ códigos da faixa dá **1 LSB (22 nV) no fundo de escala**, e
+nada além disso. Esta seção dizia "~4×10⁻⁷" e "`187499.9`": uma estimativa da inclinação que não
+olhou para a soma, e a soma é o que um leitor vê. Foi o leitor independente que mediu, e não o
+teste em C++, que aceitava 1×10⁻⁶ e, com isso, até 16 LSB. Os códigos dentro do arquivo são exatos
+(D7). O erro de 1 LSB fica só no valor físico que um leitor calcula a partir dos campos do
+cabeçalho, e fica declarado aqui para ninguém medir e achar que é ganho do canal.
 
 O LSB de D7 é o mesmo do firmware: `afe_code_to_nv()` usa `VREF / (ganho × 2²³)`, que é
 `full_scale / 2^(bits−1)` com `full_scale = VREF/ganho` e `bits = 24`. O firmware recusa os ganhos 1
@@ -287,8 +298,8 @@ escreve no BDF uma amostra que o próprio `raw.bin` diz não ser confiável.
 
 | Link | O que muda | Estado |
 |---|---|---|
-| `amp` | `afe.montage` no `med_producer.c`. No referencial, `MISC1` (0x15) bit 5 = SRB1 fecha as chaves que ligam o pino SRB1 às entradas inversoras dos 8 canais. O eletrodo de referência vai no SRB1 e os outros nas entradas positivas (SBAS499C §10.2.2). `CHnSET` não muda: o MUX continua `000`. Mudam `LOFF_SENSN` e `BIAS_SENSN`, ver abaixo | a fazer, Fase 5 |
-| `spi`, `usb` | atributo no `ti-ads1299` do `linux-med` e tradução no `do_derive_device_options`. Até lá, o build **recusa** `referential` nesses links, com a mensagem | a fazer, Fase 5 |
+| `amp` | `afe.montage` no `med_producer.c`. No referencial, `MISC1` (0x15) bit 5 = SRB1 fecha as chaves que ligam o pino SRB1 às entradas inversoras dos 8 canais. O eletrodo de referência vai no SRB1 e os outros nas entradas positivas (SBAS499C §10.2.2). `CHnSET` não muda: o MUX continua `000`. Mudam `LOFF_SENSN` e `BIAS_SENSN`, ver abaixo | **feito e visto no sinal (2026-10-10)**: `MISC1 = 20h` relido, e a chave fecha e abre num canal com as duas entradas definidas (`BRINGUP_STM32MP2.md` §9.17) |
+| `spi`, `usb` | atributo no `ti-ads1299` do `linux-med` e tradução no `do_derive_device_options`. Até lá, o build **recusa** `referential` nesses links, com a mensagem | a recusa está feita e injetada (2026-10-10); o atributo, a fazer |
 | `simulated` | nada: não há eletrodo, e qualquer montagem é trivialmente o que ele faz | — |
 
 **O lead-off muda de significado no referencial.** Com as entradas negativas presas ao SRB1, a
@@ -425,8 +436,10 @@ lê o metadado com um parser, porque é o que o conversor vai fazer.
 **Encontrado de passagem, não corrigido:** a `acq-sample-rate` calcula o quadro como `40 + CH·N·4`,
 sem os 8 bytes do bloco de lead-off da v2. Ela superestima a taxa em ~1,6%, dentro da tolerância de
 10%. É a assertiva que existe para não confiar em geometria embutida, errando a geometria.
+**Corrigido em 2026-10-10**: o quadro passou a `40 + CH·N·4 + 8`, e o `make check` deu 26/26 com
+a correção. A injeção do `SOCK_NONBLOCK` não foi refeita depois dela.
 
-### Fase 2 — o escritor, no host
+### Fase 2 — o escritor, no host — **executada, 2026-10-09**
 
 Escritor no framework e checagens de host junto às 55 existentes.
 **Critério**: o BDF de um `raw.bin` sintético lido de volta dá os códigos exatos. O mesmo `raw.bin`
@@ -440,13 +453,123 @@ que conta, e um vetor do próprio documento de especificação, se houver, vale 
 - `raw.bin` truncado no meio de um quadro → o quadro parcial é descartado e anotado;
 - uma sessão sem `full_scale` no metadado → recusada com o motivo.
 
-### Fase 3 — o conversor, no QEMU
+**O escopo mudou na execução.** As quatro injeções acima são do **conversor**, que lê o `raw.bin` e
+o metadado e decide o que vira dado, lacuna ou recusa. Esse código só existe na Fase 3, então elas
+foram para lá. A Fase 2 entregou o que D6 põe no framework: o **escritor do formato**, que não sabe
+o que é um `raw.bin`.
+
+**O que foi feito.** `BiosignalWriter` em `MedicalStorage.h`, com a implementação em
+`src/MedicalStorageBiosignal.cpp` e o SHA-256 incremental em `MedDigest.h`. O escritor valida o
+cabeçalho inteiro antes do primeiro byte e recebe as amostras **intercaladas**, como a aquisição as
+entrega, gravando-as por sinal, como o formato pede. Ele confere o início de cada registro e recusa
+código fora da faixa em vez de cortar. Anotação que não cabe vai **inteira** para o próximo registro,
+e o `finish()` recusa se sobrou alguma. O arquivo só fica completo quando o `.sha256` existe, no
+formato do `sha256sum -c`, e o `create()` apaga arquivo e selo antigos.
+
+Uma regra mudou ao escrever o teste. A duração do registro é recusada quando a **deriva acumulada no
+arquivo** passa de 1 µs, e não quando o erro de um registro passa disso: 1/3 s cabe como `0.333333`,
+e a diferença é nada num registro e um terço de milissegundo em mil.
+
+**Medido.**
+
+| Verificação | Resultado |
+|---|---|
+| framework no host | 1347 → **1424** verificações, 0 falhas; igual com AddressSanitizer e UBSan |
+| selo | o digest do escritor é o que o `sha256sum` do coreutils calcula |
+| leitor independente (`bdf_oracle.py`: pyedflib 0.1.42, MNE 1.13.2) | **22/22** no `+C`: os 8 canais, código a código, exatos; 250 Hz; rótulos, dimensão, pré-filtragem e anotações como escritos; valor físico no MNE a ≤ 1,000 LSB |
+| injeção: *byte order* invertido no escritor **e** no leitor do teste | `make check` **continua 1424/0**; o oráculo falha os 8 canais |
+
+**Três achados, e o terceiro pede decisão.**
+
+1. **Anotação "no instante 0".** Os dois leitores medem anotações a partir da primeira amostra, não
+   do segundo inteiro do cabeçalho. Uma anotação em 0 com `startFraction = 0,356` virou −0,356 no
+   pyedflib e **sumiu** no MNE, que descarta o que fica antes dos dados. O conversor põe os eventos
+   de início em `startFraction`. A §3.3 dizia "no instante 0", e isso significa a primeira amostra.
+2. **O pyedflib lê errado a fração de segundo do início** (`02:33:37.0356` para 0,356 s). É defeito
+   do leitor, porque o arquivo diz `+0.356` como o EDF+ define. Fica registrado para ninguém ler
+   esse número como dado.
+3. **Nenhum dos dois leitores mostra uma lacuna de um BDF+D.** O pyedflib (EDFlib) **recusa** o
+   arquivo: *"The file is discontinuous and cannot be read"*. O MNE abre e **concatena os registros
+   em silêncio**: 42 amostras contíguas onde havia uma lacuna de dois registros. A anotação `gap`
+   chega e marca o ponto da emenda, mas qualquer anotação depois de uma lacuna fica deslocada em
+   relação aos dados pelo tamanho da lacuna. O EDFbrowser, que é a referência do BDF+, não foi
+   testado. É a Fase 4.
+
+O risco que a §9 previa para o `+D` virou fato medido: o arquivo é correto e dois leitores comuns o
+tratam mal. A §2 D3 continua correta quanto ao formato, mas a escolha do que gravar quando há
+lacuna precisa ser revista antes da Fase 3. As alternativas estão na §9.
+
+### Fase 3 — o conversor, no QEMU — **executada, 2026-10-09**
 
 `eeg-record-export`, a unidade e o `ExecStopPost`. Nova assertiva `record-bdf` no `make check`
 (25 → 26): depois do `stop`, existe `record.bdf`, o `.sha256` confere, o número de registros é o
 `MED_FRAMES` e o subcomando `amp-bench.py bdf` concorda.
 **Injeção**: desabilitar o `ExecStopPost` → só a `record-bdf` falha, 25/26.
 **Medir**: o tempo de conversão por hora de sessão. Isso é número para a `RESULTS.md`, não critério.
+
+**Um defeito anterior apareceu primeiro, e foi corrigido antes do conversor.** `SampleFrame::samples`
+era `std::vector<float>`, e o serviço grava um quadro decodificando-o e codificando-o de novo. Medido
+nos 2²⁴ códigos do ganho 24: **12.736.188 amostras (76%) voltavam diferentes do que o produtor
+mandou, até 8 nV (0,358 LSB)**. Todas ainda recuperavam o código por arredondamento, mas o `raw.bin`
+não era cópia da medida, e D7 (≤ 0,5 nV) recusaria sessões reais. O teste de codec que existia nunca
+viu isso, porque usava meios microvolts, que um `float` representa exato. Agora as amostras são
+`double`, e uma verificação nova passa os 2²⁴ códigos pela ida e volta byte a byte. Injetar o
+`static_cast<float>` de volta no `decodeFrame` falha só essa verificação, com 136.708 quadros
+alterados. Vale para toda sessão gravada antes desta correção: o `raw.bin` delas difere do produtor
+em até 8 nV, e a D7 vai recusá-las.
+
+**O que foi feito.**
+
+- **`MedicalStorage`** ganhou `size()` e uma leitura por faixa. O `read()` carrega o arquivo inteiro,
+  e um `raw.bin` de 12 h tem ~350 MB.
+- **`BiosignalWriter::annotationBytes`/`timekeepingBytes`.** Quem dimensiona o espaço de anotação usa
+  os tamanhos do próprio escritor, em vez de repetir o formato.
+- **`record_export.cpp`**, o núcleo, separado do `main` para ser testado como é entregue. Duas
+  passadas sobre o `raw.bin`, em janelas de 1 MiB:
+  - **planejamento:** quadros válidos, CRC ruim, bytes ilegíveis e cauda parcial; D7 em **toda**
+    amostra; os trechos contínuos pela sequência; as anotações;
+  - **escrita:** um `+C` por trecho.
+  O espaço de anotação é o menor que esvazia a fila em cada trecho, achado simulando o escritor.
+  Anotações de início: `link`, montagem, sinal de teste, relógio não sincronizado, deslocamento de
+  UTC e, depois de uma lacuna, `after gap: N frames (X s)`. De fim: `gap follows`, cauda parcial,
+  CRC ruim depois do último quadro válido e `record interrupted`. Contato de eletrodo vai nas
+  mudanças, com os nomes declarados. O `metadata.json` é lido por um leitor de JSON estrito, e o que
+  falta é recusado, não presumido.
+- **`export_main.cpp`.** Lista as sessões e **só depois** lê o marcador de sessão viva, porque na
+  ordem inversa uma sessão aberta entre as duas leituras pareceria interrompida. O `export.json` é
+  escrito por último e marca a sessão como tratada, convertida ou recusada. Recusa (escala, metadado)
+  é final e auditada como `SecurityEvent`. Erro de I/O não marca nada e tenta de novo.
+- **`eeg-record-export.service`.** Oneshot, `Nice=10`, `IOSchedulingClass=idle`, o sandbox da
+  aquisição sem tempo real e sem dispositivo (`PrivateDevices=yes`), habilitada no boot **depois** da
+  aquisição. A aquisição dispara a unidade com
+  `ExecStopPost=+/usr/bin/systemctl start --no-block`.
+- **`record.prefiltering`.** O `do_derive_device_options` declara `HP:DC LP:<banda>Hz` pela taxa,
+  com a tabela da Fase 0, nos links com conversor, e nada no `simulated`, que não filtra.
+- **Transdutor vazio**, ao contrário do que a §3.2 dizia. Nada no sistema declara o tipo de
+  eletrodo, e o arquivo não inventa um.
+
+**Medido.**
+
+| Verificação | Resultado |
+|---|---|
+| `tests/eeg-export` (novo, no `make test`, com ASan e UBSan) | **67** verificações, 0 falhas: sessão íntegra (60 quadros, códigos exatos, hora local −03:00 cruzando a meia-noite, anotações), contato de eletrodo, determinismo (mesmo hash duas vezes) e as quatro injeções que vieram da Fase 2 |
+| injeção de entrada: escala do ganho 12 numa sessão de ganho 24 | recusa na primeira amostra, `IntegrityError`, nenhum selo escrito |
+| injeção de entrada: um byte trocado no quadro 7 de 20 | 1 CRC ruim, 1 quadro faltando, `record-001.bdf` (7) + `record-002.bdf` (12); o segundo começa 0,448 s depois |
+| injeção de entrada: `raw.bin` sem os últimos 300 bytes | 5 quadros, 196 bytes de cauda descartados e anotados |
+| injeção de entrada: metadado sem escala | recusa, `InvalidArgument`, nada escrito |
+| injeção de código: D7 desligada | falha só a seção de escala (3 verificações) |
+| injeção de código: lacunas ignoradas | falham só as duas seções de lacuna (13). Antes disso, o teste **abortava** no ASan por indexar um arquivo que não existia; os auxiliares agora falham em vez de travar a suíte |
+| `amp-bench.py bdf` (leitor próprio do `raw.bin` e do BDF, sem o framework) | sessões íntegra e corrompida: 6720 + 2128 códigos, 0 diferentes, resíduo ≤ 0,500 nV, trechos e inícios conforme a sequência |
+| pyedflib e MNE sobre a saída do conversor | abrem os três arquivos; todas as anotações chegam, nos instantes certos |
+| `make check` | **26/26** |
+| injeção: sem `ExecStopPost` | **25/26**, só a `record-bdf` (`export.json` ausente) |
+
+**O que isto não significa.** Não houve conversão de um `raw.bin` real da placa: o QEMU usa o link
+`simulated`, sem filtro declarado e sem lead-off. O tempo de conversão não foi medido. No QEMU ele
+não significaria nada, e é medida da Fase 4. Uma sessão com data anterior a 1985, que é o que uma
+placa sem RTC e sem rede produz, é **recusada**: o formato não consegue escrever essa data. Isso é
+coerente com D8, mas quer dizer que o arquivo clínico depende de o relógio estar certo, e não só de
+ser declarado. O EDFbrowser continua sem teste.
 
 ### Fase 4 — na placa, pelo `amp`
 
@@ -458,7 +581,7 @@ de 256 amostras, zero lacunas. O arquivo abre no EDFbrowser com a duração de 0
 **Injeção**: tirar a energia no meio de uma sessão → no boot seguinte o BDF existe e termina em
 `record interrupted`.
 
-### Fase 5 — a montagem referencial
+### Fase 5 — a montagem referencial — **o passo do `amp` executado e visto no sinal, 2026-10-10; faltam `spi`/`usb` e a troca do padrão**
 
 Primeiro o firmware, depois o `ti-ads1299` com a tradução no `do_derive_device_options`, e só então
 o padrão do `eeg.conf` vira `referential`.
@@ -467,6 +590,78 @@ o padrão do `eeg.conf` vira `referential`.
 eletrodo é medido pelo plano de caracterização §5.2, que ganha a montagem referencial como condição.
 **Injeção**: `referential` num link sem suporte → o build recusa com a mensagem. Um eletrodo de
 referência solto no simulador → o que o lead-off reporta, conforme a resposta da Fase 0.
+
+**O que foi feito (o primeiro dos três passos, e a parte do segundo que não precisa do kernel).**
+
+- **Firmware.** `afe.montage` é a sexta chave que o produtor entende: `bipolar`, `referential`, e
+  qualquer outro valor é recusa com o nome da opção. Ausente, vale `bipolar`, que é o que o produtor
+  fazia antes de a chave existir. O `afe_registers()` ganhou a montagem e o `afe_apply()` escreve e
+  relê o `MISC1` **nas duas montagens**: uma sessão bipolar depois de uma referencial tem de abrir a
+  chave, e é o readback que diz que a montagem do registro é a que foi programada. No referencial,
+  `MISC1 = 0x20`, `LOFF_SENSN = 0x01` e `BIAS_SENSN = 0x00`, como a §4.
+- **O bloco de lead-off do quadro.** No referencial, `monitoredNegative = 0x0001` e o produtor
+  mascara os outros sete bits negativos antes de eles chegarem ao registro. O formato do fio não
+  mudou: é o `med-amp-abi` v2, com outro valor num campo que já existia.
+- **O produtor sintético aceita as duas montagens.** Ele não tem entrada para ligar, e as duas são
+  trivialmente o que ele faz, como o link `simulated`. É diferente do lead-off, que ele recusa,
+  porque aquele seria um monitor que nunca rodou.
+- **Receita.** `afe.montage` é obrigatório no `eeg.conf`, e `record.montage` passou a ser **derivado
+  dele** em vez de ser a constante `bipolar`. No `amp` a chave segue ao produtor com as outras
+  `afe.*` (seis opções, de oito que a mensagem carrega). Em `spi` e `usb`, `referential` é recusado
+  no build. O padrão do `eeg.conf` **continua `bipolar`**, como este plano manda, até o silício
+  confirmar o `MISC1`.
+- **Serviço.** A auditoria de contato diz `REF` quando a montagem é referencial, em vez de `1-`.
+- **Conversor.** Não mudou: o caminho referencial dele já existia desde a Fase 3, e **não tinha
+  nenhum teste**. Agora tem.
+
+**Medido.**
+
+| Verificação | Resultado |
+|---|---|
+| `tests/m33-producer` | 198 → **211** verificações, 0 falhas, com ASan e UBSan |
+| injeção: as oito fontes no lado negativo (o firmware de antes) | 1 falha, a dos registradores do referencial |
+| injeção: SRB1 no bit 4 | 2 falhas, as duas que leem o `MISC1` do referencial |
+| injeção: `BIAS_SENSN` ligado no referencial | 1 falha |
+| injeção: os 8 bits negativos chegam ao quadro | 1 falha, a do bloco de lead-off |
+| injeção: montagem desconhecida vira `bipolar` | 4 falhas, as quatro recusas de valor |
+| `tests/eeg-export` | 67 → **82** verificações, 0 falhas: rótulos `EEG Fp1-A1A2` e `EEG 1-REF`, anotação de montagem, referência solta relatada como `A1A2`/`REF` e nunca como `1-` |
+| injeção: o conversor ignora a montagem ao nomear o contato | 4 falhas, só as de contato referencial |
+| build, `amp`, `referential` com 8 eletrodos e referência | `device.option.afe.montage = referential` na ordem do teste do produtor, `record.montage = referential` |
+| build, injeções | `afe.montage = average`; `referential` no `usb`; pares `Fp1-F3` sob `referential`: **as três recusam**, cada uma com a própria mensagem |
+| `med-m33-firmware`, `do_compile` para o M33 | sem avisos, pacote escrito |
+| `make test` inteiro | framework 1442, MCP2210 452, produtor 211, conversor 82: 0 falhas |
+| `make qemu` e `make check` | verde, **26/26**. É regressão, não medida da montagem: o QEMU usa o `simulated` |
+
+**Um nome trocado de passagem.** A seção nova do `tests/eeg-export` usou primeiro `session-g`, que a
+seção de lacunas também usa, e três verificações **de lá** falharam com um arquivo a mais. O
+`MedicalStorage::append` acrescenta, e duas seções com o mesmo diretório somam os quadros. Não era
+defeito do conversor, mas vale saber que as seções dessa suíte não são isoladas entre si.
+
+**O que isto não significa.** Nada disto viu o conversor. O bit do SRB1 saiu de uma leitura da
+Figura 64 do datasheet e o teste foi escrito com a mesma leitura: prova consistência, não correção,
+e o kernel não serve de oráculo porque o `ti-ads1299.c` nunca escreve o `MISC1`. O readback na
+placa prova que o registrador aceitou o byte, não que a chave fechou. O que prova a chave é sinal:
+um gerador no pino SRB1 aparecendo invertido nos oito canais. `BIAS_SENSN = 0` continua sendo
+decisão não medida. E o `make check` não cobre nada disto, porque o QEMU usa o link `simulated`.
+
+**Na placa, no mesmo dia (`BRINGUP_STM32MP2.md` §9.17).** A prescrição referencial foi aceita:
+`SENS ff 00 ff 01 MISC1 20` relido, auditoria `1+ … 8+ REF`, e a sessão convertida num BDF+ de 3842
+registros com rótulo `EEG 1-REF` e selo `OK`. A volta ao bipolar releu `SENS ff ff ff ff MISC1 00`.
+O parágrafo acima foi escrito antes dessa sessão; dele, só "nada disto viu o conversor" deixou de
+valer, e o resto continua: o readback não prova a chave.
+
+**E a chave, no sinal.** Com o BIAS ligado por fio ao `IN_SRB` e ao `IN1P`, o canal 1 foi de
+181,8 mV a 39 µV na primeira amostra do referencial, e ao topo quando a chave manual levou o SRB1 a
+GNDA; os sete canais sem o fio não tiveram degrau. Antes disso, três rodadas com as entradas
+abertas não viram nada, e o esquemático mostrou por quê: há 4,7 nF entre P e N de cada canal e
+nenhum caminho DC, então um canal aberto mede a carga desse capacitor em qualquer montagem. O
+"readback não prova a chave" acima está pago para o canal 1.
+
+**O que falta, na ordem.** (1) ~~Na placa, pelo `amp`: o sinal no SRB1.~~ Feito. Sobra medir o
+bias no referencial (`BIAS_SENSN = 0` é decisão, e os canais abertos foram ao fundo negativo aos
+14,6 s daquela sessão, sem causa conferida). (2) O atributo de montagem no `ti-ads1299` e a tradução
+na receita, que trocam a recusa de `spi`/`usb` por suporte. (3) Só então o padrão vira
+`referential`.
 
 ### Fase 6 — com o plano de controle
 
@@ -510,7 +705,7 @@ paralelo e só precisa da Fase 0. Um BDF gravado antes da Fase 5 sai com `montag
 | Risco | Tratamento |
 |---|---|
 | Leitores que tropeçam em duração não inteira (D3) | Fase 4 abre o mesmo arquivo em EDFbrowser, MNE e EEGLAB. Se um falhar, a alternativa é agrupar N quadros por registro com N fixo, ainda sem completar registros |
-| Leitores com suporte ruim a `+D` | o caso comum é `+C` (D3). O `+D` é testado nos mesmos três leitores, e uma falha vira nota no `LAYER_MED_APP.md` |
+| Leitores com suporte ruim a `+D` | **medido na Fase 2** (o pyedflib recusa, o MNE concatena em silêncio) e **resolvido** por decisão de 2026-10-09: um `+C` por trecho contínuo (D3) |
 | Sobrecarga das anotações em registros curtos | dimensionar na Fase 2 pelo pior caso medido. Na estimativa de hoje é ~20% sobre 336 B de dados por registro |
 | Conversão lenta no A35 para sessões longas | D4 tira a conversão do caminho crítico. O número entra na `RESULTS.md` |
 | Espaço no `/data` | BDF ≈ 7 kB/s contra 8,9 kB/s do `raw.bin`. Os dois juntos dobram o consumo, e isso é medido na Fase 4 |

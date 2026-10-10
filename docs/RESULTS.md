@@ -509,6 +509,93 @@ consistência. A correção do layout é a conferência na placa que a prova.
 a bancada não tem eletrodos, e "tudo solto" é o resultado trivial. E o link `usb` continua
 aceitando `lead_off_detection = true` sem cumpri-lo (§9.16).
 
+### Resultado — o arquivo clínico BDF+, derivado do registro (2026-10-09, host e QEMU)
+
+O `eeg-record-export` converte cada sessão fechada num BDF+ selado, a partir do `raw.bin` e do
+`metadata.json`, fora do caminho de aquisição. O método, as decisões e as tabelas completas estão em
+`implementation_plan_bdf.md` §6, Fases 1 a 3. Aqui ficam os números que sustentam a afirmação.
+
+```bash
+make test        # framework 1424, conversor 67 - 0 falhas, com ASan e UBSan
+python3 tests/framework/bdf_oracle.py     # pyedflib 0.1.42 e MNE 1.13.2: 22/22 no BDF+C
+make qemu && make check                   # 26/26
+```
+
+| Verificação | Resultado |
+|---|---|
+| códigos do BDF contra os quadros de origem, por um leitor que não usa o framework (`amp-bench.py bdf`) | 6720 + 2128 códigos, 0 diferentes, resíduo ≤ 0,500 nV |
+| o mesmo `raw.bin` convertido duas vezes | o mesmo SHA-256 |
+| `make check`, com a `record-bdf` | **26/26** |
+| sem o `ExecStopPost` que dispara o conversor | **25/26**, única falha `record-bdf` |
+| `byte order` invertido no escritor **e** no leitor do teste próprio | a suíte própria continua 1424/0; o leitor de fora falha os 8 canais |
+
+A última linha é a que importa para ler as outras: um teste escrito com a mesma leitura da
+especificação que escreveu o código prova consistência. Quem viu o defeito foi o leitor independente.
+
+**Um defeito anterior, achado por este trabalho.** As amostras passavam por `float` entre o produtor
+e o disco: 76% dos 2²⁴ códigos do ganho 24 voltavam diferentes do que o produtor mandou, em até 8 nV
+(0,358 LSB). Todos ainda arredondavam para o código certo, mas o `raw.bin` não era cópia da medida.
+Agora são `double`, e uma verificação passa os 2²⁴ códigos pela ida e volta.
+
+**O que isto não significa.** Nenhum `raw.bin` da placa entrou nesta medição, o tempo de conversão
+não foi medido, e o EDFbrowser não abriu o arquivo. Dois leitores comuns tratam mal um BDF+D (o
+pyedflib recusa, o MNE emenda os registros em silêncio), e por isso uma sessão com lacuna vira um
+`+C` por trecho contínuo.
+
+### Resultado — a montagem referencial, no firmware e na receita (2026-10-10, só host)
+
+`afe.montage` chega ao produtor do M33, que no referencial fecha o SRB1 (`MISC1 = 0x20`), liga
+**uma** fonte de lead-off no lado negativo (`LOFF_SENSN = 0x01`) e tira o lado negativo da derivação
+do bias (`BIAS_SENSN = 0x00`). `record.montage` passou a ser derivado da prescrição.
+
+```bash
+make test        # produtor do M33 211 (eram 198), conversor 82 (eram 67) - 0 falhas
+```
+
+| Injeção (uma de cada vez, restaurada) | O que falhou |
+|---|---|
+| firmware: as oito fontes no lado negativo, como era antes | 1: os registradores do referencial |
+| firmware: SRB1 no bit 4 | 2: as duas que leem o `MISC1` |
+| firmware: `BIAS_SENSN` ligado no referencial | 1 |
+| firmware: os 8 bits negativos chegam ao quadro | 1: o bloco de lead-off |
+| firmware: montagem desconhecida vira `bipolar` | 4: as recusas de valor |
+| conversor: nomeia o contato sem olhar a montagem | 4: só as de contato referencial |
+| build: `afe.montage = average` | recusado, com a mensagem |
+| build: `referential` no link `usb` | recusado, com a mensagem |
+| build: pares `Fp1-F3` sob `referential` | recusado, com a mensagem |
+
+**O que isto não significa.** O conversor não foi tocado. O bit do SRB1 vem de uma leitura do
+datasheet e o teste foi escrito com a mesma leitura; o driver do kernel não serve de oráculo, porque
+nunca escreve esse registrador. `BIAS_SENSN = 0` é decisão, não medida. O padrão do `eeg.conf`
+continua `bipolar` até a placa reler o `MISC1` e um sinal no SRB1 aparecer nos oito canais.
+
+**Depois, na placa (10/10, `BRINGUP_STM32MP2.md` §9.17).** O conversor aceitou a prescrição
+referencial e devolveu `SENS ff 00 ff 01 MISC1 20`; a volta ao bipolar devolveu
+`SENS ff ff ff ff MISC1 00`. A auditoria reportou `1+ … 8+ REF`, e a sessão de 3842 quadros (0 CRC
+errado, 0 faltando) virou um `record.bdf` selado com rótulo `EEG 1-REF`. O readback prova que o
+registrador guardou o byte.
+
+**E a chave, vista no sinal (mesmo dia, §9.17).** Um fio em Y liga o BIAS ao `IN_SRB` e ao `IN1P`;
+os canais 2 a 8 ficam abertos, de controle.
+
+```bash
+ssh $B sh -s -- bipolar < scripts/montage-bench.sh        # chave manual em GNDA
+ssh $B sh -s -- referential < scripts/montage-bench.sh    # chave manual em eletrodo
+python3 scripts/amp-bench.py levels build/med-bench/srb1c/<sessão>/raw.bin
+```
+
+| Momento | Canal 1 | Canais 2 a 8 |
+|---|---|---|
+| bipolar, fim | 181,8 mV; 6 µV rms | topo, ou descarga lenta |
+| referencial, primeira amostra | **0,039 mV; 0,4 µV rms** | sem degrau |
+| referencial, chave manual levada a GNDA | **+187,5 mV em 0,2 s** | voltam à carga anterior |
+| bipolar de novo | 161,7 mV; 6 µV rms | sem degrau |
+
+**O que isto não significa.** Um canal, zero contra zero: não é ganho nem CMRR no referencial.
+Três rodadas anteriores com as entradas abertas não viram nada, e não podiam: há 4,7 nF entre P e
+N de cada canal e nenhum caminho DC, então um canal aberto mede a carga desse capacitor em
+qualquer montagem.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
