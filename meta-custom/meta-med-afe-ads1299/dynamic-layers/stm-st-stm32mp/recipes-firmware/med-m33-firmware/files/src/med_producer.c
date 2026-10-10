@@ -182,11 +182,15 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
     enum med_test_signal test_signal = MED_TEST_SIGNAL_OFF;
     int bias_drive = 0;
     int lead_off = 0;
+    enum med_montage montage = MED_MONTAGE_BIPOLAR;
     uint16_t lead_off_index = 0;
     unsigned seen = 0;
     uint16_t i;
 
-    enum { SEEN_GAIN = 1, SEEN_REF = 2, SEEN_TEST = 4, SEEN_LEADOFF = 8, SEEN_BIAS = 16 };
+    enum {
+        SEEN_GAIN = 1, SEEN_REF = 2, SEEN_TEST = 4, SEEN_LEADOFF = 8, SEEN_BIAS = 16,
+        SEEN_MONTAGE = 32
+    };
 
     if (length != sizeof(message)) {
         ++p->controls_malformed;
@@ -264,6 +268,25 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
             } else {
                 return reject(p, ack, i, key, ": not off or internal");
             }
+        } else if (strcmp(key, "afe.montage") == 0) {
+            /*
+             * Absent, the montage is bipolar - what this producer did before
+             * the key existed. A value it does not know is refused, never
+             * read as the default: the montage decides what every sample in
+             * the record is a difference OF.
+             *
+             * A synthetic producer accepts either. It has no inputs to
+             * connect, so both are trivially what it does; that is unlike
+             * lead-off detection, which would be a monitor it never ran.
+             */
+            bit = SEEN_MONTAGE;
+            if (strcmp(value, "bipolar") == 0) {
+                montage = MED_MONTAGE_BIPOLAR;
+            } else if (strcmp(value, "referential") == 0) {
+                montage = MED_MONTAGE_REFERENTIAL;
+            } else {
+                return reject(p, ack, i, key, ": not bipolar or referential");
+            }
         } else if (strcmp(key, "afe.lead_off_detection") == 0 ||
                    strcmp(key, "afe.bias_drive") == 0) {
             /*
@@ -314,6 +337,7 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
     p->test_signal = test_signal;
     p->bias_drive = bias_drive;
     p->lead_off = lead_off;
+    p->montage = montage;
     p->sequence = 0;
     p->filled = 0;
     p->streaming = 1;
@@ -351,6 +375,11 @@ int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_
                            uint16_t off_positive, uint16_t off_negative, uint8_t *frame)
 {
     const uint16_t monitored = p->lead_off ? (uint16_t)((1u << MED_PRODUCER_CHANNELS) - 1u) : 0u;
+    /* Referential: the inverting inputs are one node, watched by one current
+     * source (afe_regs.h). The other seven bits are not measurements. */
+    const uint16_t monitored_negative =
+        p->montage == MED_MONTAGE_REFERENTIAL ? (uint16_t)(monitored & AFE_REFERENCE_BIT)
+                                              : monitored;
     med_amp_frame_header header;
     med_amp_lead_off contact;
 
@@ -384,9 +413,9 @@ int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_
     /* "off" only where monitored: a bit for an electrode nobody checked is
      * not a measurement, and the receiver should never have to mask it. */
     contact.monitoredPositive = monitored;
-    contact.monitoredNegative = monitored;
+    contact.monitoredNegative = monitored_negative;
     contact.offPositive = (uint16_t)(p->off_positive & monitored);
-    contact.offNegative = (uint16_t)(p->off_negative & monitored);
+    contact.offNegative = (uint16_t)(p->off_negative & monitored_negative);
 
     memcpy(frame + sizeof(header), p->samples, sizeof(p->samples));
     memcpy(frame + sizeof(header) + sizeof(p->samples), &contact, sizeof(contact));

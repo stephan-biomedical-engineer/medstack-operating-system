@@ -49,6 +49,10 @@
 
 enum med_test_signal { MED_TEST_SIGNAL_OFF = 0, MED_TEST_SIGNAL_INTERNAL = 1 };
 
+/* What each channel's inverting input is: its own electrode, or the one
+ * reference electrode all channels share. */
+enum med_montage { MED_MONTAGE_BIPOLAR = 0, MED_MONTAGE_REFERENTIAL = 1 };
+
 enum med_source { MED_SOURCE_SYNTHETIC = 0, MED_SOURCE_CONVERTER = 1, MED_SOURCE_ABSENT = 2 };
 
 struct med_producer {
@@ -61,6 +65,7 @@ struct med_producer {
     enum med_test_signal test_signal;
     int bias_drive; /* converter only: derived bias amplifier on */
     int lead_off;   /* converter only: every channel's inputs monitored */
+    enum med_montage montage;
 
     /* 1 between an accepted prescription and the next control message. */
     int streaming;
@@ -124,7 +129,9 @@ int med_producer_on_sample(struct med_producer *p, uint64_t now_us, uint8_t *fra
  * and the lead-off bits of that conversion, one per channel input. The
  * CONVERTER source's path. The bits are reported only while the accepted
  * prescription asked for lead-off detection; otherwise the frame says
- * "nothing monitored", whatever is passed. */
+ * "nothing monitored", whatever is passed. In a referential montage the
+ * negative side is one input, not eight: only AFE_REFERENCE_BIT is monitored
+ * there, and it stands for the reference electrode. */
 int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_t *nv,
                            uint16_t off_positive, uint16_t off_negative, uint8_t *frame);
 

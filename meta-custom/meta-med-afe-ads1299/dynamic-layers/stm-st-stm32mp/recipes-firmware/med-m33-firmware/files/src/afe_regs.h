@@ -41,6 +41,7 @@
 #define AFE_REG_CH1SET  0x05u
 #define AFE_REG_BIAS_SENSP 0x0du /* then BIAS_SENSN, LOFF_SENSP, LOFF_SENSN */
 #define AFE_REG_LOFF_STATP 0x12u /* then LOFF_STATN */
+#define AFE_REG_MISC1   0x15u
 #define AFE_REG_CONFIG4 0x17u
 
 struct afe_regs {
@@ -52,6 +53,7 @@ struct afe_regs {
     /* BIAS_SENSP, BIAS_SENSN, LOFF_SENSP, LOFF_SENSN: four consecutive
      * registers, one bit per channel each. */
     uint8_t sens[4];
+    uint8_t misc1;
     uint8_t config4;
 };
 
@@ -71,9 +73,29 @@ int afe_pga_field(double gain);
  * on, LOFF at its reset value (thresholds 95 %/5 %, 6 nA, DC - the values
  * ti-ads1299.c also leaves). Unlike that driver, the per-channel enables are
  * set too: comparators with no channel enabled detect nothing (its own
- * comment above LOFF_SENSP says so). */
+ * comment above LOFF_SENSP says so).
+ *
+ * referential: MISC1's SRB1 bit closes the switches that tie the SRB1 pin to
+ * the inverting input of every channel, so each channel measures its own
+ * electrode against the one on that pin [SBAS499C 10.2.2; no oracle in
+ * ti-ads1299.c, which never writes MISC1]. The eight inverting inputs are then
+ * ONE node, and two of the selections above change meaning with it:
+ *
+ *   LOFF_SENSN - one bit, AFE_REFERENCE_BIT. "When configured in a referential
+ *                montage, only use one lead-off current source with the
+ *                reference electrode" (same section): all eight would push
+ *                eight times the excitation current through it.
+ *   BIAS_SENSN - zero. A decision, not a datasheet fact: the part's text is
+ *                silent, and summing the same node eight times into the
+ *                average would make the bias follow the reference instead of
+ *                the electrodes' common mode.
+ */
 void afe_registers(int pga_field, int test_signal, int bias_drive, int lead_off,
-                   struct afe_regs *r);
+                   int referential, struct afe_regs *r);
+
+/* In a referential montage, the one negative-side lead-off bit that is
+ * monitored - and what it then means is "the reference electrode". */
+#define AFE_REFERENCE_BIT 0x01u
 
 /* The channels this producer has: one bit each, the mask the per-channel
  * registers and the lead-off block use. */

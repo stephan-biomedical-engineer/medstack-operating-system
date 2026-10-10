@@ -58,13 +58,14 @@ static med_amp_control_message make_control(const struct option_spec *options, u
     return m;
 }
 
-/* The five keys eeg.conf prescribes, in the sorted order the recipe sends them
+/* The six keys eeg.conf prescribes, in the sorted order the recipe sends them
  * (do_derive_device_options, link == 'amp'), with the two this producer cannot
  * honour set to what it CAN honour. */
 static const struct option_spec kHonourable[] = {
     {"afe.bias_drive", "false"},
     {"afe.gain", "24"},
     {"afe.lead_off_detection", "false"},
+    {"afe.montage", "bipolar"},
     {"afe.reference_uv", "4500000"},
     {"afe.test_signal", "off"},
 };
@@ -74,6 +75,7 @@ static const struct option_spec kShipped[] = {
     {"afe.bias_drive", "true"},
     {"afe.gain", "24"},
     {"afe.lead_off_detection", "true"},
+    {"afe.montage", "bipolar"},
     {"afe.reference_uv", "4500000"},
     {"afe.test_signal", "off"},
 };
@@ -121,7 +123,7 @@ static void test_prescription(void)
     section("prescrição: o que o produtor aceita");
 
     med_producer_init(&p);
-    m = make_control(kHonourable, 5);
+    m = make_control(kHonourable, 6);
     CHECK(send_control(&p, &m, &ack) == 1, "uma prescrição válida tem de ter resposta");
     CHECK(ack.magic == MED_AMP_CONTROL_ACK_MAGIC, "magic 0x%08x", ack.magic);
     CHECK(ack.version == MED_AMP_CONTROL_VERSION, "versão %u", ack.version);
@@ -133,7 +135,7 @@ static void test_prescription(void)
 
     /* The prescription eeg.conf ships asks for lead-off and bias drive. */
     med_producer_init(&p);
-    m = make_control(kShipped, 5);
+    m = make_control(kShipped, 6);
     CHECK(send_control(&p, &m, &ack) == 1, "recusa também é resposta");
     CHECK(ack.rejectedIndex == 1, "esperado recusar a opção 0 (afe.bias_drive), recusou %u",
           ack.rejectedIndex);
@@ -143,10 +145,10 @@ static void test_prescription(void)
 
     /* With bias drive off, lead-off is the first thing it cannot do. */
     {
-        struct option_spec o[5];
+        struct option_spec o[6];
         memcpy(o, kShipped, sizeof(o));
         o[0].value = "false";
-        m = make_control(o, 5);
+        m = make_control(o, 6);
         send_control(&p, &m, &ack);
         CHECK(ack.rejectedIndex == 3, "esperado recusar a opção 2 (lead_off), recusou %u",
               ack.rejectedIndex);
@@ -179,6 +181,9 @@ static void test_prescription(void)
             {"afe.lead_off_detection", "1", "booleano não literal"},
             {"afe.bias_drive", "yes", "booleano não literal"},
             {"afe.lead_off_detection", "true", "não há eletrodo"},
+            {"afe.montage", "average", "montagem desconhecida"},
+            {"afe.montage", "", "montagem vazia"},
+            {"afe.montage", "Referential", "maiúsculas"},
             {"afe.notch", "50", "chave desconhecida"},
             {"gain", "24", "sem o prefixo"},
         };
@@ -220,7 +225,7 @@ static void test_prescription(void)
             size_t length;
         } cases[5];
         size_t i;
-        med_amp_control_message base = make_control(kHonourable, 5);
+        med_amp_control_message base = make_control(kHonourable, 6);
 
         /* Each case starts from a streaming producer, to show a malformed
          * message neither answers nor disturbs the session in progress. */
@@ -250,7 +255,7 @@ static void test_frames(void)
 {
     struct med_producer p;
     med_amp_control_ack ack;
-    med_amp_control_message m = make_control(kHonourable, 5);
+    med_amp_control_message m = make_control(kHonourable, 6);
     uint8_t frame[MED_PRODUCER_FRAME_BYTES];
     med_amp_frame_header h;
     int32_t payload[MED_PRODUCER_CHANNELS * MED_PRODUCER_SAMPLES_PER_FRAME];
@@ -334,7 +339,7 @@ static void test_frames(void)
 
     section("quadros: uma prescrição recusada para a transmissão");
     {
-        med_amp_control_message bad = make_control(kShipped, 5);
+        med_amp_control_message bad = make_control(kShipped, 6);
         send_control(&p, &bad, &ack);
         completed = 0;
         for (i = 0; i < 28; ++i) {
@@ -451,7 +456,7 @@ static void test_converter_registers(void)
     /* Reset values of CONFIG1 (0x96) and CONFIG2 (0xC0) ARE the 250 SPS and
      * no-test-signal images - and the bridge bench read those reset values
      * from the part (BRINGUP_AFE.md §4.3). */
-    afe_registers(6, 0, 0, 0, &r);
+    afe_registers(6, 0, 0, 0, 0, &r);
     CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xE0 && r.chset == 0x60,
           "eletrodos, ganho 24: %02x %02x %02x %02x, esperado 96 c0 e0 60",
           r.config1, r.config2, r.config3, r.chset);
@@ -459,27 +464,50 @@ static void test_converter_registers(void)
               r.config4 == 0,
           "sem bias nem lead-off, algo ligado: LOFF %02x SENS %02x %02x %02x %02x CONFIG4 %02x",
           r.loff, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4);
-    afe_registers(6, 1, 0, 0, &r);
+    afe_registers(6, 1, 0, 0, 0, &r);
     CHECK(r.config2 == 0xD0 && r.chset == 0x65,
           "sinal de teste, ganho 24: CONFIG2 %02x CHnSET %02x, esperado d0 65", r.config2, r.chset);
-    afe_registers(2, 0, 0, 0, &r);
+    afe_registers(2, 0, 0, 0, 0, &r);
     CHECK(r.chset == 0x20, "ganho 4: CHnSET %02x, esperado 20", r.chset);
 
     /* Bias, derived: ti-ads1299.c's set_bias(DERIVED) writes BIAS_SENSP and
      * BIAS_SENSN = GENMASK(channels - 1, 0) and sets BIASREF_INT | PD_BIAS
      * (CONFIG3 bits 3 and 2) - 0xE0 | 0x0C. */
-    afe_registers(6, 0, 1, 0, &r);
+    afe_registers(6, 0, 1, 0, 0, &r);
     CHECK(r.config3 == 0xEC && r.sens[0] == 0xFF && r.sens[1] == 0xFF && r.sens[2] == 0 &&
               r.sens[3] == 0 && r.config4 == 0,
           "bias derivado: CONFIG3 %02x SENS %02x %02x %02x %02x CONFIG4 %02x, esperado ec ff ff 00 00 00",
           r.config3, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4);
     /* Lead-off: the comparators (CONFIG4 bit 1, as ti-ads1299.c) AND the
      * per-channel enables the driver leaves at 0. LOFF at its reset value. */
-    afe_registers(6, 0, 0, 1, &r);
+    afe_registers(6, 0, 0, 1, 0, &r);
     CHECK(r.config3 == 0xE0 && r.sens[0] == 0 && r.sens[1] == 0 && r.sens[2] == 0xFF &&
               r.sens[3] == 0xFF && r.config4 == 0x02 && r.loff == 0x00,
           "lead-off: CONFIG3 %02x SENS %02x %02x %02x %02x CONFIG4 %02x LOFF %02x",
           r.config3, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4, r.loff);
+
+    /* Bipolar leaves MISC1 at its reset value, in every combination above. */
+    afe_registers(6, 0, 1, 1, 0, &r);
+    CHECK(r.misc1 == 0x00 && r.sens[1] == 0xFF && r.sens[3] == 0xFF,
+          "bipolar: MISC1 %02x BIAS_SENSN %02x LOFF_SENSN %02x, esperado 00 ff ff", r.misc1,
+          r.sens[1], r.sens[3]);
+    /* Referential [SBAS499C Figure 64 and 10.2.2]: SRB1 is MISC1 bit 5; one
+     * lead-off source on the negative side; BIAS_SENSN = 0 is this project's
+     * decision. Nothing else moves: CHnSET's MUX stays 000 and SRB2 stays 0. */
+    afe_registers(6, 0, 1, 1, 1, &r);
+    CHECK(r.misc1 == 0x20 && r.sens[0] == 0xFF && r.sens[1] == 0x00 && r.sens[2] == 0xFF &&
+              r.sens[3] == 0x01,
+          "referencial: MISC1 %02x SENS %02x %02x %02x %02x, esperado 20 ff 00 ff 01", r.misc1,
+          r.sens[0], r.sens[1], r.sens[2], r.sens[3]);
+    CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xEC && r.chset == 0x60 &&
+              r.config4 == 0x02 && r.loff == 0x00,
+          "referencial mexeu fora do que devia: %02x %02x %02x %02x %02x %02x", r.config1,
+          r.config2, r.config3, r.chset, r.config4, r.loff);
+    /* The switch closes with nothing else prescribed, and no source is on. */
+    afe_registers(6, 0, 0, 0, 1, &r);
+    CHECK(r.misc1 == 0x20 && r.sens[0] == 0 && r.sens[1] == 0 && r.sens[2] == 0 && r.sens[3] == 0,
+          "referencial sem bias nem lead-off: MISC1 %02x SENS %02x %02x %02x %02x", r.misc1,
+          r.sens[0], r.sens[1], r.sens[2], r.sens[3]);
 
     section("conversor: amostras de 24 bits");
     {
@@ -566,7 +594,7 @@ static void test_converter_source(void)
 
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
-    m = make_control(kHonourable, 5);
+    m = make_control(kHonourable, 6);
     send_control(&p, &m, &ack);
     CHECK(ack.rejectedIndex == 0 && p.streaming && strstr(ack.detail, "converter"),
           "aceitável recusada: %u '%.64s'", ack.rejectedIndex, ack.detail);
@@ -592,7 +620,7 @@ static void test_converter_source(void)
     section("fonte conversor: o gerador sintético não alimenta quadros");
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
-    m = make_control(kHonourable, 5);
+    m = make_control(kHonourable, 6);
     send_control(&p, &m, &ack);
     {
         int any = 0;
@@ -617,24 +645,24 @@ static void test_converter_source(void)
     section("fonte conversor: bias e lead-off");
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
-    m = make_control(kShipped, 5);
+    m = make_control(kShipped, 6);
     send_control(&p, &m, &ack);
     CHECK(ack.rejectedIndex == 0 && p.streaming && p.bias_drive == 1 && p.lead_off == 1,
           "a prescrição de fábrica recusada pelo conversor: %u '%.64s' bias %d lead-off %d",
           ack.rejectedIndex, ack.detail, p.bias_drive, p.lead_off);
     {
         /* Lead-off watches electrodes; on the test signal there are none. */
-        struct option_spec o[5];
+        struct option_spec o[6];
         memcpy(o, kShipped, sizeof(o));
-        o[4].value = "internal";
-        m = make_control(o, 5);
+        o[5].value = "internal";
+        m = make_control(o, 6);
         send_control(&p, &m, &ack);
         CHECK(ack.rejectedIndex == 3 && !p.streaming && strstr(ack.detail, "afe.lead_off_detection") &&
                   strstr(ack.detail, "test signal"),
               "lead-off com sinal de teste: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
         o[0].value = "true";
         o[2].value = "false";
-        m = make_control(o, 5);
+        m = make_control(o, 6);
         send_control(&p, &m, &ack);
         CHECK(ack.rejectedIndex == 0 && p.bias_drive == 1 && p.lead_off == 0,
               "bias com sinal de teste recusado: %u '%.64s'", ack.rejectedIndex, ack.detail);
@@ -645,7 +673,7 @@ static void test_converter_source(void)
         med_amp_frame_header h;
         med_amp_lead_off lo;
         int completed = 0;
-        m = make_control(kShipped, 5);
+        m = make_control(kShipped, 6);
         send_control(&p, &m, &ack);
         for (c = 0; c < 8; ++c) nv[c] = 0;
         for (i = 0; i < 14; ++i) {
@@ -678,7 +706,7 @@ static void test_converter_source(void)
          * and the frame says nothing was monitored. */
         med_amp_lead_off lo;
         int completed = 0;
-        m = make_control(kHonourable, 5);
+        m = make_control(kHonourable, 6);
         send_control(&p, &m, &ack);
         for (i = 0; i < 14; ++i) completed = med_producer_on_values(&p, i, nv, 0xFF, 0xFF, frame);
         memcpy(&lo, frame + sizeof(med_amp_frame_header) +
@@ -690,10 +718,76 @@ static void test_converter_source(void)
               lo.monitoredNegative, lo.offPositive, lo.offNegative);
     }
 
+    section("fonte conversor: montagem");
+    med_producer_init(&p);
+    med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
+    {
+        struct option_spec o[6];
+        med_amp_lead_off lo;
+        int completed = 0;
+
+        /* The key absent: bipolar, as before the key existed. */
+        m = make_control(kShipped, 3);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.montage == MED_MONTAGE_BIPOLAR,
+              "sem afe.montage: %u '%.64s' montagem %d", ack.rejectedIndex, ack.detail,
+              (int)p.montage);
+
+        memcpy(o, kShipped, sizeof(o));
+        o[3].value = "referential";
+        m = make_control(o, 6);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.streaming && p.montage == MED_MONTAGE_REFERENTIAL,
+              "referencial recusado pelo conversor: %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* Every negative-side bit set by the part: only the reference's is a
+         * measurement, and only it may reach the record. */
+        for (c = 0; c < 8; ++c) nv[c] = 0;
+        for (i = 0; i < 14; ++i) completed = med_producer_on_values(&p, i, nv, 0x0010u, 0x00FFu, frame);
+        memcpy(&lo, frame + sizeof(med_amp_frame_header) +
+                        MED_PRODUCER_CHANNELS * MED_PRODUCER_SAMPLES_PER_FRAME * 4,
+               sizeof(lo));
+        CHECK(completed && lo.monitoredPositive == 0x00FF && lo.monitoredNegative == 0x0001 &&
+                  lo.offPositive == 0x0010 && lo.offNegative == 0x0001,
+              "referencial, bloco de lead-off: monitored %04x %04x off %04x %04x, esperado 00ff 0001 0010 0001",
+              lo.monitoredPositive, lo.monitoredNegative, lo.offPositive, lo.offNegative);
+
+        /* Back to bipolar: the montage does not outlive its prescription. */
+        m = make_control(kShipped, 6);
+        send_control(&p, &m, &ack);
+        for (i = 0; i < 14; ++i) completed = med_producer_on_values(&p, i, nv, 0, 0x00FFu, frame);
+        memcpy(&lo, frame + sizeof(med_amp_frame_header) +
+                        MED_PRODUCER_CHANNELS * MED_PRODUCER_SAMPLES_PER_FRAME * 4,
+               sizeof(lo));
+        CHECK(completed && p.montage == MED_MONTAGE_BIPOLAR && lo.monitoredNegative == 0x00FF &&
+                  lo.offNegative == 0x00FF,
+              "de volta ao bipolar: montagem %d monitored %04x off %04x", (int)p.montage,
+              lo.monitoredNegative, lo.offNegative);
+
+        /* An unknown montage is refused and names the option. */
+        o[3].value = "linked-ears";
+        m = make_control(o, 6);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 4 && !p.streaming && strstr(ack.detail, "afe.montage"),
+              "montagem desconhecida: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+    }
+    {
+        /* A synthetic producer has no inputs to connect: either montage is
+         * what it does, and it says which it was told. */
+        struct option_spec o[6];
+        memcpy(o, kHonourable, sizeof(o));
+        o[3].value = "referential";
+        med_producer_init(&p);
+        m = make_control(o, 6);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.montage == MED_MONTAGE_REFERENTIAL,
+              "sintético recusou referencial: %u '%.64s'", ack.rejectedIndex, ack.detail);
+    }
+
     section("fonte conversor: o hardware que não aceita vira recusa");
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
-    m = make_control(kHonourable, 5);
+    m = make_control(kHonourable, 6);
     send_control(&p, &m, &ack);
     med_producer_refuse(&p, &ack, "the converter did not take the settings");
     CHECK(ack.rejectedIndex == 1 && !p.streaming && strstr(ack.detail, "did not take"),
@@ -703,7 +797,7 @@ static void test_converter_source(void)
     section("fonte ausente: tudo é recusado, nada transmite");
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_ABSENT, "no converter answered on SPI6");
-    m = make_control(kHonourable, 5);
+    m = make_control(kHonourable, 6);
     send_control(&p, &m, &ack);
     CHECK(ack.rejectedIndex == 1 && !p.streaming && strstr(ack.detail, "absent") &&
               strstr(ack.detail, "SPI6"),

@@ -401,6 +401,12 @@ int afe_apply(const struct afe_regs *regs)
         st = write_and_verify("LOFF", AFE_REG_LOFF, &regs->loff, 1, 0xFFu);
     }
     if (st == AFE_OK) {
+        /* Written in both montages, not only when the switch closes: a
+         * bipolar session after a referential one must open it again, and the
+         * read-back is what says the montage in the record is the one set. */
+        st = write_and_verify("MISC1", AFE_REG_MISC1, &regs->misc1, 1, 0xFFu);
+    }
+    if (st == AFE_OK) {
         st = write_and_verify("CONFIG4", AFE_REG_CONFIG4, &regs->config4, 1, 0xFFu);
     }
     if (st == AFE_OK) {
@@ -427,9 +433,9 @@ int afe_apply(const struct afe_regs *regs)
     }
 
     printf("[afe] configured: CONFIG1 %02x CONFIG2 %02x CONFIG3 %02x CHnSET %02x "
-           "SENS %02x %02x %02x %02x CONFIG4 %02x\r\n",
+           "SENS %02x %02x %02x %02x MISC1 %02x CONFIG4 %02x\r\n",
            config[0], config[1], config[2], regs->chset, regs->sens[0], regs->sens[1],
-           regs->sens[2], regs->sens[3], regs->config4);
+           regs->sens[2], regs->sens[3], regs->misc1, regs->config4);
     return AFE_OK;
 }
 

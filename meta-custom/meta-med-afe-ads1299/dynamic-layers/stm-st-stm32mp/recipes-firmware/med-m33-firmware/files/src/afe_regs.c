@@ -29,6 +29,10 @@
  * comparators on. SINGLE_SHOT (bit 3) stays 0: continuous conversion. */
 #define CONFIG4_PD_LOFF_COMP 0x02u
 
+/* MISC1 [Figure 64]: SRB1 (bit 5) ties the SRB1 pin to every inverting input.
+ * Every other bit is reserved 0, and the reset value is 00h. */
+#define MISC1_SRB1 0x20u
+
 /* LOFF at its reset value: COMP_TH 95 %/5 %, ILEAD_OFF 6 nA, FLEAD_OFF DC.
  * Written, not left alone, so that the read-back covers it. */
 #define LOFF_RESET 0x00u
@@ -53,8 +57,11 @@ int afe_pga_field(double gain)
 }
 
 void afe_registers(int pga_field, int test_signal, int bias_drive, int lead_off,
-                   struct afe_regs *r)
+                   int referential, struct afe_regs *r)
 {
+    /* The inverting inputs: eight electrodes, or one node on the SRB1 pin. */
+    const uint8_t negative = referential ? AFE_REFERENCE_BIT : AFE_CHANNEL_MASK;
+
     r->config1 = (uint8_t)(CONFIG1_RESERVED | CONFIG1_DR_250);
     r->config2 = (uint8_t)(CONFIG2_RESERVED | (test_signal ? CONFIG2_INT_CAL : 0u));
     r->config3 = (uint8_t)(CONFIG3_RESERVED | CONFIG3_REFBUF |
@@ -63,9 +70,10 @@ void afe_registers(int pga_field, int test_signal, int bias_drive, int lead_off,
                          (test_signal ? CHSET_MUX_TEST : CHSET_MUX_NORMAL));
     r->loff = LOFF_RESET;
     r->sens[0] = bias_drive ? AFE_CHANNEL_MASK : 0u; /* BIAS_SENSP */
-    r->sens[1] = bias_drive ? AFE_CHANNEL_MASK : 0u; /* BIAS_SENSN */
+    r->sens[1] = (bias_drive && !referential) ? AFE_CHANNEL_MASK : 0u; /* BIAS_SENSN */
     r->sens[2] = lead_off ? AFE_CHANNEL_MASK : 0u;   /* LOFF_SENSP */
-    r->sens[3] = lead_off ? AFE_CHANNEL_MASK : 0u;   /* LOFF_SENSN */
+    r->sens[3] = lead_off ? negative : 0u;           /* LOFF_SENSN */
+    r->misc1 = referential ? MISC1_SRB1 : 0u;
     r->config4 = lead_off ? CONFIG4_PD_LOFF_COMP : 0u;
 }
 

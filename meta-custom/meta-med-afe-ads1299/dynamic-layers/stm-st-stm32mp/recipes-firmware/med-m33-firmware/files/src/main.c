@@ -163,7 +163,8 @@ static int on_message(struct rpmsg_endpoint *ept, void *data, size_t length,
                 struct afe_regs regs;
                 afe_registers(afe_pga_field(producer.gain),
                               producer.test_signal == MED_TEST_SIGNAL_INTERNAL,
-                              producer.bias_drive, producer.lead_off, &regs);
+                              producer.bias_drive, producer.lead_off,
+                              producer.montage == MED_MONTAGE_REFERENTIAL, &regs);
                 if (afe_apply(&regs) != AFE_OK) {
                     med_producer_refuse(&producer, &pending_ack,
                                         "the converter did not take the settings");
