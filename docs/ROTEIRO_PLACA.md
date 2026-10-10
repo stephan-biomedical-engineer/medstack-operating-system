@@ -553,7 +553,12 @@ algum lugar: uma entrada solta capta a rede (2 a 4 mV) e, pela soma do bias, con
 **Plugue de curto.** Um DB25 de soldar, com um fio unindo o `BIAS_DRV` (pino 1) às dezesseis
 entradas: `INnP` nos pinos 24, 23, 22, 21, 18, 17, 16, 15 e `INnN` nos pinos 11, 10, 9, 8, 5, 4,
 3, 2. **Fora do fio**: os pinos `NC` (6, 7, 12, 14, 19, 20, 25), que são GNDA, e o 13 (`IN_SRB`).
-A pinagem foi lida do `schematic.pdf`: confira no KiCad antes de soldar.
+A pinagem foi lida do `schematic.pdf`: confira no KiCad antes de soldar. Dois pinos já têm
+confirmação pelo sinal: o 24 (`IN1P`) e o 11 (`IN1N`), em 2026-10-10 (`BRINGUP_AFE.md` §6.9).
+
+**Uma entrada definida e a outra solta é pior que as duas soltas.** Com a `IN1P` no BIAS e a
+`IN1N` aberta, o canal 1 mostrou 25 a 36 mV de 60 Hz; com as duas no BIAS, 0,07 mV. Um plugue
+pela metade não mede ruído.
 
 **Plugue de resistores**, depois do curto: o mesmo, com um resistor em série em cada entrada
 (5 a 50 kΩ, a faixa de um eletrodo), todos indo ao nó do BIAS. Serve para o ruído com impedância,

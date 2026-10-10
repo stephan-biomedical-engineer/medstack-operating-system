@@ -1144,9 +1144,36 @@ o `raw.bin`.
   indo −71 mV e voltando), que pode ser a chave indo a "eletrodo". Se foi, perturbou e não
   deslocou.
 
-**Sem explicação.** Na primeira sessão bipolar o canal 1 tinha **22 mV de 60 Hz** (18,8 mV rms) e
-os outros de 0,4 a 5,7 mV; na última, com a mesma fiação, o canal 1 tinha 19 µV rms. Pelo `amp`,
-na mesma condição, 6 µV. Mil vezes entre duas sessões bipolares do mesmo dia.
+**Os 60 Hz do canal 1 no bipolar: uma entrada definida e a outra solta.** Na primeira sessão
+bipolar o canal 1 tinha 26 a 34 mV de 60 Hz, e na última, com a mesma fiação, 0,02 mV. Quatro
+capturas de 20 s da sessão em curso (`build/med-bench/hum/`, `amp-bench.py noise --skip 0`), chave
+manual em GNDA salvo onde dito:
+
+| Captura | Condição | Canal 1: 60 Hz (pico) | Canal 1: offset | Canais 2 a 8: 60 Hz |
+|---|---|---|---|---|
+| A | config de fábrica, depois da sessão acima | cortado no topo | +187,5 mV | 7,2–10,2 mV |
+| B | placa desligada 30 s e religada | **25,5 mV** | −37 mV | 2,8–6,8 mV |
+| C | referencial e volta ao bipolar, chave manual em eletrodo | **35,7 mV** | −50 mV | 0,016–8,2 mV |
+| D | como B, com `IN1N` (pino 11) soldado ao mesmo nó do Y | **0,074 mV** | 0,018 mV | 2,6–6,4 mV |
+
+- **B repete a primeira sessão**: os milivolts são o estado normal desta fiação no bipolar, não um
+  acidente daquela sessão.
+- **C descarta o referencial como causa do silêncio**: depois dele o canal voltou com rede. O
+  silêncio da última sessão bipolar veio da manobra da chave manual, que com o referencial ligado
+  pôs ~2,5 V entre as entradas do canal 1; ele ficou fora da faixa e seguiu até cortar no topo
+  (A). Aqueles 0,02 mV eram um canal que não media.
+- **D mostra a causa**: com a entrada negativa no mesmo nó da positiva, a rede no canal 1 caiu
+  ~350 vezes. A positiva estava presa ao `BIAS_DRV` e a negativa solta, então a captação da solta
+  aparecia inteira; nos canais abertos as duas captam parecido e sobra a diferença. É a regra da
+  §9.17 do `BRINGUP_STM32MP2.md` outra vez: uma entrada aberta não mede nada, nem ruído. De
+  passagem, D confirma pelo comportamento que o pino 11 do DB25 é a `IN1N`.
+
+**O que continua aberto.** Os 74 µV de rede (55 µV rms) que sobraram em D são cem vezes os 0,7 µV
+medidos pelo `amp` com as duas entradas de um canal no BIAS. Não se sabe se é o link (a ponte e o
+cabo USB em vez do header), as catorze entradas ainda abertas alimentando o bias, ou o minuto de
+espera (o offset ainda derivava 3,4 µV/s). O `BIAS_DRV` não foi medido com o multímetro em nenhuma
+captura. E em C o canal 3, aberto e dentro da escala (−71 mV), tinha só 0,016 mV de rede entre
+vizinhos com milivolts: o mesmo sintoma do canal 1 antes de cortar, sem causa conferida.
 
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
