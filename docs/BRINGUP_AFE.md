@@ -29,6 +29,7 @@
 | Amostra real adquirida | **sim, pelo link `usb`**: no PC (30 min, §6.3) e na placa (30 min, §6.5) |
 | Link `spi` (`DRDY` como interrupção) | **nunca rodou** |
 | Link `amp` (Cortex-M33) | **nenhuma amostra**: não existe firmware |
+| Montagem referencial pelo driver de kernel | **vista no sinal, 2026-10-10**, num canal (§6.9) |
 | Arquivo clínico pelo link `usb` | **sim, desde 2026-10-10**: antes, toda sessão era recusada pela escala em texto do kernel (§6.8) |
 | Vazão do link `usb` | **250 leituras/s**, em qualquer ODR e qualquer clock SPI; a 16 kSPS, 1,56% do que o conversor produz (§6.7) |
 
@@ -1095,6 +1096,57 @@ o registro e é definitiva.
 
 O ruído do autoteste nos dois boots: 169 códigos (ponte plugada com o serviço em laço) e 48 (ponte
 presente desde o início). Coerente com a hipótese da §6.7, e ainda não é um teste dela.
+
+### 6.9 A montagem referencial pelo driver de kernel · **2026-10-10, na placa, link `usb`**
+
+O atributo `montage` do driver do conversor, escrito em 2026-10-10 e até aqui só compilado, foi
+carregado, escrito pelo serviço e **visto no sinal**. Slot B da §6.8 (kernel
+`6.6.129-g19187a49b91a`), `scripts/montage-bench.sh` um passo por vez, sem reboot. O script passou
+a ler o link da config selada: no `usb` ele troca `device.option.montage` e mostra o atributo, e
+não mexe no lead-off, porque este driver não liga fonte de corrente em canal nenhum. O fio em Y do
+`BRINGUP_STM32MP2.md` §9.17: `BIAS_DRV` (pino 1) a `IN_SRB` (pino 13) e a `IN1P` (pino 24); os
+canais 2 a 8 abertos, como controle. Dados em `build/med-bench/srb1-usb/`.
+
+**Não há leitura de registrador neste link.** O mapa de registradores do driver é em cache
+(`REGCACHE_MAPLE`), então ler `MISC1` pelo debugfs devolveria o que foi escrito. O atributo prova a
+escrita; a chave, só o sinal.
+
+| Momento | Chave manual SRB1 | Canal 1 | Canais 2 a 8 |
+|---|---|---|---|
+| bipolar, fim (127 s) | GNDA, depois eletrodo | −52,4 mV, derivando | −145 a +71 mV, cada um na sua carga |
+| referencial, **primeira amostra** | eletrodo | 1,9 mV; −0,02 mV em três amostras | — |
+| referencial, 1 s a 119 s | eletrodo | −0,086 mV, parado | os sete em −187,5 mV, o fundo da escala |
+| referencial, **119,06 s**: a chave manual vai a GNDA | GNDA | **+187,5 mV** | saem do fundo na mesma amostra, para +9 a +14 mV |
+| bipolar, início | GNDA | 124 mV, subindo devagar | sem degrau (< 0,4 mV) |
+
+As duas assinaturas do `amp` se repetiram: ao fechar a chave interna as duas entradas do canal 1
+viram um nó e ele vai a zero na primeira amostra; com ela fechada, levar o pino SRB1 a GNDA crava o
+canal no topo, o que só acontece se a entrada negativa estiver ligada ao pino. A volta ao bipolar
+solta a entrada.
+
+O registro: 0 lacunas e 0 CRC errado nas três sessões (127, 186 e 71 s); atributo relido
+`bipolar`, `referential`, `bipolar`; `metadata.json` com `"montage": "referential"`; `record.bdf`
+de 3324 registros com rótulos `EEG 1-REF`, `EEG 2-REF`…, **0 códigos diferentes em 372.288** contra
+o `raw.bin`.
+
+**O que isto não diz.**
+
+- **O valor do canal 1 no referencial não é ruído nem offset.** O desvio foi 0,05 µV rms (18
+  códigos distintos em 100 s), abaixo do ruído do próprio conversor; pelo `amp` tinham sido
+  0,4 µV. Os canais 2 a 8 estavam no fundo da escala desde o primeiro segundo, o que aponta o bias
+  saturado e as entradas do canal 1 fora da faixa de modo comum. Não foi medido.
+- **O bias no referencial com entradas abertas satura nos dois links**: aos 14,6 s pelo `amp`
+  (§9.17), em menos de 1 s aqui. As sete entradas positivas abertas são o que o amplificador soma.
+  `BIAS_SENSN = 0` continua decisão sem medida, e isto é mais um motivo para não trocar o padrão.
+- Só o canal 1 tinha fio.
+- O controle "mover a chave manual no bipolar não desloca o canal" não tem hora anotada. Há um
+  transitório no canal 1 entre 63 e 66 s da primeira sessão (−49 → −28 → −45 mV, com o canal 4
+  indo −71 mV e voltando), que pode ser a chave indo a "eletrodo". Se foi, perturbou e não
+  deslocou.
+
+**Sem explicação.** Na primeira sessão bipolar o canal 1 tinha **22 mV de 60 Hz** (18,8 mV rms) e
+os outros de 0,4 a 5,7 mV; na última, com a mesma fiação, o canal 1 tinha 19 µV rms. Pelo `amp`,
+na mesma condição, 6 µV. Mil vezes entre duas sessões bipolares do mesmo dia.
 
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**

@@ -18,6 +18,17 @@
 # not. Lead-off detection is off in all three sessions, so that its current
 # sources are not what moves the inputs, and the montage is the one variable.
 #
+# The link is read from the sealed configuration, because each one says the
+# montage in other words. On "amp" the firmware takes the prescription's keys
+# and its trace shows the registers it read back. On "usb" and "spi" the
+# montage is an attribute of the kernel driver; the prescription's lead-off
+# key stays as it is, because that driver enables no lead-off current source
+# on any channel and offers no control to say so; and there is no register
+# read-back to show - the driver's register map is cached, so reading MISC1
+# through debugfs would return what was written, not what the part holds.
+# On those links the attribute proves the write and only the signal proves
+# the switch.
+#
 # The front-end board's SRB1 switch is manual and no software can read it:
 # whoever runs this decides its position for each session and writes it down
 # beside the session name this prints. The record cannot say it.
@@ -31,26 +42,45 @@ SECONDS_EACH=40
 BENCH=/run/med-bench
 DROPIN=/run/systemd/system/eeg-acquisition.service.d
 
+LINK=$(sed -n 's/^acquisition.link = //p' /etc/medplatform/eeg.conf)
+case "$LINK" in
+    amp|usb|spi) ;;
+    *) echo "link '$LINK' não tem montagem a exercitar (amp, usb ou spi)" >&2; exit 2 ;;
+esac
+
 prepare() {  # $1 directory, $2 montage
     mkdir -p "$BENCH/$1"
-    sed -e "s/^afe.lead_off_detection = true/afe.lead_off_detection = false/" \
-        -e "s/^device.option.afe.lead_off_detection = true/device.option.afe.lead_off_detection = false/" \
-        -e "s/^afe.montage = bipolar/afe.montage = $2/" \
-        -e "s/^device.option.afe.montage = bipolar/device.option.afe.montage = $2/" \
-        -e "s/^record.montage = bipolar/record.montage = $2/" \
-        /etc/medplatform/eeg.conf > "$BENCH/$1/eeg.conf"
+    if [ "$LINK" = amp ]; then
+        sed -e "s/^afe.lead_off_detection = true/afe.lead_off_detection = false/" \
+            -e "s/^device.option.afe.lead_off_detection = true/device.option.afe.lead_off_detection = false/" \
+            -e "s/^afe.montage = bipolar/afe.montage = $2/" \
+            -e "s/^device.option.afe.montage = bipolar/device.option.afe.montage = $2/" \
+            -e "s/^record.montage = bipolar/record.montage = $2/" \
+            /etc/medplatform/eeg.conf > "$BENCH/$1/eeg.conf"
+    else
+        sed -e "s/^afe.montage = bipolar/afe.montage = $2/" \
+            -e "s/^device.option.montage = bipolar/device.option.montage = $2/" \
+            -e "s/^record.montage = bipolar/record.montage = $2/" \
+            /etc/medplatform/eeg.conf > "$BENCH/$1/eeg.conf"
+    fi
     (cd "$BENCH/$1" && sha256sum eeg.conf | cut -d" " -f1 > eeg.conf.sha256)
     # The sed must have matched: a copy that still says the factory values
     # would record the factory configuration under the test's name.
     test "$(grep -c "montage = $2\$" "$BENCH/$1/eeg.conf")" = 3
-    test "$(grep -c "lead_off_detection = false\$" "$BENCH/$1/eeg.conf")" = 2
+    if [ "$LINK" = amp ]; then
+        test "$(grep -c "lead_off_detection = false\$" "$BENCH/$1/eeg.conf")" = 2
+    fi
 }
 
 report() {
     systemctl show eeg-acquisition -p ActiveState -p NRestarts
-    # Read now: the trace keeps about twelve lines and gains one every 10 s.
-    tr -d '\0' < "$(ls /sys/kernel/debug/remoteproc/remoteproc*/trace0 | head -n 1)" |
-        grep '\[afe\] configured' | tail -n 1
+    if [ "$LINK" = amp ]; then
+        # Read now: the trace keeps about twelve lines and gains one every 10 s.
+        tr -d '\0' < "$(ls /sys/kernel/debug/remoteproc/remoteproc*/trace0 | head -n 1)" |
+            grep '\[afe\] configured' | tail -n 1
+    else
+        echo "montage attribute: $(cat /run/med-afe/eeg0/montage)"
+    fi
     ls -d /data/eeg/session-* | tail -n 1
 }
 

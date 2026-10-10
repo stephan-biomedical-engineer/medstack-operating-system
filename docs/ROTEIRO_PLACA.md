@@ -443,7 +443,7 @@ ssh $B 'rm -f /run/systemd/system/eeg-acquisition.service.d/bench.conf && system
 cópia de teste parece igual a um saudável. O `/run/med-bench/` fica até o próximo boot, e é
 inofensivo: nada o lê.
 
-### 7.7 A montagem referencial (`amp`, imagem de 2026-10-10 em diante)
+### 7.7 A montagem referencial (imagem de 2026-10-10 em diante; os registradores, só no `amp`)
 
 O firmware fecha a chave do SRB1 quando a prescrição diz `afe.montage = referential`
 (`implementation_plan_bdf.md` Fase 5). Este passo confere, no silício, que o conversor aceitou os
@@ -504,6 +504,14 @@ Um fio em Y no DB25, **com a placa desligada**: `BIAS_DRV` (pino 1) a `IN_SRB` (
 Os canais 2 a 8, sem fio, não podem ter degrau: são o controle. Depois, `amp-bench.py levels` em
 cada `raw.bin`. Medido em 2026-10-10: 181,8 mV → 0,039 mV no passo 2, e +187,5 mV em 0,2 s no
 passo 3 (`BRINGUP_STM32MP2.md` §9.17).
+
+**No `usb` a mesma tabela vale, com três diferenças** (executado em 2026-10-10, `BRINGUP_AFE.md`
+§6.9). O `montage-bench.sh` lê o link da config selada e imprime `montage attribute:` em vez da
+linha do firmware; não há registrador relido, porque o driver de kernel o guarda em cache. O
+lead-off não é desligado, porque esse driver não liga fonte de corrente em canal nenhum. E, sem
+essas fontes, nada carrega o capacitor de entrada: no passo 1 o canal 1 fica onde estiver (foram
+−52 mV), não no topo, e o degrau do passo 2 pode ser pequeno. O que decide é o passo 3. Medido:
+−52 mV → 1,9 mV na primeira amostra do passo 2, e +187,5 mV no passo 3.
 
 **Com gerador, para medir amplitude (não executado; falta material).** No referencial cada canal
 mede `INnP − SRB1`, então um seno no pino SRB1 tem de aparecer nos oito canais.
