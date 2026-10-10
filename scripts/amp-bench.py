@@ -20,6 +20,9 @@ recorded with `dd`. The board side is scripts/amp-bench.sh.
     amp-bench.py levels CAPTURE [--full-scale-uv F]
                                                    where each channel sits: mean, extremes,
                                                    and how much of the time at full scale
+    amp-bench.py noise CAPTURE [--skip S] [--seconds S] [--mains HZ]
+                                                   inputs shorted or on resistors: noise,
+                                                   mains residue, offset and drift per channel
     amp-bench.py bdf SESSION_DIR                   the clinical file(s) eeg-record-export
                                                    derived, against the raw.bin beside them
 
@@ -397,6 +400,61 @@ def levels(path, full_scale_uv):
     return 0
 
 
+def noise(path, skip, seconds, mains):
+    """Inputs shorted, or tied to a common node through resistors: what is left
+    is the front-end's own noise, whatever the mains still couples in, and the
+    offset. Reported per channel and not judged against a limit - there is no
+    measured limit for this board yet, and a number borrowed from a datasheet
+    table would be a criterion nobody checked.
+
+    The noise is the median over 1 s windows of the rms after removing a
+    straight line, so that drift is reported as drift and one disturbed second
+    does not set the figure; the worst second is printed beside it."""
+    acks, frames = parse(open(path, 'rb').read())
+    per_ch, bad, gaps, prev, rate = None, 0, 0, None, None
+    for h, body in frames:
+        magic, ver, ch, spc, mhz, seq, ts, scale, crc = h
+        if ver not in FRAME_VERSIONS or zlib.crc32(body) & 0xFFFFFFFF != crc:
+            bad += 1; continue
+        if prev is not None and seq != prev + 1:
+            gaps += 1
+        prev, rate = seq, int(round(mhz / 1000.0))
+        per_ch = per_ch or [[] for _ in range(ch)]
+        vals = struct.unpack('<%di' % (ch * spc), body[:ch * spc * 4])
+        for i in range(spc):
+            for c in range(ch):
+                per_ch[c].append(vals[i * ch + c] * scale / 1000.0)   # uV
+    if not per_ch:
+        print('nenhum quadro válido'); return 1
+    a = int(skip * rate)
+    b = len(per_ch[0]) if seconds is None else min(len(per_ch[0]), a + int(seconds * rate))
+    windows = (b - a) // rate
+    print('quadros %d, lacunas %d, CRC/versão errados %d; analisados %d s a partir de %g s'
+          % (len(frames), gaps, bad, windows, skip))
+    if windows < 5:
+        print('captura curta: são precisos pelo menos 5 s depois do trecho descartado'); return 1
+    median = lambda v: sorted(v)[len(v) // 2]
+    print('canal  ruído rms(uV)  pior s(uV)  pico-a-pico(uV)  rede %gHz(uV pico)  offset(uV)  deriva(uV/s)  parado' % mains)
+    for c, v in enumerate(per_ch):
+        rms, pp = [], []
+        for w in range(windows):
+            y = v[a + w * rate:a + (w + 1) * rate]
+            n = len(y); xm = (n - 1) / 2.0; ym = sum(y) / n
+            k = sum((i - xm) * (q - ym) for i, q in enumerate(y)) / sum((i - xm) ** 2 for i in range(n))
+            res = [q - ym - k * (i - xm) for i, q in enumerate(y)]
+            rms.append(math.sqrt(sum(r * r for r in res) / n)); pp.append(max(res) - min(res))
+        seg = v[a:a + windows * rate]
+        hum = median([sine_fit(seg[w * rate:(w + 1) * rate], mains / rate)[0] for w in range(windows)])
+        first = sum(seg[:rate]) / rate; last = sum(seg[-rate:]) / rate
+        stuck = max(seg) == min(seg)
+        print('  %d   %11.3f  %10.3f  %15.2f  %18.3f  %10.2f  %12.3f  %s'
+              % (c + 1, median(rms), max(rms), median(pp), hum, sum(seg) / len(seg),
+                 (last - first) / (windows - 1), 'SIM' if stuck else 'não'))
+    print('ruído e pico a pico: mediana das janelas de 1 s, sem a reta; "pior s" é a janela mais ruidosa.')
+    print('um canal "parado" está saturado ou morto: os números dele não são ruído.')
+    return 0 if gaps == 0 and bad == 0 else 1
+
+
 def bdf_files(directory):
     import glob
     single = os.path.join(directory, 'record.bdf')
@@ -516,6 +574,9 @@ def main(argv):
         if opt('--hz') is None or (opt('--uv') is None) == (opt('--below') is None):
             print('tone: --hz F e exatamente um de --uv A ou --below A'); return 2
         return tone(argv[2], opt('--hz'), opt('--uv'), opt('--below'), opt('--tolerance') or 0.1)
+    if len(argv) >= 3 and argv[1] == 'noise':
+        opt = lambda name, d: float(argv[argv.index(name) + 1]) if name in argv else d
+        return noise(argv[2], opt('--skip', 10.0), opt('--seconds', None), opt('--mains', 60.0))
     if len(argv) >= 3 and argv[1] == 'levels':
         fs = float(argv[argv.index('--full-scale-uv') + 1]) if '--full-scale-uv' in argv else 187500.0
         return levels(argv[2], fs)

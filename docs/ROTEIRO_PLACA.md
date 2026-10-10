@@ -518,6 +518,32 @@ A sozinha não basta: é B que mostra que o sinal chegou pela chave.
 as `INnP` são acessíveis, e o que cada posição da chave de SRB1 da PCB liga ao pino. Se uma posição
 o põe em GND, o teste é na outra.
 
+### 7.9 Ruído com as entradas definidas — **não executado**
+
+O piso de ruído da placa, pelos pinos de entrada. Só vale com **todas** as entradas ligadas a
+algum lugar: uma entrada solta capta a rede (2 a 4 mV) e, pela soma do bias, contamina as outras.
+
+**Plugue de curto.** Um DB25 de soldar, com um fio unindo o `BIAS_DRV` (pino 1) às dezesseis
+entradas: `INnP` nos pinos 24, 23, 22, 21, 18, 17, 16, 15 e `INnN` nos pinos 11, 10, 9, 8, 5, 4,
+3, 2. **Fora do fio**: os pinos `NC` (6, 7, 12, 14, 19, 20, 25), que são GNDA, e o 13 (`IN_SRB`).
+A pinagem foi lida do `schematic.pdf`: confira no KiCad antes de soldar.
+
+**Plugue de resistores**, depois do curto: o mesmo, com um resistor em série em cada entrada
+(5 a 50 kΩ, a faixa de um eletrodo), todos indo ao nó do BIAS. Serve para o ruído com impedância,
+e para soltar um resistor de propósito e ver o que o lead-off reporta.
+
+| Passo | Chave manual SRB1 | Comando |
+|---|---|---|
+| 1 | **GNDA** (a montagem é bipolar) | placa desligada, encaixar o plugue, ligar |
+| 2 | GNDA | `ssh $B sh -s -- bipolar < scripts/montage-bench.sh`, e deixar gravando 2 min |
+| 3 | GNDA | `ssh $B sh -s -- fabrica < scripts/montage-bench.sh` |
+
+Copiar a penúltima sessão como no §7.4 e julgar com
+`python3 scripts/amp-bench.py noise $D/raw.bin` (descarta os 10 primeiros segundos). Não há
+critério medido para esta placa ainda. A única referência é um canal, 11 s, em 2026-10-10, com as
+duas entradas no BIAS: **0,48 µV rms, 1,5 µV de pico a pico, 0,7 µV de rede**, offset de 30 µV
+ainda derivando 1,4 µV/s.
+
 ---
 
 ## 8. Quando uma fase falha
