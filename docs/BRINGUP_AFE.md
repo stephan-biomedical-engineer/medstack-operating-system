@@ -1187,7 +1187,10 @@ símbolo no meio da frase, nunca no começo de uma linha de comentário.
   canais ao mesmo tempo. É mais forte do que a folha de dados do registrador sustenta, e foi
   suavizada aqui e no comentário do driver — o efeito elétrico é hipótese, o estado é o que o bit
   reporta.)
-- **L2, `SRB1` (MISC1 bit 5) não tem controle.** É a montagem de referência comum, que é como um
+- **L2, `SRB1` (MISC1 bit 5) não tem controle.** *(2026-10-10: o driver ganhou o atributo
+  `montage`, escrito e compilado, nunca carregado; `implementation_plan_bdf.md` Fase 5. A parte
+  desta nota sobre a chave da PCB continua valendo, e o esquemático a detalhou: a chave leva o
+  pino ao eletrodo de referência por 4,99 kΩ ou a GNDA por 1 MΩ.)* É a montagem de referência comum, que é como um
   gorro de EEG normalmente se liga. Decisão de hardware pendente: a chave da PCB alterna GND e o
   eletrodo do canal, e **o software não consegue ler a posição dela** — então o registro não pode
   afirmar a montagem. Sugestão registrada: ligar a chave a um dos 4 GPIOs do próprio conversor, que

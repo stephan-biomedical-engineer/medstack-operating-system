@@ -190,14 +190,9 @@ python do_derive_device_options() {
 
     elif link in ('spi', 'usb'):
         # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
-        # input_mux and test_signal are the driver's own. Two prescriptions have
-        # no attribute at all, and are checked against what the driver does at
-        # probe instead of being passed and ignored.
-        if montage != 'bipolar':
-            bb.fatal("afe.montage = %s cannot be honoured on link '%s': the kernel "
-                     "driver offers no control that connects the inverting inputs to "
-                     "a common reference, so the front-end would record bipolar "
-                     "under a record that says otherwise" % (montage, link))
+        # input_mux, test_signal, bias_drive and montage are the driver's own.
+        # One prescription has no attribute at all, and is checked against what
+        # the driver does at probe instead of being passed and ignored.
         if not lead_off:
             bb.fatal("afe.lead_off_detection = false cannot be honoured on link '%s': "
                      "the kernel driver enables the lead-off comparators at probe and "
@@ -222,6 +217,10 @@ python do_derive_device_options() {
             ('input_mux', 'test_signal' if internal else 'normal'),
             ('test_signal', '1x_slow' if internal else 'off'),
             ('bias_drive', 'derived' if bias else 'off'),
+            # The same two words on both sides. A kernel without the attribute
+            # makes the driver refuse the option and the service refuse to
+            # start, which is the right outcome for a montage nobody applied.
+            ('montage', montage),
         ]
 
     else:
@@ -238,8 +237,9 @@ python do_derive_device_options() {
     # The montage is what the link DOES, not what anyone wishes. By this point
     # afe.montage is that: "amp" forwards it and the producer answers for it
     # (a producer that cannot connect the reference refuses, and the service
-    # does not start), "spi"/"usb" were refused above for anything but
-    # bipolar, and "simulated" has no inputs, so either is what it does.
+    # does not start), "spi"/"usb" write it to the kernel driver's attribute
+    # (a driver without one refuses, with the same outcome), and "simulated"
+    # has no inputs, so either is what it does.
 
     # Where the operator put each electrode. Not part of the afe.* prescription
     # on purpose: do_derive forwards every afe.* key to the producer, and a

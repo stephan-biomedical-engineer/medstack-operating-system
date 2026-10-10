@@ -299,7 +299,7 @@ escreve no BDF uma amostra que o próprio `raw.bin` diz não ser confiável.
 | Link | O que muda | Estado |
 |---|---|---|
 | `amp` | `afe.montage` no `med_producer.c`. No referencial, `MISC1` (0x15) bit 5 = SRB1 fecha as chaves que ligam o pino SRB1 às entradas inversoras dos 8 canais. O eletrodo de referência vai no SRB1 e os outros nas entradas positivas (SBAS499C §10.2.2). `CHnSET` não muda: o MUX continua `000`. Mudam `LOFF_SENSN` e `BIAS_SENSN`, ver abaixo | **feito e visto no sinal (2026-10-10)**: `MISC1 = 20h` relido, e a chave fecha e abre num canal com as duas entradas definidas (`BRINGUP_STM32MP2.md` §9.17) |
-| `spi`, `usb` | atributo no `ti-ads1299` do `linux-med` e tradução no `do_derive_device_options`. Até lá, o build **recusa** `referential` nesses links, com a mensagem | a recusa está feita e injetada (2026-10-10); o atributo, a fazer |
+| `spi`, `usb` | atributo no `ti-ads1299` do `linux-med` e tradução no `do_derive_device_options`. A recusa do build saiu junto | **atributo `montage` escrito e a tradução feita (2026-10-10)**; compila contra o 6.8 do host; nunca carregado, e ainda não compilado contra o 6.6 da placa |
 | `simulated` | nada: não há eletrodo, e qualquer montagem é trivialmente o que ele faz | — |
 
 **O lead-off muda de significado no referencial.** Com as entradas negativas presas ao SRB1, a
@@ -659,9 +659,31 @@ nenhum caminho DC, então um canal aberto mede a carga desse capacitor em qualqu
 
 **O que falta, na ordem.** (1) ~~Na placa, pelo `amp`: o sinal no SRB1.~~ Feito. Sobra medir o
 bias no referencial (`BIAS_SENSN = 0` é decisão, e os canais abertos foram ao fundo negativo aos
-14,6 s daquela sessão, sem causa conferida). (2) O atributo de montagem no `ti-ads1299` e a tradução
-na receita, que trocam a recusa de `spi`/`usb` por suporte. (3) Só então o padrão vira
-`referential`.
+14,6 s daquela sessão, sem causa conferida). (2) ~~O atributo de montagem no `ti-ads1299` e a tradução na receita.~~ Escrito, ver abaixo; falta
+carregá-lo. (3) Só então o padrão vira `referential`.
+
+**O segundo passo: o atributo no driver do kernel (2026-10-10, só compilado).** `montage` e
+`montage_available` no `ti-ads1299` do `linux-med`, com os mesmos dois valores da prescrição.
+`referential` escreve `MISC1 = 20h` e tira as entradas negativas da derivação do bias
+(`BIAS_SENSN = 0`), a mesma decisão do firmware; `bipolar` desfaz as duas coisas. A derivação é
+corrigida com as entradas negativas ainda separadas (antes de fechar, depois de abrir), o atributo
+recusa mudar com o buffer rodando, como o `bias_drive`, e o probe escreve `bipolar` em vez de
+presumir o reset. O driver não liga o lead-off por canal, então a regra de "uma fonte só" não tem
+onde ser aplicada ali; fica escrita no comentário para quem ligar. Na receita, `spi` e `usb`
+passam `device.option.montage`, e a recusa de `referential` saiu.
+
+| Verificação | Resultado |
+|---|---|
+| `checkpatch --strict` | 0 erros, 2 avisos e 2 checks, os mesmos de antes da mudança |
+| `make -C scripts/oot-modules`, kernel 6.8 do host, e de novo com `W=1` | compila e liga sem avisos |
+| build, `usb`, as duas montagens | `device.option.montage` e `record.montage` iguais à prescrição |
+
+**O que isto não significa.** O módulo nunca foi carregado: nenhum `echo referential > montage`
+foi escrito num conversor, e o readback do `MISC1` pelo driver não existe. O `checkpatch` limpo
+não diz nada sobre o registrador estar certo (foi 0/0/0 com três constantes invertidas no
+MCP2210). Não foi compilado contra o 6.6 da placa: o build do Yocto usa o `HEAD` do `linux-med`, e
+a mudança não está commitada lá. Uma imagem `usb` com a receita nova e o módulo antigo **não
+adquire**: o driver do framework recusa a opção que o kernel não tem, e o slot não se confirma.
 
 ### Fase 6 — com o plano de controle
 
