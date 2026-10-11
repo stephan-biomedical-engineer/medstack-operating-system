@@ -14,6 +14,7 @@
 #include <QUrl>
 
 #include "EegClient.h"
+#include "ReviewRequest.h"
 #include "WaveformItem.h"
 
 int main(int argc, char* argv[]) {
@@ -30,8 +31,11 @@ int main(int argc, char* argv[]) {
     // is exactly one stream, and the screen does not get to create another.
     qmlRegisterType<WaveformItem>("MedPlatform.Eeg", 1, 0, "WaveformItem");
 
+    ReviewRequest review(qEnvironmentVariable("MED_REVIEW_REQUEST"));
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("eeg"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("review"), &review);
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
 
     if (engine.rootObjects().isEmpty()) {

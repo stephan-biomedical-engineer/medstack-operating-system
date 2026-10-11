@@ -14,6 +14,12 @@ import MedPlatform.Eeg
 Window {
     id: root
     visible: true
+    // The whole screen and no frame. A frame is three buttons this device has
+    // no answer for: the compositor has no task list, so a minimised window
+    // cannot be brought back with a mouse, and a closed operator display is a
+    // device with no display. Seen on the board 2026-10-11 - both windows
+    // minimised, and nothing left but the compositor's background.
+    flags: Qt.Window | Qt.FramelessWindowHint
     visibility: Window.Maximized
     width: 1280
     height: 720
@@ -43,18 +49,26 @@ Window {
     // amplitude that silently changes makes two screens incomparable.
     readonly property var scaleSteps: [10, 20, 50, 100, 200, 500, 1000, 2000, 5000,
                                        10000, 20000, 50000, 100000, 200000]
-    property real commonScale: 100
-    // Per channel; 0 means "the common one".
-    property var individual: []
+    // What a lane has until it is given a scale of its own.
+    property real defaultScale: 100
+    // Per channel; 0 or absent means the default.
+    property var laneScales: []
 
     function scaleOf(channel) {
-        return individual[channel] > 0 ? individual[channel] : commonScale
+        return laneScales[channel] > 0 ? laneScales[channel] : defaultScale
     }
     function effectiveScales() {
         var out = []
         for (var c = 0; c < eeg.channelCount; ++c)
             out.push(scaleOf(c))
         return out
+    }
+    readonly property bool uniformScale: {
+        var all = effectiveScales()
+        for (var c = 1; c < all.length; ++c)
+            if (all[c] !== all[0])
+                return false
+        return true
     }
     function stepped(value, direction) {
         var index = 0
@@ -64,18 +78,31 @@ Window {
         index = Math.max(0, Math.min(scaleSteps.length - 1, index + direction))
         return scaleSteps[index]
     }
-    function stepCommon(direction) {
-        commonScale = stepped(commonScale, direction)
+    // The toolbar moves EVERY lane one step from where that lane is. A button
+    // that moved only the lanes still on the default would do nothing at all
+    // after a fit, which gives each lane a scale of its own - seen on the
+    // board, as a button that "did not work".
+    function stepAll(direction) {
+        var next = []
+        for (var c = 0; c < eeg.channelCount; ++c)
+            next.push(stepped(scaleOf(c), direction))
+        defaultScale = stepped(defaultScale, direction)
+        laneScales = next
     }
     function stepChannel(channel, direction) {
-        var next = individual.slice()
+        var next = effectiveScales()
         next[channel] = stepped(scaleOf(channel), direction)
-        individual = next
+        laneScales = next
     }
-    function resetChannel(channel) {
-        var next = individual.slice()
-        next[channel] = 0
-        individual = next
+    // Every lane at the coarsest scale any lane has: nothing that fitted
+    // before is clipped by making them equal.
+    function sameForAll() {
+        var all = effectiveScales()
+        var widest = defaultScale
+        if (all.length > 0)
+            widest = Math.max.apply(null, all)
+        defaultScale = widest
+        laneScales = []
     }
     // One shot, on request: each lane gets the smallest step that holds what is
     // in its window now. It does not keep following the signal afterwards.
@@ -92,7 +119,7 @@ Window {
             }
             next.push(chosen)
         }
-        individual = next
+        laneScales = next
     }
     function amplitude(uv) {
         if (uv >= 1000)
@@ -111,19 +138,13 @@ Window {
 
     Connections {
         target: eeg
-        function onLayoutChanged() { root.individual = [] }
+        function onLayoutChanged() { root.laneScales = [] }
     }
 
     Shortcut { sequence: "Space"; onActivated: eeg.frozen = !eeg.frozen }
-    Shortcut { sequences: ["+", "="]; onActivated: root.stepCommon(-1) }
-    Shortcut { sequence: "-"; onActivated: root.stepCommon(1) }
+    Shortcut { sequences: ["+", "="]; onActivated: root.stepAll(-1) }
+    Shortcut { sequence: "-"; onActivated: root.stepAll(1) }
     Shortcut { sequence: "A"; onActivated: root.fitAll() }
-    Shortcut {
-        sequence: "F11"
-        onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Maximized
-                                                                              : Window.FullScreen
-    }
-
     // --- header --------------------------------------------------------------
     Rectangle {
         id: header
@@ -243,14 +264,14 @@ Window {
                     channel: index
                     traceColor: theme.traces[index % theme.traces.length]
                     scaleUv: root.scaleOf(index)
-                    individualScale: root.individual[index] > 0
+                    individualScale: !root.uniformScale
                     rmsUv: index < eeg.rms.length ? eeg.rms[index] : 0
                     levelUv: index < eeg.level.length ? eeg.level[index] : 0
                     flat: index < eeg.flat.length ? eeg.flat[index] : false
                     contactPositive: root.contact(eeg.monitoredPositive, eeg.detachedPositive, index)
                     contactNegative: root.contact(eeg.monitoredNegative, eeg.detachedNegative, index)
                     onScaleStep: (direction) => root.stepChannel(index, direction)
-                    onScaleReset: root.resetChannel(index)
+                    onScaleReset: root.sameForAll()
                 }
             }
         }
@@ -381,25 +402,25 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                     rightPadding: 4
                 }
-                Chip { text: "−"; onClicked: root.stepCommon(1) }
+                Chip { text: "−"; enabled: eeg.channelCount > 0; onClicked: root.stepAll(1) }
                 Rectangle {
                     width: 92; height: 30; radius: 6
                     color: "#0d131a"
                     border.width: 1; border.color: theme.line
                     Text {
                         anchors.centerIn: parent
-                        text: "±" + root.amplitude(root.commonScale)
+                        text: root.uniformScale ? "±" + root.amplitude(root.scaleOf(0)) : "per lane"
                         color: theme.text
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
                     }
                 }
-                Chip { text: "+"; onClicked: root.stepCommon(-1) }
+                Chip { text: "+"; enabled: eeg.channelCount > 0; onClicked: root.stepAll(-1) }
                 Chip { text: "Fit"; enabled: eeg.channelCount > 0; onClicked: root.fitAll() }
                 Chip {
                     text: "Same for all"
-                    enabled: root.individual.some(function (v) { return v > 0 })
-                    onClicked: root.individual = []
+                    enabled: !root.uniformScale
+                    onClicked: root.sameForAll()
                 }
             }
 
@@ -441,6 +462,13 @@ Window {
                 color: theme.faint
                 font.pixelSize: 11
                 visible: toolbar.width > 1500
+            }
+            Chip {
+                // Present only where a reviewer is installed. It asks; the
+                // reviewer is started by the init system, as its own user.
+                visible: review.available
+                text: "Review records"
+                onClicked: review.open()
             }
             Chip {
                 text: eeg.frozen ? "Resume" : "Freeze"

@@ -82,6 +82,13 @@ void EegClient::setFrozen(bool frozen) {
         return;
     }
     frozen_ = frozen;
+    if (!frozen_) {
+        // Resuming starts the sweep clean. Carrying on from where the picture
+        // stopped would put samples from before and after the pause side by
+        // side in one window, with nothing on screen to say that the seam
+        // between them is seconds or minutes wide.
+        reconfigure();
+    }
     emit viewChanged();
 }
 

@@ -160,6 +160,13 @@ public:
 
     /// Also to be called when nothing arrives: a stream that stops must read
     /// zero, and add() alone would leave the last good number on screen.
+    ///
+    /// It closes a window ONLY when the stream has stalled. While frames keep
+    /// arriving, a window opens and closes on a frame's arrival and on nothing
+    /// else: closed by a clock that is not the stream's, it catches one frame
+    /// more or one fewer at each end, and 14 samples in two seconds is 7 Hz.
+    /// Seen on the board 2026-10-11 as a rate wandering between 242 and 252
+    /// over a stream that was losing nothing.
     void tick(std::int64_t nowNs) noexcept;
 
     /// False until one whole window has been observed.
@@ -169,6 +176,7 @@ public:
 private:
     std::int64_t windowNs_;
     std::int64_t windowStart_ = 0;
+    std::int64_t lastFrame_ = 0;
     std::uint64_t samples_ = 0;
     double rateHz_ = 0.0;
     bool started_ = false;

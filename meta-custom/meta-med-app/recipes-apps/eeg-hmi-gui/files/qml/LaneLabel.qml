@@ -116,7 +116,7 @@ Item {
         }
     }
 
-    // Wheel: this lane's scale alone. Double click: back to the common one.
+    // Wheel: this lane's scale alone. Double click: every lane the same again.
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton

@@ -23,6 +23,8 @@ qt_add_executable(eeg-hmi-gui
     src/main.cpp
     src/EegClient.cpp
     src/EegClient.h
+    src/ReviewRequest.cpp
+    src/ReviewRequest.h
     src/TraceStore.cpp
     src/TraceStore.h
     src/WaveformItem.cpp

@@ -229,6 +229,29 @@ int main() {
         CHECK(meter.measured());
         CHECK_NEAR(meter.rateHz(), 250.0, 0.5);
 
+        // A clock that is not the stream's must not close the window. The
+        // display polls four times a second; closed by that poll, a window
+        // catches a frame more or fewer at each end and the rate wanders by
+        // 7 Hz over a stream that loses nothing (the board, 2026-10-11:
+        // 242 to 252). Polled between every pair of frames here, at an
+        // offset that drifts across the frame period.
+        meter.reset();
+        now = 0;
+        double lowest = 1e9;
+        double highest = 0.0;
+        for (int i = 0; i < 400; ++i) {
+            meter.add(now, 14);
+            meter.tick(now + 1000000 + (i * 7919000LL) % 50000000);
+            if (meter.measured()) {
+                lowest = meter.rateHz() < lowest ? meter.rateHz() : lowest;
+                highest = meter.rateHz() > highest ? meter.rateHz() : highest;
+            }
+            now += frameNs;
+        }
+        CHECK(meter.measured());
+        CHECK_NEAR(lowest, 250.0, 0.01);
+        CHECK_NEAR(highest, 250.0, 0.01);
+
         // The defect this exists for: the stream declares 250 and half of it
         // arrives. Every second frame is lost; the meter must say ~125.
         meter.reset();

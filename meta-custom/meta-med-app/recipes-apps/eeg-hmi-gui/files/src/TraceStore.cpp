@@ -226,6 +226,7 @@ TraceStore::RawLevel TraceStore::rawLevel(int channel) const {
 }
 
 void RateMeter::add(std::int64_t nowNs, std::uint32_t samplesPerChannel) noexcept {
+    lastFrame_ = nowNs;
     if (!started_) {
         // The first frame opens the window and is not counted in it: its
         // samples were converted before the window began.
@@ -235,15 +236,25 @@ void RateMeter::add(std::int64_t nowNs, std::uint32_t samplesPerChannel) noexcep
         return;
     }
     samples_ += samplesPerChannel;
-    tick(nowNs);
+    const std::int64_t elapsed = nowNs - windowStart_;
+    if (elapsed >= windowNs_) {
+        // From one frame's arrival to another's: every frame between them is
+        // counted whole, and none is cut by the edge.
+        rateHz_ = static_cast<double>(samples_) * 1e9 / static_cast<double>(elapsed);
+        measured_ = true;
+        windowStart_ = nowNs;
+        samples_ = 0;
+    }
 }
 
 void RateMeter::tick(std::int64_t nowNs) noexcept {
-    if (!started_) {
+    if (!started_ || nowNs - lastFrame_ < windowNs_) {
         return;
     }
+    // Nothing for a whole window: the stream has stalled, and no frame is
+    // coming to close this window. Close it here, so the number falls.
     const std::int64_t elapsed = nowNs - windowStart_;
-    if (elapsed < windowNs_) {
+    if (elapsed <= 0) {
         return;
     }
     rateHz_ = static_cast<double>(samples_) * 1e9 / static_cast<double>(elapsed);
