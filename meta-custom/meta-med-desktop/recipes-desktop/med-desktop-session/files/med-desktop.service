@@ -1,0 +1,60 @@
+[Unit]
+Description=MedPlatform station desktop
+Documentation=file:/etc/xdg/labwc/rc.xml
+Requires=seatd.service
+After=seatd.service systemd-user-sessions.service
+
+[Service]
+Type=simple
+# Unprivileged, and reaching the display and the input devices only through
+# the seat daemon, like the compositor it replaces. The two groups are what
+# the seat daemon's socket and the DRM node ask for; asked for here rather
+# than in /etc/group so that this unit is where one reads what it may touch.
+User=med-desktop
+Group=med-desktop
+SupplementaryGroups=video input wayland
+
+# The runtime directory holds the compositor's socket. Clients are told its
+# full path; nothing looks for it in a per-user directory, because the clients
+# on this device are other system units and not this user's processes.
+RuntimeDirectory=med-desktop
+RuntimeDirectoryMode=0755
+Environment=XDG_RUNTIME_DIR=/run/med-desktop
+Environment=HOME=/run/med-desktop
+Environment=XDG_CONFIG_DIRS=/etc/xdg
+# The toolkit the task bar is written in looks for an accessibility bus and a
+# session bus at start. There is neither on this device, and waiting for them
+# is twenty-five seconds of an empty screen.
+Environment=NO_AT_BRIDGE=1
+Environment=GTK_A11Y=none
+
+# A station with no mouse or keyboard attached at power-on is not a station
+# that may refuse to show its display. The library underneath treats "no input
+# device" as a failure to start unless told otherwise.
+Environment=WLR_LIBINPUT_NO_DEVICES=1
+
+ExecStart=/usr/bin/labwc
+# Started means "clients can connect". Without this the operator display,
+# ordered after this unit, races the socket's creation, loses, and comes up
+# on its second attempt with a restart counted against it.
+ExecStartPost=/bin/sh -c 'i=0; while [ $i -lt 100 ]; do [ -S /run/med-desktop/wayland-0 ] && break; i=$((i+1)); sleep 0.1; done; [ -S /run/med-desktop/wayland-0 ] || exit 1; chgrp wayland /run/med-desktop/wayland-0 && chmod 0775 /run/med-desktop/wayland-0'
+# ...and "any member of the wayland group", which is the other half of what a
+# client's unit relies on. The library creates the socket for its owner alone;
+# the group is given here, the moment the socket exists.
+
+Restart=on-failure
+RestartSec=2s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

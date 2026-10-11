@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!--
+  MedPlatform station desktop.
+
+  The compositor draws the window frames, so every window has the same three
+  buttons whatever toolkit drew its contents - and a minimised window is the
+  compositor's to give back, which is what a task bar asks it for.
+-->
+<labwc_config>
+  <core>
+    <decoration>server</decoration>
+    <gap>0</gap>
+  </core>
+  <theme>
+    <cornerRadius>6</cornerRadius>
+  </theme>
+</labwc_config>

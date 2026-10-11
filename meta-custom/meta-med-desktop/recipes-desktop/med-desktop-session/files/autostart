@@ -1,0 +1,5 @@
+# Run by the compositor once it is up, as the desktop's user.
+#
+# The task bar: without it a minimised window has nowhere to be found, which
+# is the defect this whole environment exists to remove.
+sfwbar &

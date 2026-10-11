@@ -19,6 +19,14 @@ repos:
   meta-med-afe-ads1299:
     path: "meta-custom/meta-med-afe-ads1299"
 
+  # The station's desktop environment (docs/implementation_plan_desktop.md):
+  # an adjunct layer for the same reason as the one above, and listed here and
+  # not in kas-base.yml for the same reason too - the tomograph profile must
+  # stay able to say it carries nothing of a device's own. Nothing from it is
+  # installed until an image asks.
+  meta-med-desktop:
+    path: "meta-custom/meta-med-desktop"
+
 target:
   - med-image-eeg
 
@@ -77,3 +85,12 @@ local_conf_header:
     # the fallback the STM32MP257 ships. The A/B policy is validated here; the
     # bootloader integration is validated on hardware.
     MED_BOOTLOADER = "noop"
+
+    # TRIAL - docs/implementation_plan_desktop.md, phase D0. The simulation
+    # profile runs the station desktop in place of the single-screen
+    # compositor, so that the desktop can be judged before a bench session is
+    # spent on it. The board's profile does not set this and keeps the
+    # compositor it was validated with; until phase D2 passes, the two
+    # profiles differ here on purpose, and the QEMU suite is NOT evidence
+    # about the board's display.
+    MED_GUI_COMPOSITOR = "med-desktop-session"

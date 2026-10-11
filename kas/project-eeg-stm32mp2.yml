@@ -19,6 +19,14 @@ repos:
   meta-med-afe-ads1299:
     path: "meta-custom/meta-med-afe-ads1299"
 
+  # The station's desktop environment (docs/implementation_plan_desktop.md):
+  # an adjunct layer for the same reason as the one above, and listed here and
+  # not in kas-base.yml for the same reason too - the tomograph profile must
+  # stay able to say it carries nothing of a device's own. Nothing from it is
+  # installed until an image asks.
+  meta-med-desktop:
+    path: "meta-custom/meta-med-desktop"
+
   meta-st-stm32mp:
     url: "https://github.com/STMicroelectronics/meta-st-stm32mp.git"
     branch: "scarthgap"

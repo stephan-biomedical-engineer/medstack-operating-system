@@ -1,0 +1,6 @@
+[Unit]
+Description=MedPlatform compositor is accepting clients
+# The station desktop. Its unit is not "started" until its socket exists, so
+# ordering after it is enough.
+Requires=med-desktop.service
+After=med-desktop.service
