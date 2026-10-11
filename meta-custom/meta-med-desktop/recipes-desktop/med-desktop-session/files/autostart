@@ -2,4 +2,9 @@
 #
 # The task bar: without it a minimised window has nowhere to be found, which
 # is the defect this whole environment exists to remove.
-sfwbar &
+#
+# The configuration is named, not left to be found. Left to itself the bar
+# took its stock one - a start menu that wants an interpreter this image does
+# not have, processor and memory gauges, and a clock, on a board with no
+# battery-backed clock. Seen in the first screenshot of the trial.
+sfwbar -f /etc/xdg/sfwbar/sfwbar.config &

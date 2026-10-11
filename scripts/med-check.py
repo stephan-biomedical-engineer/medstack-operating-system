@@ -233,6 +233,14 @@ EEG_CHECKS = [
     # isso NRestarts), e um revisor ativo como root seria uma segunda porta
     # para o registro bruto com a aparência exata de um revisor que funciona.
     #
+    # A identidade é lida até coincidir, por no máximo 10 s, e não uma vez só.
+    # "Ativo" numa unidade Type=simple começa no fork, e o filho ainda é root
+    # até trocar de usuário e fazer o exec: lido nesse instante, um revisor
+    # correto aparece com uid 0. Foi assim que esta asserção falhou num build
+    # que estava certo (2026-10-11, uid=0 esperado=1201), depois de ter passado
+    # várias vezes por sorte. Um revisor que roda mesmo como root continua
+    # reprovando: ele nunca chega a coincidir.
+    #
     # O revisor não sobe no boot: sobe quando a HMI pede, deixando um arquivo
     # num diretório de pedidos que uma unidade .path observa. A asserção
     # faz o pedido pelo mesmo caminho - então ela mede também que o pedido
@@ -241,9 +249,11 @@ EEG_CHECKS = [
      "echo pedido > /run/med-review-request/request; "
      "for i in $(seq 1 30); do "
      "  systemctl is-active -q med-review.service && break; sleep 1; done; "
-     "P=$(systemctl show med-review.service -p MainPID --value); "
-     "U=$(sed -n 's/^Uid:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$P/status); "
      "W=$(id -u med-review); "
+     "for i in $(seq 1 20); do "
+     "  P=$(systemctl show med-review.service -p MainPID --value); "
+     "  U=$(sed -n 's/^Uid:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$P/status 2>/dev/null); "
+     "  test \"$U\" = \"$W\" && break; sleep 0.5; done; "
      "systemctl show med-review.service -p ActiveState -p NRestarts; "
      "echo \"uid=$U esperado=$W\"; test -n \"$U\" && test \"$U\" = \"$W\" && echo REVISOR_OK",
      rx(r"(ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active)"

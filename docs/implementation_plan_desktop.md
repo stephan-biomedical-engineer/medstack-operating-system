@@ -166,7 +166,44 @@ errado), e os lançadores.
 
 | Fase | Critério | Resultado | Data |
 |---|---|---|---|
-| D0 | minimizar e restaurar pela barra, no QEMU; compositor sobrevive a um cliente morto com menu aberto | — | — |
+| D0 | minimizar e restaurar pela barra, no QEMU; compositor sobrevive a um cliente morto com menu aberto | **parcial** — §6.1: minimizar e restaurar pela barra **funcionou, com o mouse**; o resto em aberto | 2026-10-11 |
 | D1 | alcance por identidade, medido tentando | — | — |
 | D2 | imagem no HDMI; HMI ≤ 25% de um núcleo | — | — |
 | D3 | — | — | — |
+
+### 6.1 Fase D0 — o que o ensaio mostrou (2026-10-11)
+
+QEMU, `MED_GUI_COMPOSITOR = "med-desktop-session"`, sem weston na imagem.
+
+| O quê | Como | Resultado |
+|---|---|---|
+| As receitas compilam | `make qemu` | `libdisplay-info`, `wlroots`, `labwc`, `gtk-layer-shell`, `sfwbar`, `grim`: todas, 6261 tarefas. O `labwc` precisou de um ajuste de empacotamento (dois ícones) |
+| O compositor sobe sem privilégio | `systemctl show med-desktop` | `active`, `NRestarts=0`, como `med-desktop` (uid 1202), pelo `seatd` |
+| Renderizador | diário do `labwc` | o GLES2 recusa o EGL por software do QEMU e o wlroots cai sozinho para o `pixman`. **Fato do QEMU, que não tem GPU**; não diz nada sobre a placa |
+| O contrato do compositor | `ls -la /run/med-desktop` | socket `med-desktop:wayland 0775`; `med-compositor.target` alcançado antes da HMI |
+| A HMI dentro do ambiente | `make check` | `hmi-active` e `acq-sample-rate` passam |
+| A suíte inteira, neste perfil | `make qemu && make check`, com as duas correções abaixo | **28/28** (6261 tarefas). Antes delas, 27/28 em duas execuções: a 28ª era a asserção com a corrida |
+| O revisor, com outro usuário | leitura de `/proc/<pid>/status` 1 s e 7 s após o pedido | uid 1201 nas duas, unidade ativa |
+| A tela | `grim`, trazido pelo console em hexadecimal | janela do EDFbrowser com a moldura do compositor e três botões; barra com "MedPlatform EEG" e "EDFbrowser" |
+| **Critério 1: minimizar e restaurar pela barra, com o mouse** | operador, por VNC (`BRINGUP_HMI_QEMU.md` §4) | **funcionou** |
+| Critério 3: cliente encerrado, compositor de pé | operador: `systemctl stop med-review`, depois `NRestarts` | `NRestarts=0` — **sem confirmação de que havia um menu aberto**, que é a condição do critério |
+
+Três defeitos que o ensaio encontrou, e nenhum era do ambiente:
+
+- **A unidade da HMI nomeava o weston** (`Requires=weston.service weston.socket`), e um *drop-in*
+  não retira um `Requires=`. Com outro compositor ela não partia: *"Unit weston.socket not
+  found"*. Virou o contrato da §2.3 - alvo, arquivo de ambiente, grupo `wayland`.
+- **A asserção `review-active` lia a identidade cedo demais.** `Type=simple` fica "ativo" no
+  fork, e o filho ainda é root até trocar de usuário: um revisor correto apareceu com `uid=0`.
+  Passava por sorte. Agora relê até coincidir, por no máximo 10 s.
+- **A barra ignorou a configuração entregue** e usou a de fábrica, com relógio, menu e medidores,
+  e um erro `can't execute 'python3'` do menu. Passa a ser iniciada com o arquivo nomeado.
+
+**O que isto não significa**:
+- a barra **vista** pelo operador era, até onde se sabe, a de fábrica: a imagem com a
+  configuração nomeada foi construída depois e ninguém olhou a tela dela;
+- o critério 2 (gerenciador de arquivos) não tem o que medir: nenhum foi escolhido (§2.1);
+- o critério 4 e a injeção de falha (matar o compositor) não foram executados;
+- nada disto é a placa. O caminho do weston, que ela usa, foi alterado pelo contrato do
+  compositor e **não foi inicializado desde então** em lugar nenhum.
+
