@@ -23,11 +23,19 @@ qt_add_executable(eeg-hmi-gui
     src/main.cpp
     src/EegClient.cpp
     src/EegClient.h
+    src/TraceStore.cpp
+    src/TraceStore.h
+    src/WaveformItem.cpp
+    src/WaveformItem.h
 )
 
 qt_add_resources(eeg-hmi-gui "qml"
     PREFIX "/"
-    FILES qml/Main.qml
+    FILES
+        qml/Main.qml
+        qml/Chip.qml
+        qml/Stat.qml
+        qml/LaneLabel.qml
 )
 
 target_compile_options(eeg-hmi-gui PRIVATE -Wall -Wextra)

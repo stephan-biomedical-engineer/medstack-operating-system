@@ -33,6 +33,13 @@ Environment=QT_QPA_PLATFORM=wayland
 Environment=XDG_RUNTIME_DIR=/run
 Environment=WAYLAND_DISPLAY=wayland-0
 Environment=MED_EEG_SOCKET=/run/medplatform/eeg.sock
+# Somewhere to keep the font cache. The root filesystem is read-only and this
+# unit may write nowhere else, so without it fontconfig reports "No writable
+# cache directories" on every start and rescans the fonts for every text item
+# it lays out. Volatile on purpose: a cache is rebuilt, never trusted across a
+# slot switch.
+RuntimeDirectory=eeg-hmi
+Environment=XDG_CACHE_HOME=/run/eeg-hmi
 ExecStart=/usr/bin/eeg-hmi-gui
 Restart=on-failure
 RestartSec=3s

@@ -10,9 +10,11 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QtQml>
 #include <QUrl>
 
 #include "EegClient.h"
+#include "WaveformItem.h"
 
 int main(int argc, char* argv[]) {
     QGuiApplication application(argc, argv);
@@ -23,6 +25,10 @@ int main(int argc, char* argv[]) {
         qEnvironmentVariable("MED_EEG_SOCKET", QStringLiteral("/run/medplatform/eeg.sock"));
 
     EegClient client(socketPath);
+
+    // The one type QML instantiates. The client stays a context property: there
+    // is exactly one stream, and the screen does not get to create another.
+    qmlRegisterType<WaveformItem>("MedPlatform.Eeg", 1, 0, "WaveformItem");
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("eeg"), &client);
