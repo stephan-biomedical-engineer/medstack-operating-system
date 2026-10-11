@@ -2,6 +2,7 @@
 
 #include "MedicalStorage.h"
 
+#include <grp.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -435,6 +436,139 @@ Status MedicalStorage::remove(const std::string& relativePath) {
         return Status::InvalidArgument;
     }
     const std::string target = basePath_ + "/" + relativePath;
+    if (::unlink(target.c_str()) != 0) {
+        return statusFromErrno(errno);
+    }
+    syncParentDirectory(target);
+    return Status::Ok;
+}
+
+namespace {
+
+/// A published name is one path component: it is joined to a directory this
+/// class chose, and a separator in it would let a caller choose another.
+bool isSafeName(const std::string& name) {
+    return !name.empty() && name != "." && name != ".." &&
+           name.find('/') == std::string::npos && name.find('\0') == std::string::npos;
+}
+
+/// `<root>/review/<namespace>`, or empty when the handle was opened on a root
+/// with no namespace of its own.
+std::string reviewDirectory(const std::string& root, const std::string& basePath) {
+    if (basePath.size() <= root.size() + 1 || basePath.compare(0, root.size(), root) != 0 ||
+        basePath[root.size()] != '/') {
+        return {};
+    }
+    return root + "/review/" + basePath.substr(root.size() + 1);
+}
+
+bool lookupGroup(const std::string& name, gid_t& gid) {
+    if (name.empty()) {
+        return false;
+    }
+    std::vector<char> buffer(4096);
+    struct group entry = {};
+    struct group* found = nullptr;
+    for (;;) {
+        const int rc = ::getgrnam_r(name.c_str(), &entry, buffer.data(), buffer.size(), &found);
+        if (rc == ERANGE && buffer.size() < (1U << 20)) {
+            buffer.resize(buffer.size() * 2);
+            continue;
+        }
+        if (rc != 0 || found == nullptr) {
+            return false;
+        }
+        gid = found->gr_gid;
+        return true;
+    }
+}
+
+/// Creates one directory of the review tree and makes it what it must be even
+/// if it already existed as something looser: group-traversable, and no more.
+bool ensureReviewDirectory(const std::string& path, gid_t gid) {
+    if (::mkdir(path.c_str(), 0750) != 0 && errno != EEXIST) {
+        return false;
+    }
+    struct stat info = {};
+    if (::lstat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+        return false;
+    }
+    if (info.st_gid != gid && ::chown(path.c_str(), static_cast<uid_t>(-1), gid) != 0) {
+        return false;
+    }
+    return ::chmod(path.c_str(), 0750) == 0;
+}
+
+}  // namespace
+
+Status MedicalStorage::publish(const std::string& relativePath, const std::string& publishedName,
+                               const std::string& group) {
+    if (!isSafeRelativePath(relativePath) || !isSafeName(publishedName)) {
+        return Status::InvalidArgument;
+    }
+    const std::string directory = reviewDirectory(info_.root, basePath_);
+    if (directory.empty()) {
+        return Status::NotSupported;
+    }
+
+    const std::string source = basePath_ + "/" + relativePath;
+    struct stat sourceInfo = {};
+    if (::lstat(source.c_str(), &sourceInfo) != 0) {
+        return statusFromErrno(errno);
+    }
+    // lstat, and a regular file only: a symbolic link here would publish
+    // whatever it points at, under the authority of whoever holds this handle.
+    if (!S_ISREG(sourceInfo.st_mode)) {
+        return Status::InvalidArgument;
+    }
+
+    gid_t gid = 0;
+    if (!lookupGroup(group, gid)) {
+        return Status::Unavailable;
+    }
+
+    if (!ensureReviewDirectory(info_.root + "/review", gid) ||
+        !ensureReviewDirectory(directory, gid)) {
+        return statusFromErrno(errno);
+    }
+
+    // The inode first, the name second: a name that appears before the file is
+    // readable is a name that fails for the reader it was made for.
+    if (sourceInfo.st_gid != gid && ::chown(source.c_str(), static_cast<uid_t>(-1), gid) != 0) {
+        return statusFromErrno(errno);
+    }
+    if (::chmod(source.c_str(), 0640) != 0) {
+        return statusFromErrno(errno);
+    }
+
+    const std::string target = directory + "/" + publishedName;
+    if (::link(source.c_str(), target.c_str()) != 0) {
+        if (errno != EEXIST) {
+            return statusFromErrno(errno);
+        }
+        struct stat targetInfo = {};
+        if (::lstat(target.c_str(), &targetInfo) == 0 && targetInfo.st_dev == sourceInfo.st_dev &&
+            targetInfo.st_ino == sourceInfo.st_ino) {
+            return Status::Ok;
+        }
+        // The name belongs to an earlier file - one that was derived again.
+        if (::unlink(target.c_str()) != 0 || ::link(source.c_str(), target.c_str()) != 0) {
+            return statusFromErrno(errno);
+        }
+    }
+    syncParentDirectory(target);
+    return Status::Ok;
+}
+
+Status MedicalStorage::unpublish(const std::string& publishedName) {
+    if (!isSafeName(publishedName)) {
+        return Status::InvalidArgument;
+    }
+    const std::string directory = reviewDirectory(info_.root, basePath_);
+    if (directory.empty()) {
+        return Status::NotSupported;
+    }
+    const std::string target = directory + "/" + publishedName;
     if (::unlink(target.c_str()) != 0) {
         return statusFromErrno(errno);
     }

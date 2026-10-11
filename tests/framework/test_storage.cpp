@@ -8,7 +8,9 @@
 // exercise it by calling write() twice would be theatre. It is named in the
 // "not covered" list of this directory's README rather than faked here.
 
+#include <grp.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <memory>
 #include <string>
@@ -278,6 +280,110 @@ void testStorage() {
             CHECK_STATUS(store->read("../escape", 0, 4).status(), Status::InvalidArgument);
             CHECK(!store->size("nada.bin").isOk());
             CHECK_STATUS(store->size("").status(), Status::InvalidArgument);
+        }
+    }
+
+    medtest::section("MedicalStorage - publicar um arquivo pronto a um grupo de leitura");
+
+    {
+        TempDir dir;
+        Result<std::unique_ptr<MedicalStorage>> opened = openScratch(dir.path());
+        CHECK(opened.isOk());
+        if (opened.isOk()) {
+            const std::unique_ptr<MedicalStorage>& store = opened.value();
+
+            // A group this process may give a file to without being root: its
+            // own. On the device the caller is root and the group is the
+            // reviewer's; the mechanism is the same.
+            std::string ownGroup;
+            if (const struct group* own = ::getgrgid(::getgid())) {
+                ownGroup = own->gr_name;
+            }
+            CHECK(!ownGroup.empty());
+
+            CHECK_STATUS(store->writeString("session-a/record.bdf", "clinical"), Status::Ok);
+            CHECK_STATUS(store->writeString("session-a/raw.bin", "raw"), Status::Ok);
+
+            CHECK_STATUS(store->publish("session-a/record.bdf", "a.bdf", ownGroup), Status::Ok);
+
+            const std::string review = dir.path() + "/review";
+            const std::string tree = review + "/" +
+                store->basePath().substr(dir.path().size() + 1);
+            const std::string published = tree + "/a.bdf";
+
+            struct stat first = {};
+            struct stat second = {};
+            CHECK_EQ(::stat((store->basePath() + "/session-a/record.bdf").c_str(), &first), 0);
+            CHECK_EQ(::stat(published.c_str(), &second), 0);
+            // One file with two names, not a copy.
+            CHECK(first.st_ino == second.st_ino);
+            CHECK_EQ(static_cast<int>(second.st_nlink), 2);
+            CHECK_EQ(static_cast<int>(second.st_mode & 0777), 0640);
+            CHECK(second.st_gid == ::getgid());
+
+            struct stat treeInfo = {};
+            CHECK_EQ(::stat(tree.c_str(), &treeInfo), 0);
+            CHECK_EQ(static_cast<int>(treeInfo.st_mode & 0777), 0750);
+            CHECK_EQ(::stat(review.c_str(), &treeInfo), 0);
+            CHECK_EQ(static_cast<int>(treeInfo.st_mode & 0777), 0750);
+
+            // What was NOT published is exactly as closed as before: still
+            // 0600, still behind 0700 directories, and absent from the tree.
+            struct stat raw = {};
+            CHECK_EQ(::stat((store->basePath() + "/session-a/raw.bin").c_str(), &raw), 0);
+            CHECK_EQ(static_cast<int>(raw.st_mode & 0777), 0600);
+            CHECK_EQ(static_cast<int>(raw.st_nlink), 1);
+            struct stat sessionDir = {};
+            CHECK_EQ(::stat((store->basePath() + "/session-a").c_str(), &sessionDir), 0);
+            CHECK_EQ(static_cast<int>(sessionDir.st_mode & 0777), 0700);
+            CHECK_EQ(::stat(store->basePath().c_str(), &sessionDir), 0);
+            CHECK_EQ(static_cast<int>(sessionDir.st_mode & 0777), 0700);
+            CHECK(::stat((tree + "/raw.bin").c_str(), &raw) != 0);
+
+            // Again is Ok, and still one extra name.
+            CHECK_STATUS(store->publish("session-a/record.bdf", "a.bdf", ownGroup), Status::Ok);
+            CHECK_EQ(::stat(published.c_str(), &second), 0);
+            CHECK_EQ(static_cast<int>(second.st_nlink), 2);
+
+            // A file derived again is a new inode; the name follows it.
+            CHECK_STATUS(store->remove("session-a/record.bdf"), Status::Ok);
+            CHECK_STATUS(store->writeString("session-a/record.bdf", "clinical, again"), Status::Ok);
+            CHECK_STATUS(store->publish("session-a/record.bdf", "a.bdf", ownGroup), Status::Ok);
+            CHECK_EQ(::stat((store->basePath() + "/session-a/record.bdf").c_str(), &first), 0);
+            CHECK_EQ(::stat(published.c_str(), &second), 0);
+            CHECK(first.st_ino == second.st_ino);
+
+            // Refusals.
+            CHECK_STATUS(store->publish("session-a/absent.bdf", "b.bdf", ownGroup), Status::NotFound);
+            CHECK_STATUS(store->publish("session-a/record.bdf", "../b.bdf", ownGroup),
+                         Status::InvalidArgument);
+            CHECK_STATUS(store->publish("session-a/record.bdf", "x/b.bdf", ownGroup),
+                         Status::InvalidArgument);
+            CHECK_STATUS(store->publish("session-a/record.bdf", "", ownGroup),
+                         Status::InvalidArgument);
+            CHECK_STATUS(store->publish("../escape", "b.bdf", ownGroup), Status::InvalidArgument);
+            // A directory is not a file to hand out.
+            CHECK_STATUS(store->publish("session-a", "b.bdf", ownGroup), Status::InvalidArgument);
+            // A symbolic link would publish whatever it points at.
+            CHECK_EQ(::symlink("/etc/passwd", (store->basePath() + "/session-a/link").c_str()), 0);
+            CHECK_STATUS(store->publish("session-a/link", "b.bdf", ownGroup),
+                         Status::InvalidArgument);
+            // No such identity on this system: nothing is published, and the
+            // file is not loosened on the way to finding that out.
+            CHECK_STATUS(store->writeString("session-a/other.bdf", "x"), Status::Ok);
+            CHECK_STATUS(store->publish("session-a/other.bdf", "c.bdf", "no-such-group-medtest"),
+                         Status::Unavailable);
+            struct stat other = {};
+            CHECK_EQ(::stat((store->basePath() + "/session-a/other.bdf").c_str(), &other), 0);
+            CHECK_EQ(static_cast<int>(other.st_mode & 0777), 0600);
+            CHECK(::stat((tree + "/c.bdf").c_str(), &other) != 0);
+
+            // Unpublishing removes the name and leaves the record.
+            CHECK_STATUS(store->unpublish("a.bdf"), Status::Ok);
+            CHECK(::stat(published.c_str(), &second) != 0);
+            CHECK(store->exists("session-a/record.bdf"));
+            CHECK_STATUS(store->unpublish("a.bdf"), Status::NotFound);
+            CHECK_STATUS(store->unpublish("../a.bdf"), Status::InvalidArgument);
         }
     }
 }

@@ -227,6 +227,22 @@ EEG_CHECKS = [
      "systemctl show eeg-hmi.service -p ActiveState -p NRestarts",
      rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
 
+    # O revisor de registros: de pé, sem reinícios, e como o SEU usuário. A
+    # identidade é metade da asserção de propósito - a unidade tem
+    # Restart=always, então "ativo" sozinho passaria um laço de quedas (por
+    # isso NRestarts), e um revisor ativo como root seria uma segunda porta
+    # para o registro bruto com a aparência exata de um revisor que funciona.
+    ("review-active", "o revisor de registros roda, sem reinícios, como med-review",
+     "for i in $(seq 1 30); do "
+     "  systemctl is-active -q med-review.service && break; sleep 1; done; "
+     "P=$(systemctl show med-review.service -p MainPID --value); "
+     "U=$(sed -n 's/^Uid:[[:space:]]*\\([0-9]*\\).*/\\1/p' /proc/$P/status); "
+     "W=$(id -u med-review); "
+     "systemctl show med-review.service -p ActiveState -p NRestarts; "
+     "echo \"uid=$U esperado=$W\"; test -n \"$U\" && test \"$U\" = \"$W\" && echo REVISOR_OK",
+     rx(r"(ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active)"
+        r"[\s\S]*REVISOR_OK")),
+
     ("acq-socket", "o socket de amostras foi publicado",
      "test -S /run/medplatform/eeg.sock && echo OK", rx(r"OK")),
 
@@ -335,6 +351,27 @@ EEG_CHECKS = [
      'test "$F" = "$R" && test "$C" = "record.bdf: OK" && test "$X" = success && '
      'echo BDF_OK',
      rx(r"BDF_OK")),
+
+    # O que o revisor alcança, medido tentando - como med-review, e não lendo
+    # permissões (implementation_plan_hmi_desktop.md, Fase A3). O arquivo
+    # clínico da sessão que a record-bdf acabou de conferir tem de abrir pelo
+    # nome publicado; o registro bruto, o metadado e a própria árvore de
+    # sessões têm de ser recusados. As quatro pernas são a asserção: um
+    # revisor que não lê nada passa em três delas, e um que lê tudo passa na
+    # outra. Depois da record-bdf, que é quem garante que o BDF+ existe.
+    ("review-reach", "o revisor lê o BDF+ publicado e nada mais da sessão",
+     'S=$(ls -d /data/eeg/session-* | tail -n 2 | head -n 1); I=${S##*/session-}; '
+     'P=/data/review/eeg/$I.bdf; '
+     'for i in $(seq 1 30); do test -e "$P" && break; sleep 1; done; '
+     'A=$(su -s /bin/sh med-review -c "dd if=\'$P\' bs=1 count=8 2>/dev/null | wc -c"); '
+     'B=$(su -s /bin/sh med-review -c "cat \'$S/raw.bin\' >/dev/null 2>&1 && echo LEU || echo NEGADO"); '
+     'C=$(su -s /bin/sh med-review -c "cat \'$S/metadata.json\' >/dev/null 2>&1 && echo LEU || echo NEGADO"); '
+     'D=$(su -s /bin/sh med-review -c "ls /data/eeg >/dev/null 2>&1 && echo LEU || echo NEGADO"); '
+     'L=$(stat -c %h "$S/record.bdf"); '
+     'echo "bdf=$A bruto=$B metadado=$C sessoes=$D nomes=$L"; '
+     'test "$A" = 8 && test "$B" = NEGADO && test "$C" = NEGADO && test "$D" = NEGADO && '
+     'test "$L" = 2 && echo REVISAO_OK',
+     rx(r"REVISAO_OK")),
 ]
 
 PROFILES = {

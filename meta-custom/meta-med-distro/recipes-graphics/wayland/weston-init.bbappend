@@ -57,6 +57,18 @@ do_install:append() {
         bbfatal "weston.ini has no [core] section to carry require-outputs=none"
     fi
 
+    # --- No panel ---------------------------------------------------------------
+    # The stock shell draws a panel with a clock and, when no launcher is
+    # configured, a launcher for a terminal - which this image carries, because
+    # it ships inside the compositor's own package. That is a shell one click
+    # away from the operator's display. And the clock beside it shows the time
+    # of a board with no battery-backed clock, which is worse than showing none.
+    #
+    # The applications on this device are started by systemd units, each as its
+    # own user; nothing here is chosen from a menu, so the panel has nothing
+    # true to offer.
+    printf '\n[shell]\npanel-position=none\n' >> "$ini"
+
     if [ -n "${MED_WESTON_OUTPUT_NAME}" ] && [ -n "${MED_WESTON_OUTPUT_MODE}" ]; then
         printf '\n[output]\nname=%s\nmode=%s\n' \
             "${MED_WESTON_OUTPUT_NAME}" "${MED_WESTON_OUTPUT_MODE}" >> "$ini"

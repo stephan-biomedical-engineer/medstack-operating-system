@@ -30,6 +30,7 @@ MED_EEG_INSTALL ?= " \
     packagegroup-med-gui \
     eeg-acquisition-service \
     eeg-hmi-gui \
+    med-review \
 "
 
 IMAGE_INSTALL:append = " ${MED_EEG_INSTALL}"

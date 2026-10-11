@@ -192,5 +192,68 @@ int main(int argc, char** argv) {
                      {"interrupted", summary.interrupted ? "true" : "false"}});
     }
 
+    // --- hand the finished clinical files to the reviewer -------------------
+    // Every closed, converted session - not only the ones converted in this
+    // run - so that a file whose publication failed once, or that was derived
+    // before this device had a reviewer, is published the next time. Never the
+    // live session: it has no clinical file, and its directory is not listed
+    // here at all.
+    //
+    // Only the clinical file gets a second name. The raw record, the metadata
+    // and the markers beside it stay where they are, readable by this identity
+    // and no other.
+    const std::string reviewGroup = trimmed(config.getString("storage.review_group", ""));
+    if (!reviewGroup.empty()) {
+        std::uint64_t published = 0;
+        bool noSuchGroup = false;
+        for (const std::string& entry : entries.value()) {
+            if (noSuchGroup || entry.rfind("session-", 0) != 0) {
+                continue;
+            }
+            const std::string id = entry.substr(8);
+            if (id == live || !storage.exists(entry + "/export.json")) {
+                continue;
+            }
+            med::Result<std::vector<std::string>> files = storage.list(entry);
+            if (!files) {
+                continue;
+            }
+            for (const std::string& file : files.value()) {
+                const std::string suffix = ".bdf";
+                if (file.rfind("record", 0) != 0 || file.size() <= suffix.size() ||
+                    file.compare(file.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                    continue;
+                }
+                // "record.bdf" of session X is X.bdf; "record-002.bdf" is
+                // X-002.bdf. One flat directory: the reviewer's file dialog
+                // shows sessions, not this program's layout.
+                const std::string part = file.substr(6, file.size() - 6 - suffix.size());
+                const std::string name = id + part + suffix;
+                const med::Status status = storage.publish(entry + "/" + file, name, reviewGroup);
+                if (status == med::Status::Unavailable) {
+                    // An image that ships no reviewer has no such group. That
+                    // is a configuration, not a fault - said once, not per file.
+                    logger.info("no reviewing identity on this system; clinical files stay private",
+                                {{"group", reviewGroup}});
+                    noSuchGroup = true;
+                    break;
+                }
+                if (status != med::Status::Ok) {
+                    logger.error("clinical file could not be published for review",
+                                 {{"session", id},
+                                  {"file", file},
+                                  {"status", med::toString(status)}});
+                    ++failures;
+                    continue;
+                }
+                ++published;
+            }
+        }
+        if (!noSuchGroup) {
+            logger.info("clinical files available for review",
+                        {{"group", reviewGroup}, {"files", std::to_string(published)}});
+        }
+    }
+
     return failures == 0 ? 0 : 1;
 }

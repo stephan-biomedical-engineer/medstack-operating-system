@@ -83,6 +83,41 @@ public:
     bool exists(const std::string& relativePath) const;
     Status remove(const std::string& relativePath);
 
+    /// Makes ONE finished file readable to the members of `group`, and nothing
+    /// else with it.
+    ///
+    /// Everything this class writes is 0600 under 0700 directories: only the
+    /// identity that wrote a record can reach it, by any path. That is right
+    /// for the record and wrong for exactly one case - a derived file that
+    /// exists to be read by someone with less privilege, such as a clinical
+    /// file handed to a reviewing program that must not see the raw record
+    /// beside it.
+    ///
+    /// The file becomes 0640, group `group`, and gains a second name:
+    /// `<root>/review/<namespace>/<publishedName>`, in a tree that is
+    /// root:`group` 0750. A hard link and not a copy - same volume, same inode,
+    /// no second set of the patient's bytes to keep in step or to forget. The
+    /// file's first name stays where it was, behind the 0700 directories, so
+    /// the namespace is exactly as closed as before: the group can list the
+    /// review tree and open what is in it, and has no path to anything else.
+    ///
+    /// Idempotent. Publishing a file again is Ok; publishing a NEW file under
+    /// a name already taken replaces the name, which is what a re-derived file
+    /// needs. The caller decides WHEN a file is finished - this API cannot
+    /// know, and a file still being written must not be published.
+    ///
+    /// InvalidArgument: an unsafe path, a name with a separator in it, or a
+    /// source that is not a regular file. NotFound: no such source.
+    /// Unavailable: no such group on this system - an image that ships no
+    /// reviewer has no reviewing identity, and then nothing is published.
+    /// NotSupported: this handle has no namespace to publish from.
+    Status publish(const std::string& relativePath, const std::string& publishedName,
+                   const std::string& group);
+
+    /// Removes a published name. The file itself, under its first name, is
+    /// untouched. NotFound when it was not published.
+    Status unpublish(const std::string& publishedName);
+
     /// Entries of a directory relative to the namespace root, sorted. Not
     /// recursive.
     Result<std::vector<std::string>> list(const std::string& relativeDir = "") const;

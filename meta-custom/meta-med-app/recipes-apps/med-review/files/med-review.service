@@ -1,0 +1,78 @@
+[Unit]
+Description=MedPlatform record review
+Documentation=file:/etc/medplatform/eeg.conf
+Requires=weston.service weston.socket
+After=weston.service weston.socket data.mount eeg-record-export.service
+
+[Service]
+Type=simple
+
+# Its own identity, and that is the point of this unit. Not the compositor's -
+# a program started from the compositor's panel would run as the user that
+# draws the screen, and letting THAT user read patient files makes "who
+# reviews" and "who paints" the same thing. Not the acquisition's, which can
+# read the raw record. The group is what the export program publishes clinical
+# files to; the user belongs to nothing else that owns data.
+User=med-review
+Group=medreview
+# The compositor's socket is 0775, group wayland. Asked for here instead of in
+# /etc/group so that this unit, not a recipe's install order, says who may draw.
+SupplementaryGroups=wayland
+
+Environment=QT_QPA_PLATFORM=wayland
+# An absolute path: the socket is the compositor's, in /run, while this
+# service's own runtime directory - which the toolkit insists on owning and
+# writing to - is the one below.
+Environment=WAYLAND_DISPLAY=/run/wayland-0
+Environment=XDG_RUNTIME_DIR=/run/med-review
+# The program keeps its preferences under HOME. They live in the runtime
+# directory and are forgotten at every boot, deliberately: the root filesystem
+# is read-only, and a reviewer that starts from the same state each time is one
+# whose display settings cannot have been left wrong by the previous user.
+Environment=HOME=/run/med-review
+Environment=XDG_CACHE_HOME=/run/med-review/cache
+Environment=XDG_CONFIG_HOME=/run/med-review/config
+RuntimeDirectory=med-review
+RuntimeDirectoryMode=0700
+
+# Where the file dialog opens. The "-" makes a missing directory not an error:
+# before the first session is closed and converted there is nothing to review
+# and the tree does not exist yet.
+WorkingDirectory=-/data/review/eeg
+
+ExecStart=/usr/bin/edfbrowser
+
+# Closing the window is not a way to leave the station without a reviewer.
+Restart=always
+RestartSec=2s
+
+# --- What it may reach ---------------------------------------------------------
+# Everything read-only, the record volume included; nothing of the network.
+# The program checks its author's site for updates once a day and can open
+# remote streams; with no network namespace of its own to reach out from, it
+# can do neither.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/data
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=mincore
+
+[Install]
+WantedBy=multi-user.target
