@@ -8,7 +8,12 @@ device."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-SRC_URI = "file://med-review.service"
+SRC_URI = " \
+    file://med-review.service \
+    file://med-review-request.path \
+    file://med-review-request.service \
+    file://eeg-hmi-review.conf \
+"
 
 S = "${WORKDIR}"
 
@@ -34,14 +39,29 @@ GROUPADD_PARAM:${PN} = "--system --gid ${MED_REVIEW_GID} medreview"
 USERADD_PARAM:${PN} = "--system --uid ${MED_REVIEW_UID} --gid medreview \
     --no-create-home --home-dir /nonexistent --shell /sbin/nologin med-review"
 
-SYSTEMD_SERVICE:${PN} = "med-review.service"
+# The path is what is enabled. The reviewer itself has no [Install] section and
+# starts only when the operator display asks for it.
+SYSTEMD_SERVICE:${PN} = "med-review-request.path"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 do_install() {
-    install -D -m 0644 ${WORKDIR}/med-review.service \
-        ${D}${systemd_system_unitdir}/med-review.service
+    install -d ${D}${systemd_system_unitdir}/eeg-hmi.service.d
+    install -m 0644 ${WORKDIR}/med-review.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/med-review-request.path ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/med-review-request.service ${D}${systemd_system_unitdir}/
+    # The one place this package reaches into the display's unit: where the
+    # display leaves its request, and leave to write there. The spool's name
+    # appears in three files, all of this recipe - the path unit that watches
+    # it, the unit that empties it, and this drop-in.
+    install -m 0644 ${WORKDIR}/eeg-hmi-review.conf \
+        ${D}${systemd_system_unitdir}/eeg-hmi.service.d/review.conf
 }
 
-FILES:${PN} = "${systemd_system_unitdir}/med-review.service"
+FILES:${PN} = " \
+    ${systemd_system_unitdir}/med-review.service \
+    ${systemd_system_unitdir}/med-review-request.path \
+    ${systemd_system_unitdir}/med-review-request.service \
+    ${systemd_system_unitdir}/eeg-hmi.service.d/review.conf \
+"
 
 RDEPENDS:${PN} = "edfbrowser weston-init"

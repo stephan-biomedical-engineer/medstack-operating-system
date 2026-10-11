@@ -1,0 +1,16 @@
+[Unit]
+Description=MedPlatform record review: answer a request
+
+[Service]
+Type=oneshot
+# Empty the spool first: while anything is left in it the path unit would call
+# this again.
+#
+# Then restart, not start. A request made while a reviewer is already running
+# most likely means its window cannot be found - minimised on a compositor with
+# no task list - and a fresh one on top is the answer that works. --no-block so
+# that this unit is finished, and the path armed again, before the reviewer
+# has drawn anything.
+#
+# A fixed command: what was left in the spool is deleted unread.
+ExecStart=/bin/sh -c 'rm -f /run/med-review-request/* && exec /usr/bin/systemctl restart --no-block med-review.service'

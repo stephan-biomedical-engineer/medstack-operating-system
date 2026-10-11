@@ -67,7 +67,10 @@ do_install:append() {
     # The applications on this device are started by systemd units, each as its
     # own user; nothing here is chosen from a menu, so the panel has nothing
     # true to offer.
-    printf '\n[shell]\npanel-position=none\n' >> "$ini"
+    #
+    # And a plain dark background: it is what shows for the moment between the
+    # compositor and the first window, and the stock one is a test pattern.
+    printf '\n[shell]\npanel-position=none\nbackground-color=0xff0b0f14\n' >> "$ini"
 
     if [ -n "${MED_WESTON_OUTPUT_NAME}" ] && [ -n "${MED_WESTON_OUTPUT_MODE}" ]; then
         printf '\n[output]\nname=%s\nmode=%s\n' \

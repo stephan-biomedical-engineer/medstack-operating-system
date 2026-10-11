@@ -1,6 +1,10 @@
 [Unit]
 Description=MedPlatform record review
 Documentation=file:/etc/medplatform/eeg.conf
+# Started on request and by nothing else: med-review-request.path watches for
+# the operator display asking, and this unit is not enabled. A reviewer that
+# came up at every boot was a second window the operator never opened, on a
+# compositor that offers no way to find a window again.
 Requires=weston.service weston.socket
 After=weston.service weston.socket data.mount eeg-record-export.service
 
@@ -42,9 +46,10 @@ WorkingDirectory=-/data/review/eeg
 
 ExecStart=/usr/bin/edfbrowser
 
-# Closing the window is not a way to leave the station without a reviewer.
-Restart=always
-RestartSec=2s
+# Closing the window ends the review and shows the operator display again,
+# which never left: it is underneath. Not restarted - a reviewer that came
+# back by itself would be a window nobody asked for.
+Restart=no
 
 # --- What it may reach ---------------------------------------------------------
 # Everything read-only, the record volume included; nothing of the network.
@@ -73,6 +78,3 @@ AmbientCapabilities=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=mincore
-
-[Install]
-WantedBy=multi-user.target

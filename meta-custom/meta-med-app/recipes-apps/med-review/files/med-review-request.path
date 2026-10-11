@@ -1,0 +1,20 @@
+[Unit]
+Description=MedPlatform record review, on the operator's request
+# A spool: the operator display asks for the reviewer by leaving a file in this
+# directory, and the unit below empties it and answers.
+#
+# A directory of its own, and not a file in the display's runtime directory,
+# which is what this was at first. That directory is removed and made again
+# whenever the display restarts, and the watch read its disappearance as a
+# request: on the board, 2026-10-11, the display went down with the compositor
+# and a reviewer nobody had asked for came up in its place. A request must be
+# something only a request can cause.
+
+[Path]
+DirectoryNotEmpty=/run/med-review-request
+MakeDirectory=yes
+DirectoryMode=0700
+Unit=med-review-request.service
+
+[Install]
+WantedBy=multi-user.target

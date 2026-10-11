@@ -232,7 +232,13 @@ EEG_CHECKS = [
     # Restart=always, então "ativo" sozinho passaria um laço de quedas (por
     # isso NRestarts), e um revisor ativo como root seria uma segunda porta
     # para o registro bruto com a aparência exata de um revisor que funciona.
-    ("review-active", "o revisor de registros roda, sem reinícios, como med-review",
+    #
+    # O revisor não sobe no boot: sobe quando a HMI pede, deixando um arquivo
+    # num diretório de pedidos que uma unidade .path observa. A asserção
+    # faz o pedido pelo mesmo caminho - então ela mede também que o pedido
+    # chega, e que quem atende é o systemd e não quem pediu.
+    ("review-active", "o revisor sobe a pedido da HMI, sem reinícios, como med-review",
+     "echo pedido > /run/med-review-request/request; "
      "for i in $(seq 1 30); do "
      "  systemctl is-active -q med-review.service && break; sleep 1; done; "
      "P=$(systemctl show med-review.service -p MainPID --value); "
