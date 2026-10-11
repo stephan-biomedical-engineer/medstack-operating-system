@@ -298,6 +298,13 @@ portabilidade sendo usado como instrumento, não uma concessão.
 
 Nenhuma das três sobrevive a um reboot. O próximo boot volta a falhar em 6 s.
 
+> **Atualização, 2026-10-11**: as três estão nas camadas que esta tabela lhes atribuiu e chegaram à
+> placa por `rauc install` — `implementation_plan_hmi_desktop.md` §12.1 e §12.2. Entregá-las
+> revelou um quinto defeito que a bancada de agosto não podia ver, porque o monitor esteve sempre
+> ligado: sem saída conectada na partida o weston sai com erro e a unidade não reinicia. Corrigido
+> com `require-outputs=none`, em `meta-med-distro`. Imagem no monitor e entrada ainda não
+> conferidas com os consertos vindos da imagem.
+
 | # | Correção | Camada | Sem ela |
 |---|---|---|---|
 | 2 | regra udev `KERNEL=="galcore", GROUP="video", MODE="0660"` | `meta-med-bsp` | weston morre em 6 s |
