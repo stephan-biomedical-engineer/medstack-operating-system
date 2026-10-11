@@ -20,9 +20,15 @@ REQUIRED_DISTRO_FEATURES = "wayland opengl"
 # means, and it is a supported state, not a degraded one.
 MED_GPU_PACKAGES ?= ""
 
+# Which compositor, and nothing about it. The default is the single-screen one
+# every profile has used; an image that wants a desktop names another package
+# here, and this recipe never learns what a desktop is. Two compositors in one
+# image are two units after the same screen, which is why this is a choice and
+# not an addition.
+MED_GUI_COMPOSITOR ?= "weston weston-init"
+
 RDEPENDS:${PN} = " \
-    weston \
-    weston-init \
+    ${MED_GUI_COMPOSITOR} \
     qtbase \
     qtbase-plugins \
     qtdeclarative \

@@ -1,0 +1,6 @@
+[Unit]
+Description=MedPlatform compositor is accepting clients
+# The single-screen compositor. Its socket is a unit of its own, and a client
+# has to be ordered after both.
+Requires=weston.service weston.socket
+After=weston.service weston.socket

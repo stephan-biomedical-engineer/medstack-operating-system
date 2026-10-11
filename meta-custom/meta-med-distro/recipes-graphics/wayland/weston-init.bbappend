@@ -29,7 +29,25 @@ PACKAGECONFIG:append = " no-idle-timeout"
 MED_WESTON_OUTPUT_NAME ?= ""
 MED_WESTON_OUTPUT_MODE ?= ""
 
+# --- "The compositor", for units that must not care which ---------------------
+# A client's unit waits for med-compositor.target and reads where to connect
+# from compositor.env. Every compositor package ships both, under the same two
+# paths, so that an image with two compositors does not build - which is the
+# check that there is exactly one.
+#
+# For this compositor the target is the service AND the socket unit: weston is
+# handed its socket by systemd, and a client ordered on the service alone can
+# start before the socket is listening.
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+SRC_URI += "file://med-compositor.target"
+
 do_install:append() {
+    install -D -m 0644 ${WORKDIR}/med-compositor.target \
+        ${D}${systemd_system_unitdir}/med-compositor.target
+    install -d ${D}${nonarch_libdir}/medplatform
+    printf '%s\n' 'WAYLAND_DISPLAY=/run/wayland-0' \
+        > ${D}${nonarch_libdir}/medplatform/compositor.env
+
     ini=${D}${sysconfdir}/xdg/weston/weston.ini
 
     # Asking upstream's recipe for a behaviour is an assumption about third
@@ -79,3 +97,8 @@ do_install:append() {
         bbfatal "MED_WESTON_OUTPUT_NAME='${MED_WESTON_OUTPUT_NAME}' and MED_WESTON_OUTPUT_MODE='${MED_WESTON_OUTPUT_MODE}' for ${MACHINE}: a pinned output needs both, and half of one pins nothing"
     fi
 }
+
+FILES:${PN} += " \
+    ${systemd_system_unitdir}/med-compositor.target \
+    ${nonarch_libdir}/medplatform/compositor.env \
+"

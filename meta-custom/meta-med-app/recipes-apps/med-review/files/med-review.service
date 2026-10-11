@@ -5,8 +5,8 @@ Documentation=file:/etc/medplatform/eeg.conf
 # the operator display asking, and this unit is not enabled. A reviewer that
 # came up at every boot was a second window the operator never opened, on a
 # compositor that offers no way to find a window again.
-Requires=weston.service weston.socket
-After=weston.service weston.socket data.mount eeg-record-export.service
+Requires=med-compositor.target
+After=med-compositor.target data.mount eeg-record-export.service
 
 [Service]
 Type=simple
@@ -19,15 +19,16 @@ Type=simple
 # files to; the user belongs to nothing else that owns data.
 User=med-review
 Group=medreview
-# The compositor's socket is 0775, group wayland. Asked for here instead of in
-# /etc/group so that this unit, not a recipe's install order, says who may draw.
+# The single-screen compositor's socket is 0775, group wayland. Asked for here
+# instead of in /etc/group so that this unit, not a recipe's install order,
+# says who may draw.
 SupplementaryGroups=wayland
 
 Environment=QT_QPA_PLATFORM=wayland
-# An absolute path: the socket is the compositor's, in /run, while this
-# service's own runtime directory - which the toolkit insists on owning and
-# writing to - is the one below.
-Environment=WAYLAND_DISPLAY=/run/wayland-0
+# Where the socket is comes from the compositor's package, as an absolute
+# path; this service's own runtime directory - which the toolkit insists on
+# owning and writing to - is the one below.
+EnvironmentFile=/usr/lib/medplatform/compositor.env
 Environment=XDG_RUNTIME_DIR=/run/med-review
 # The program keeps its preferences under HOME. They live in the runtime
 # directory and are forgotten at every boot, deliberately: the root filesystem

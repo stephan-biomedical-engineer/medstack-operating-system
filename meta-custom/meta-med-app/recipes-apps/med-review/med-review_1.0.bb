@@ -64,4 +64,4 @@ FILES:${PN} = " \
     ${systemd_system_unitdir}/eeg-hmi.service.d/review.conf \
 "
 
-RDEPENDS:${PN} = "edfbrowser weston-init"
+RDEPENDS:${PN} = "edfbrowser"
