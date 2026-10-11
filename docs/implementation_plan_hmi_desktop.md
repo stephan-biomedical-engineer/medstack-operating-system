@@ -608,3 +608,38 @@ seguida e conferidas:
 - o boot do QEMU registrou dois `timeout aguardando shell` antes do console nesta execução.
   Uma ocorrência, causa não investigada.
 
+### 12.5 Depois das três fases — o que o uso mostrou (2026-10-11)
+
+O operador usou a estação com o sinal de teste interno (`ROTEIRO_PLACA.md` §7) e com as duas
+janelas. A onda quadrada apareceu certa nos oito canais (1,86 mV rms lidos contra 1,875 mV: a
+janela do rms é de 250 amostras e o período é de 256), janelas de 5 a 30 s, roda do mouse por
+canal, `Fit`, passa-alta e a reconexão depois de `systemctl stop/start` da aquisição funcionaram.
+Quatro defeitos saíram disso, e uma decisão.
+
+| Visto | Causa | Correção |
+|---|---|---|
+| taxa entregue oscilando entre 242 e 252 | a janela do medidor era fechada pelo temporizador da tela, e pegava um quadro a mais ou a menos em cada ponta: 14 amostras em 2 s são 7 Hz. Abaixo de 245 o número ficaria vermelho sobre um fluxo que não perde nada | a janela abre e fecha na chegada de um quadro; o temporizador só a fecha quando o fluxo parou. `tests/hmi` reproduz 243,67–251,86 ao reverter, e dá 250,00 ± 0,01 |
+| botão de escala "sem efeito" | `+`/`−` moviam só as faixas ainda na escala comum; depois de um `Fit` nenhuma está | movem todas, cada uma do seu ponto; `Same for all` iguala pela mais larga |
+| `Freeze` retomava de onde parou | amostras de antes e de depois da pausa lado a lado, sem costura visível | retomar recomeça a varredura limpa |
+| as duas janelas minimizadas, sem volta | o compositor não tem lista de janelas, com ou sem painel | HMI sem moldura; o revisor sobe **a pedido** (botão `Review records` → arquivo num diretório de pedidos → unidade `.path` → `med-review.service`), e fechar a janela volta à HMI |
+
+**O pedido, e um defeito dele.** A primeira versão punha o arquivo no diretório de runtime da
+própria HMI. Quando a HMI caiu, o diretório foi removido e refeito e a unidade leu isso como
+pedido: um revisor que ninguém pediu. O pedido passou a um diretório próprio
+(`/run/med-review-request`, `DirectoryNotEmpty=`), esvaziado sem ler antes de atender.
+`make check` 28/28 com a `review-active` fazendo o pedido pelo mesmo caminho. **Não instalado na
+placa ainda.**
+
+**O compositor caiu, e a aquisição não.** Às 20:33:55 (hora da placa) `systemctl stop
+med-review` derrubou o weston 13.0.1 com SIGSEGV; um segundo antes o EDFbrowser registrara um
+popup aberto (`Creating a popup with a parent … which does not match the current topmost grab`).
+A HMI perdeu a conexão e saiu com 255; o weston voltou e a HMI reiniciou em 3 s. A aquisição
+seguiu na mesma sessão, `NRestarts=0`, `lost=0` no M33, e registrou `HMI client disconnected` /
+`connected`. É a partição entre aquisição e tela **observada numa falha real**, não injetada.
+A causa - matar um cliente com um menu aberto - é hipótese: não há backtrace. Uma ocorrência.
+
+**A decisão.** O operador quer um ambiente de trabalho de verdade - barra de tarefas, gerenciador
+de arquivos. O weston não tem como ganhar uma lista de janelas, então isso é trocar o
+compositor: `implementation_plan_desktop.md`. O que está aqui continua sendo o perfil de tela
+única (a HMI sozinha, o revisor a pedido), que é o que uma imagem de produto usaria.
+
