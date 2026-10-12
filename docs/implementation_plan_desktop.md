@@ -179,8 +179,8 @@ errado), e os lançadores.
 | Fase | Critério | Resultado | Data |
 |---|---|---|---|
 | D0 | minimizar e restaurar pela barra, no QEMU; compositor sobrevive a um cliente morto com menu aberto | **parcial** — §6.1: minimizar e restaurar pela barra **funcionou, com o mouse**; o resto em aberto | 2026-10-11 |
-| D1 | alcance por identidade, medido tentando | — | — |
-| D2 | imagem no HDMI; HMI ≤ 25% de um núcleo | — | — |
+| D1 | alcance por identidade, medido tentando | **cumprido no QEMU** — §6.2: o usuário do ambiente lê o BDF+ e não o bruto, não escreve; a HMI não é dele | 2026-10-12 |
+| D2 | imagem no HDMI; HMI ≤ 25% de um núcleo | **parcial** — reprovada duas vezes (§6.3, §6.4) e depois destravada por `implementation_plan_desktop_gpu_clients.md`: imagem no HDMI em `1920x1080@50`, HMI a 18% de um núcleo dentro do ambiente, barra e `Files` vistos pelo operador. Boot sem monitor e `NRestarts` aos 5 min não medidos | 2026-10-12 |
 | D3 | — | — | — |
 
 ### 6.1 Fase D0 — o que o ensaio mostrou (2026-10-11)
@@ -214,8 +214,154 @@ Três defeitos que o ensaio encontrou, e nenhum era do ambiente:
 **O que isto não significa**:
 - a barra **vista** pelo operador era, até onde se sabe, a de fábrica: a imagem com a
   configuração nomeada foi construída depois e ninguém olhou a tela dela;
-- o critério 2 (gerenciador de arquivos) não tem o que medir: nenhum foi escolhido (§2.1);
+- o critério 2 (gerenciador de arquivos) não tinha o que medir nesta data: nenhum fora escolhido
+  (§2.1). Foi medido depois, na §6.2;
 - o critério 4 e a injeção de falha (matar o compositor) não foram executados;
 - nada disto é a placa. O caminho do weston, que ela usa, foi alterado pelo contrato do
   compositor e **não foi inicializado desde então** em lugar nenhum.
 
+### 6.2 O gerenciador de arquivos e a Fase D1 (2026-10-12)
+
+Caminho **B** da §2.1, escolhido pelo operador: PCManFM-Qt 2.1.0 com o X11 retirado por *patch*.
+QEMU, mesma imagem da §6.1 mais seis receitas.
+
+| O quê | Como | Resultado |
+|---|---|---|
+| A cadeia compila sem X11 | `make qemu` | `lxqt-build-tools`, `lxqt-menu-data`, `extra-cmake-modules`, `layer-shell-qt`, `libfm-qt`, `pcmanfm-qt`. Os dois *patches* só removem: 60 linhas na `libfm-qt`, 16 no `pcmanfm-qt`. Cada receita relê os fontes depois do *patch* e recusa o build se sobrar um `#include` do X |
+| O que a imagem ganhou | manifesto | 228 → 237 pacotes |
+| O lançador da barra | clique em "Files" (QMP `input-send-event`), `screendump` | janela com a moldura do compositor, ícones do tema, entrada na barra |
+| Um programa só | três cliques, `ps` | um processo `pcmanfm-qt`, três janelas |
+| Sem registro ainda | clique numa imagem recém-gravada | abre a pasta do usuário, vazia |
+| Com registro | `medctl session.start` / `session.stop`, clique | abre `/data/review/eeg`; o BDF+ aparece com o ícone e o tipo "European Data Format 24-bits" |
+| **Duplo clique abre o registro** | duplo clique, `ps`, `screendump` | `edfbrowser /data/review/eeg/<sessão>.bdf`, 8 sinais `EEG n+-n-` a 250 Hz, 12 s, as três anotações da sessão |
+| Identidade | `/proc/<pid>/status` | gerenciador e revisor: uid 1202, grupos `input video wayland medreview`. HMI: outro usuário |
+| **Alcance, medido tentando** | asserção `desktop-reach` | `bdf=8 bruto=NEGADO escrita=NEGADO` |
+| **A asserção vê a falha** | `medreview` retirado da unidade, `make qemu && make check` | **34/35**, só `desktop-reach`: `grupos=[video input wayland] bdf=0 bruto=NEGADO escrita=NEGADO`. Restaurado: 35/35 |
+| A suíte inteira | `make check` | **35/35** |
+| Memória | `ps -o rss` | gerenciador 53 MiB, revisor 61 MiB, numa máquina de 1 GiB |
+
+Quatro defeitos, e nenhum falhou um build:
+
+- **Sem barramento de sessão o gerenciador não abre e não diz nada.** Ele decide se é o primeiro
+  de si mesmo reivindicando um nome no D-Bus; sem barramento a reivindicação falha, ele conclui
+  que já existe outro, pede a esse outro - que não existe - uma janela, e sai com código zero.
+  Lido no fonte antes de ser visto (`application.cpp`, o construtor); a sessão passou a iniciar
+  um `dbus-daemon --session` num caminho fixo. É também o que faz três cliques serem um programa.
+- **O tema de ícones padrão do programa não está na imagem** (`elementary`, depois `oxygen`). A
+  estação entrega o perfil `default` com o tema que a imagem tem.
+- **O tipo era reconhecido e o duplo clique perguntava "com qual programa?"** A definição do
+  tipo estava instalada e compilada; o que faltava era o índice de tipo para programa
+  (`mimeinfo.cache`), que a GLib exige para associações declaradas no `.desktop`. O QA do
+  bitbake tinha avisado (`mime-xdg`), e foi lido como aviso. Visto na tela, corrigido, visto de
+  novo.
+- **A pasta inicial era o diretório de runtime**, e o gerenciador mostrava o socket do
+  compositor e o do barramento como dois arquivos para clicar. O usuário ganhou uma pasta
+  própria ao lado, igualmente volátil.
+
+Duas decisões que isto fixa:
+
+- **O revisor se descreve; o ambiente não o nomeia.** A entrada de menu, a definição dos dois
+  tipos e o ícone saem da receita do `edfbrowser`, na camada de aplicação. A camada adjunta do
+  ambiente não tem o nome dele em lugar nenhum, e declara o grupo `medreview` pelo número da
+  distro - o mesmo par de metades do grupo `wayland`.
+- **No perfil de estação o usuário do ambiente é o revisor** (§3), e o registro fica
+  inalcançável para escrita por construção: `ProtectSystem=strict` na unidade do compositor
+  vale para tudo o que a barra inicia. O gerenciador não apaga, não renomeia e não copia para
+  fora. Copiar um registro para um pendrive **não existe** nesta entrega.
+
+**O que isto não significa**:
+- a injeção de falha cobre uma perna das três de `desktop-reach` (a leitura do BDF+). As duas
+  recusas nunca foram vistas falhar;
+- uma execução da suíte, logo depois de restaurar a unidade, **não chegou ao prompt de login**
+  ("timeout aguardando prompt de login"). A execução seguinte, sobre a mesma imagem, deu 35/35.
+  A causa não foi procurada; a hipótese é a máquina virtual anterior ainda encerrando, e é só
+  hipótese;
+- os cliques foram injetados pelo monitor do QEMU, não por uma pessoa com um mouse; o operador
+  ainda não viu esta tela;
+- nada disto é a placa, que continua no weston e na imagem anterior (Fase D2);
+- a barra de ferramentas do gerenciador tem botões sem ícone ("Go Back", "Go Up" em texto) -
+  o tema da imagem não tem os nomes que ele pede. É acabamento, Fase D3;
+- o gerenciador mostra o sistema de arquivos inteiro, somente leitura, com as permissões do
+  usuário do ambiente. O que esse usuário **não** pode ler foi medido para o registro bruto e
+  para nada mais;
+- a 1280x800 a faixa inferior da HMI sobrepõe "Review records" e "Settings" aos controles de
+  exibição. Não se vê a 1920x1080, que é o modo da placa; visto aqui pela primeira vez e não
+  corrigido.
+
+Evidência: `build/med-bench/20261012-desktop-files/`, quatro capturas.
+
+### 6.3 Fase D2 — a placa (2026-10-12): reprovada
+
+`MED_GUI_COMPOSITOR = "med-desktop-session"` no perfil da placa, `make bundle BOARD=stm32
+KEY=development KERNEL=med LINK=amp`, entregue por `rauc install` no slot B. Operado pelo
+operador; os números abaixo são do que ele colou.
+
+| O quê | Como | Resultado |
+|---|---|---|
+| As doze receitas compilam para aarch64 | o bundle e o manifesto da imagem | compilam; a imagem tem `labwc`, `sfwbar`, `pcmanfm-qt`, `med-desktop-session` e não tem weston |
+| O compositor sobe | `systemctl`, diário | `med-desktop` ativo, `NRestarts=0`, socket `med-desktop:wayland 0775` |
+| **Renderizador** | diário do `labwc` | `Failed to query EGL devices`, `eglQueryDeviceStringEXT(EGL_EXTENSIONS) failed`, `Could not initialize EGL`: o GLES2 do wlroots **não inicializa sobre o EGL desta GPU** e o compositor fica em software |
+| Acesso ao nó da GPU | `ls -la` | `/dev/galcore` `root:video 0660`, `/dev/dri/card0` `root:video 0660` - não é permissão |
+| **A HMI** | diário de `eeg-hmi` | **SIGSEGV a cada ~4 s**, `NRestarts=15` em 67 s, sem uma linha de erro antes do sinal |
+| **O monitor** | operador | **tela preta, sem sinal no HDMI** |
+| A aquisição | `systemctl` | ativa - e por isso o slot é confirmado com a tela morta |
+
+**A rota fica como a §4 disse que ficaria**: a estação permanece no weston, o ambiente fica no
+QEMU como resultado parcial declarado, e a linha foi retirada do perfil da placa.
+
+O que se sabe e o que é hipótese:
+
+- **Medido**: o renderizador acelerado do wlroots 0.17 não sobe sobre o EGL do driver
+  proprietário desta placa. O risco estava escrito na §5 e na §3; agora é resultado.
+- **Hipótese, não medida**: a HMI morre porque um cliente Qt Quick sobre esse EGL entrega seus
+  quadros por um protocolo que só um compositor acelerado com o mesmo driver oferece. Não há
+  *backtrace*.
+- **Não separado**: "sem sinal" pode ser o compositor em software, pode ser o modo de vídeo -
+  nada fixa `1920x1080@50` para o labwc, e esta placa já mostrou tela preta com modos que não
+  são CEA (`BRINGUP_HMI_STM32MP2.md`). As duas causas estavam presentes no mesmo boot.
+- **Defeito que isto expõe, fora do ambiente**: uma imagem cuja tela não funciona foi
+  **confirmada como boa**. Só a aquisição pertence a `boot-complete.target`; a HMI em laço de
+  queda não impede a confirmação nem chega a `failed`.
+
+Caminhos para retomar, nenhum avaliado: o driver livre da mesma GPU no lugar do proprietário
+(com o histórico de `BRINGUP_STM32MP2.md` sobre os dois juntos); um compositor que já fala com
+este EGL (o weston fala) com um shell de área de trabalho por cima; ou a HMI em software dentro
+do compositor em software, que troca a queda por CPU.
+
+### 6.4 Fase D2, segunda tentativa (2026-10-12): o compositor na GPU, a HMI não
+
+Duas mudanças sobre a §6.3: um *patch* no wlroots (`render/egl.c`: o driver anuncia
+`EGL_EXT_device_query` e devolve nulo em `eglQueryDeviceStringEXT`; passa a ser lido como "sem
+extensões de dispositivo") e a receita `wlr-randr`, com que a sessão fixa o modo das duas
+variáveis do `meta-med-bsp`. Operado pelo operador.
+
+| O quê | Como | Resultado |
+|---|---|---|
+| Antes de construir: o driver tem o que o wlroots exige? | `strings` nas bibliotecas da placa | `EGL_KHR_no_config_context`, `EGL_KHR_surfaceless_context`, `EGL_EXT_image_dma_buf_import`(`_modifiers`), `GL_EXT_texture_format_BGRA8888`, `GL_EXT_unpack_subimage` |
+| **Renderizador** | diário do `labwc` | sobra uma linha, `Failed to query EGL devices` (a enumeração, contornada pelo GBM). **Nenhum erro de inicialização: o compositor está na GPU** |
+| **O monitor** | operador | **há sinal**: tela preta com o ponteiro |
+| **Modo** | `wlr-randr` na sessão | `HDMI-A-1`, `1920x1080 px, 50.000000 Hz (current)` |
+| A barra | `pidof` | `sfwbar` vivo; **se está desenhada, ninguém confirmou** |
+| **A HMI** | diário, `exception-trace` | **continua em SIGSEGV**, na `QSGRenderThread`, dentro de `libwayland-client`, logo depois de `wl_compositor.create_surface` |
+| O que o driver espera | `strings` | `wl_viv`, `wl_drm`, `EGL_WL_bind_wayland_display` |
+| O que o compositor anuncia | `WAYLAND_DEBUG=1`, 42 globais | `wl_drm` e `zwp_linux_dmabuf_v1`; **`wl_viv` não** |
+
+A hipótese da §6.3 para a HMI ("compositor em software") estava **errada**: o compositor
+acelerou e ela cai igual. A causa, agora medida nas duas pontas: o EGL do cliente deste driver
+entrega quadros por um protocolo próprio (`wl_viv`), que só existe quando o compositor chama
+`eglBindWaylandDisplayWL`. O weston chama; o wlroots deixou de chamar na série 0.15 e removeu o
+caminho que importava esses buffers. O cliente não encontra o global e usa um objeto nulo.
+
+O que isto decide: **qualquer cliente que desenhe pela GPU cai neste compositor, nesta placa** -
+a HMI hoje, e não só ela. Clientes por memória compartilhada (a barra, o gerenciador de
+arquivos, o revisor) não passam por esse caminho; nenhum deles foi visto na tela da placa.
+
+Para a HMI rodar aqui o wlroots teria de reganhar o que removeu: chamar o *bind* e importar
+buffers `EGL_WAYLAND_BUFFER_WL` como textura. É um porte, não um ajuste, e não foi escrito. O
+renderizador por software do Qt Quick não serve de atalho: a HMI desenha os traços com geometria
+própria no *scene graph*, que esse renderizador não desenha.
+
+**Estado, ao fim do dia**: o porte foi escrito e funcionou - o registro está em
+`implementation_plan_desktop_gpu_clients.md` §7. O perfil da placa em `kas/` tem a linha do
+ensaio, **não commitada**. Os dois slots da placa têm imagens do ambiente; a de tela única não
+está mais em nenhum.
