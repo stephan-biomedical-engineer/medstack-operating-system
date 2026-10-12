@@ -31,14 +31,35 @@ inherit qt6-qmake features_check
 
 REQUIRED_DISTRO_FEATURES = "wayland"
 
-# Installed by hand, and only the program. Upstream's install rule names its
-# own binary relative to the source directory ("target.files = edfbrowser"), so
-# with the separate build directory qt6-qmake uses it copies a file that is not
-# there. The rest of what it would install - a desktop entry, a MIME type, icons
-# for a file manager - describes a desktop this device does not have: the
-# reviewer is started by a systemd unit, not chosen from a menu.
+# mime compiles the file-type definitions into the database; mime-xdg builds
+# the index from file type to program. Without the second the type is
+# recognised, the icon is right, and a double click still asks which program
+# to use - seen in the first trial of the station's file manager.
+inherit mime mime-xdg
+
+# Installed by hand. Upstream's install rule names its own binary relative to
+# the source directory ("target.files = edfbrowser"), so with the separate
+# build directory qt6-qmake uses it copies a file that is not there.
+#
+# Beside the program go the three files by which it describes itself to
+# whatever desktop there is: a menu entry, the definition of the two file types
+# it opens, and their icon. On the single-screen display nothing reads them -
+# the reviewer is started by a systemd unit, not chosen from a menu - and on a
+# station with a file manager they are what makes a double click on a record
+# open it. The program states what it is; no desktop package has to know its
+# name.
 do_install() {
     install -D -m 0755 ${B}/edfbrowser ${D}${bindir}/edfbrowser
+    install -D -m 0644 ${S}/install/edfbrowser.desktop \
+        ${D}${datadir}/applications/edfbrowser.desktop
+    install -D -m 0644 ${S}/install/edfbrowser.xml \
+        ${D}${datadir}/mime/packages/edfbrowser.xml
+    install -D -m 0644 ${S}/images/edf.png \
+        ${D}${datadir}/icons/hicolor/48x48/apps/edf.png
+    install -D -m 0644 ${S}/images/edf.png \
+        ${D}${datadir}/icons/hicolor/48x48/mimetypes/edf.png
 }
+
+FILES:${PN} += "${datadir}/applications ${datadir}/mime/packages ${datadir}/icons/hicolor"
 
 RDEPENDS:${PN} = "qtwayland"
