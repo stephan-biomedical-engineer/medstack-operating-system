@@ -289,6 +289,35 @@ amplitude, período, lacunas e CRC. Esta é a fase que diz que o hardware mede c
 A config selada não muda. O teste usa uma cópia em `/run` (volátil), selada de novo e apontada
 por um drop-in também volátil. Um reboot desfaz tudo, e o §7.6 desfaz sem reboot.
 
+> **Atualização, 2026-10-11 - leia antes de rodar o que vem abaixo.** Duas coisas mudaram, e as
+> subseções 7.1 a 7.3 foram escritas antes delas.
+>
+> **O serviço não grava mais sozinho.** Ele adquire e mostra o sinal desde que sobe, e só escreve
+> em `/data` entre `medctl session.start` e `medctl session.stop` (ou os botões `Record`/`Stop` da
+> HMI). Reiniciar o serviço, que era como este roteiro delimitava um registro, **não grava nada**.
+>
+> **O sinal de teste é uma escolha, não mais uma cópia da config.** Numa imagem com a tabela de
+> escolhas (`/etc/medplatform/eeg-choices.conf`), o caminho curto para o link `amp` é:
+>
+> ```bash
+> ssh $B 'medctl session.configure afe.test_signal=internal afe.lead_off_detection=false && medctl session.start exam=fase4'
+> ssh $B 'sleep 30; medctl session.stop; ls -d /data/eeg/session-* | tail -n 1'
+> ssh $B 'medctl session.configure afe.test_signal=off afe.lead_off_detection=true'
+> ```
+>
+> A primeira linha tem de pedir as duas coisas juntas: o firmware recusa o gerador com o lead-off
+> ligado, e por isso essa combinação nem está na tabela do link. A última devolve a de fábrica; um
+> reboot faz o mesmo. No link `usb` o lead-off não se desliga, então é só
+> `afe.test_signal=internal`. Medido assim na placa em 2026-10-11
+> (`implementation_plan_hmi_desktop.md` §12.7): patamares de ±1,85 a ±1,9 mV e período de 256,0
+> amostras nos oito canais, em ganho 24 e em ganho 12.
+>
+> **Se for mesmo preciso o caminho antigo** (uma config que a tabela não tem), a cópia em `/run`
+> continua valendo, com uma linha a mais: `sed -i "s/^session.autostart = false/session.autostart = true/"`
+> na cópia, **antes** de selar. Sem ela o serviço sobe pela cópia e não grava. E uma config em
+> `/run` não tem tabela de escolhas ao lado, então `session.configure` é recusado enquanto ela
+> estiver em uso.
+
 ### 7.1 Montar a config de teste
 
 Um `sed` por link, porque cada link fala outro vocabulário de opções (o `do_derive_device_options`

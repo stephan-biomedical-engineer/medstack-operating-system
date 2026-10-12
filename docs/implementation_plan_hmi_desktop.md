@@ -438,7 +438,7 @@ si. B e C esperam o plano de controle, que é o caminho crítico do conjunto.
 | A2 | `acq-sample-rate` passa com a HMI aberta; taxa na tela = taxa do registro | **parcial** — §12.3: `acq-sample-rate` passa, CPU da HMI de ≈99% para ≈19% de um núcleo; a tela **ainda não foi olhada**, e os critérios 2 e 4 não foram medidos | 2026-10-11 |
 | A3 | BDF+ fechado abre; bruto, metadado e sessão viva dão `EACCES` | **parcial** — §12.4: revisor de pé como `med-review`, nove sessões publicadas, as quatro pernas do alcance medidas e injetadas na placa; **ninguém abriu um arquivo na janela ainda** | 2026-10-11 |
 | B | iniciar, anotar e encerrar pela tela; HMI como `med-hmi` | — | — |
-| C | escolha → sessão com metadado e sinal coerentes; fora da tabela → recusa | — | — |
+| C | escolha → sessão com metadado e sinal coerentes; fora da tabela → recusa | **cumprido no QEMU (33/33) e na placa, link `amp`** — §12.6 e §12.7; o painel não foi descrito por quem o usou | 2026-10-11 |
 | D | curto dentro do critério de ruído; temperatura responde; rótulo não é EEG | — | — |
 | E | um eletrodo aberto muda um indicador, no link `usb` | — | — |
 
@@ -642,4 +642,146 @@ A causa - matar um cliente com um menu aberto - é hipótese: não há backtrace
 de arquivos. O weston não tem como ganhar uma lista de janelas, então isso é trocar o
 compositor: `implementation_plan_desktop.md`. O que está aqui continua sendo o perfil de tela
 única (a HMI sozinha, o revisor a pedido), que é o que uma imagem de produto usaria.
+
+### 12.6 Fase C — a configuração pela tela: o que foi escrito (2026-10-11)
+
+A Fase B entrou por outro caminho (`implementation_plan_eeg_control.md` §13.1: gravação sob
+pedido, `medctl`, botão `Record`). Esta é a §5 deste plano, sobre aquela base.
+
+| Peça | Onde | Estado |
+|---|---|---|
+| Uma função de tradução, chamada para a prescrição de fábrica e para cada alternativa | receita do serviço, `do_derive_device_options` | construída nos três links |
+| `eeg-choices.conf`, selado | idem, e `do_seal_configuration` | **simulated 56 linhas, `amp` 42, `usb` 28** - lidas nos pacotes produzidos |
+| `session.configure`, `device.prescription` | `eeg-acquisition-service`, `main.cpp` | compila sem avisos |
+| A tabela lida e verificada pela HMI; painel `Settings` | `eeg-hmi-gui`, `PrescriptionTable`, `SettingsPanel.qml` | compila; `qmllint` limpo |
+| Asserção `configure-choice` | `scripts/med-check.py` (32 asserções) | **não executada** |
+
+Como a tabela ficou, por link, e é o que a tela vai mostrar sem uma linha de código diferente:
+
+| Link | Linhas | O que não é oferecido, e por quê |
+|---|---|---|
+| `simulated` | 56 | nada: 7 ganhos × lead-off × montagem × gerador |
+| `amp` | 42 | gerador interno com lead-off ligado - o firmware recusa, e a regra passou a ser dita no build |
+| `usb` | 28 | lead-off desligado - o driver liga os comparadores no *probe* e não oferece como desligá-los |
+
+**Onde se afasta da §5, e por quê**:
+- a tabela é de **prescrições inteiras**, não de valores por chave. As chaves interagem (o
+  fundo de escala depende do ganho, o gerador exclui o lead-off num link), e uma tabela por
+  chave ofereceria combinações que nenhuma linha traduz;
+- o verbo `device.choices` não existe: a resposta do canal de controle tem 64 octetos, e a HMI
+  lê o mesmo arquivo selado que o serviço, pelo `MedicalConfiguration`;
+- a **taxa** não está na tabela. A regra 1 da §5 vale: só entra depois de medida no link;
+- a conferência do envelope (ganho × `safety.max_input_uv`) é feita **no build**, ao gerar cada
+  linha, e não a cada pedido: uma linha que o serviço recusaria não existe;
+- a afirmação da chave de referência viaja como `reference_switch` (`ground`/`electrode`), é
+  exigida pela tabela nos links com conversor, e vai ao metadado como
+  `affirmed_reference_switch`.
+
+**Aplicar uma escolha** é fechar o dispositivo e abrir outro com as opções da linha. Se o
+front-end recusa, as opções anteriores voltam e a recusa vai a quem pediu; se nem as anteriores
+voltam, o serviço sai com falha e o reinício da unidade assume. Só vale sem sessão aberta.
+
+**O que isto não significa**: que funciona. Nada disto rodou em imagem nenhuma. E três coisas
+são sabidas de antemão:
+- uma escolha **não sobrevive** ao reinício do serviço nem ao boot (§5, regra 3);
+- no link `usb` a tela continuará oferecendo lead-off **ligado**, que aquele driver aceita e
+  não honra (Fase E) - a tabela herda o defeito, não o cria;
+- os dois selos são `0640 root`: uma HMI que deixe de ser root (Fase B, identidade) não
+  consegue verificar a tabela, e o painel some. Tem de ser resolvido junto.
+
+Corrigido de passagem: `do_derive_device_options` acrescentava ao `eeg.conf` antes de terminar
+de derivar; uma falha no meio deixava o arquivo já acrescido, e a execução seguinte o recusava
+como editado à mão - um build que só se consertava limpando a receita. Agora nada é escrito
+antes de tudo estar derivado.
+
+### 12.7 Fases B e C na placa, e o que a instalação encontrou primeiro (2026-10-11)
+
+Link `amp`, `linux-med` em `983c5cf`, por `rauc install` (B→A). QEMU antes: `make check`
+**33/33** com `configure-choice` e `configure-record`.
+
+**A instalação falhou na primeira tentativa, e a causa é um resultado.**
+
+| Visto | Medido |
+|---|---|
+| `/data` cheio | 450,4 de 454,6 MiB, 0 disponível: 15 sessões gravadas sem ninguém pedir, uma por boot ou reinício, duas delas com 170 e 107 MiB |
+| `rauc install` falha | `Failed to save system status: Failed to write file "/data/rauc/central.raucs…": No space left on device` - o bundle estava íntegro (sha256 igual dos dois lados) |
+| O slot de destino fica fora da ordem | `BOOT_ORDER=B`, `BOOT_A_LEFT=0`, slot A `bad`: o RAUC o retira antes de escrever e a falha o deixa assim. A placa seguiu no B, sem reserva |
+| A aquisição perdia quadros | 9 avisos de *"sample frame could not be persisted"* no boot; `eeg-record-export` em `failed`; a última sessão sem `closed.json` e com o BDF+ incompleto; um marcador de sessão viva sem diretório |
+
+Dois defeitos de plataforma saem daí, **e nenhum está corrigido**:
+
+1. **Um volume de registros cheio impede a atualização.** O `data-directory` do RAUC mora em
+   `/data`, junto com os registros. O dispositivo que mais precisa de uma correção - o que
+   encheu o disco por um defeito de software - é o que não consegue recebê-la. É o mesmo formato
+   da chave do LUKS e do journal: um estado de que a atualização depende, num lugar que outra
+   coisa pode esgotar.
+2. **Nada impede o volume de encher.** O serviço grava até o último octeto e depois conta
+   quadros perdidos. Não há limite, não há recusa de sessão nova por falta de espaço, e a tela
+   não diz quanto resta.
+
+As 85 arquivos foram copiados para `build/med-bench/20261011-placa-data-cheio/` (sha256 de cada
+um igual dos dois lados, lista em `SHA256SUMS`) e apagados da placa a pedido do operador; a
+segunda instalação passou, com os dois slots `good` e `BOOT_ORDER=A B`.
+
+**Depois do boot na imagem nova:**
+
+| O quê | Medido |
+|---|---|
+| O caminho do weston com o contrato do compositor (`aae5078`), nunca inicializado antes | `med-compositor.target` ativo; `weston`, `eeg-hmi`, `eeg-acquisition`, `med-m33-firmware` ativos, `NRestarts=0` |
+| Ocioso | `medctl session.status` → `idle`; `/data/eeg` com 0 sessões e sem crescer em 10 s; nenhum marcador de sessão viva |
+| A tabela do link | `choice 36` em vigor: a de fábrica das 42 |
+| Uma escolha chega ao conversor | pelo traço do firmware do M33: fábrica `CHnSET 60 … SENS ff ff ff ff CONFIG4 02`; gerador interno com lead-off desligado `CHnSET 65 … SENS ff ff 00 00`; ganho 12 `CHnSET 55` |
+| Sessão sob gerador interno, ganho 24 | 101 quadros, `dropped 0`; BDF+ com fundo de escala declarado 187 500 µV; nos 8 canais, patamares +1844,7…+1853,3 e −1893,9…−1885,4 µV, **período 256,0 amostras** |
+| Sessão sob gerador interno, ganho 12 | 216 quadros, `dropped 0`; fundo de escala declarado 375 000 µV; patamares +1824,1…+1835,1 e −1914,7…−1903,7 µV, período 256,0 |
+| O registro declara a escolha | `afe.gain`, `afe.test_signal`, `afe.lead_off_detection` e `full_scale_uv` de cada sessão são os da linha escolhida; `prescription_source: operator choice` |
+| Trilha | 3 `ConfigurationChanged`; serviço sem reinício do começo ao fim; os dois BDF+ publicados para revisão |
+
+A amplitude é a mesma nos dois ganhos, como deve: o gerador está na entrada. O que muda é a
+escala declarada, e o exportador - que recusa um registro fora da grade do conversor - aceitou
+as duas. O meio dos patamares fica 20 a 40 µV abaixo de zero: o deslocamento do canal, não
+investigado.
+
+**O que isto não significa**:
+- o operador estava usando a tela ao mesmo tempo. A primeira leitura do firmware já mostrava o
+  gerador interno ligado (alguém o tinha aplicado pelo painel), e a primeira sessão foi encerrada
+  aos 6 s por outra mão. Isso é evidência de que o painel e o botão funcionam, e **não** é uma
+  medida: ninguém a registrou como tal, e a recusa "gerador com lead-off ligado" que se queria
+  ver na placa não foi vista, porque o lead-off já estava desligado;
+- montagem referencial e a afirmação da chave não foram exercitadas na placa;
+- o defeito do weston com cliente morto de menu aberto continua lá: a placa segue no weston;
+- a HMI reportou um laço de *binding* no painel (`SettingsPanel.qml`, propriedade `changed`) no
+  primeiro boot. Corrigido no fonte; **a imagem da placa ainda é a anterior**.
+
+**Acréscimo, mesma noite - o que o uso pediu e as pendências.** Segunda entrega por `rauc`
+(A→B), depois de `make check` **34/34** no QEMU.
+
+| O quê | Estado |
+|---|---|
+| O teclado na tela do weston, sem tecla de fechar e cobrindo os campos | os campos de operador e exame saíram da barra de baixo para um painel no topo, aberto pelo `Record`; `Start` e `Cancel` devolvem o foco ao traçado, que é o que recolhe o teclado. **Na placa; não descrito por quem usa** |
+| Laço de *binding* no painel `Settings` | corrigido; o diário da HMI no boot novo não o traz |
+| Reserva no volume de registros (`storage.reserve_mib = 32`) | sessão nova recusada abaixo da reserva; sessão em curso fechada pelo serviço, inteira, com `reason: record volume full`. Asserção `storage-reserve` passa no QEMU com o volume enchido de verdade - **nunca vista falhar** |
+| `ROTEIRO_PLACA.md` §7 | aviso com o procedimento novo |
+| CPU, na placa, ociosa e sem sessão | aquisição **24 ms em 10 s** (antes ~95: não há mais `fsync` por quadro fora de uma sessão). HMI **5,8 s em 20 s** (thread principal 1,49 s, renderização 4,00 s), contra 3,8 s antes de existir o controle |
+
+O aumento da HMI tem duas causas prováveis, e só uma foi tratada: o objeto de controle anunciava
+mudança a cada segundo, respondesse o serviço o que respondesse, e tudo o que está ligado a ele
+era reavaliado (corrigido no fonte, **não está na placa**); e a janela agora ocupa a tela
+inteira, sem moldura, o que é mais área para a GPU a cada quadro (não investigado).
+
+Continua em aberto, e não é implementação: o estado do RAUC mora no mesmo volume dos registros
+(a reserva impede que *uma sessão* o esgote, não que outra coisa o faça); a montagem referencial
+com a afirmação da chave não foi exercitada na placa, porque a afirmação é de quem vê a chave.
+
+**Terceira entrega da noite (B→A), `make check` 34/34 antes.** O teclado na tela do weston foi
+julgado por quem o usou: digita, mas o apagar não faz nada sobre um campo de texto do Qt, e não
+há como recolhê-lo. A HMI passou a trazer as próprias teclas dentro do painel de gravação
+(`Keypad.qml`: letras, dígitos, `-`, `.`, `_`, espaço, maiúsculas, apagar), e o do compositor foi
+desligado (`[input-method] path=` vazio, que o `text-backend.c` trata como "não lançar"). Na
+placa: nenhum processo `weston-keyboard`, HMI e aquisição ativas sem reinício.
+
+A correção do anúncio de estado está nesta imagem, e a regressão de CPU fechou: thread principal
+da HMI **0,39 s em 20 s** (era 1,49 s; 0,38 s antes de existir o controle), renderização 2,94 s,
+total ≈ 17% de um núcleo. A janela em tela inteira **não** era a causa.
+
+**Não visto**: o teclado próprio usado por uma pessoa. O QEMU prova que o QML carrega.
 
