@@ -1,0 +1,8 @@
+#!/bin/sh
+# The task bar's "Files": the file manager, opened where the station's files
+# are. Before the first session is closed and converted that tree does not
+# exist, and a file manager started on a missing directory opens an error
+# instead of a window.
+dir=/data/review/eeg
+[ -d "$dir" ] || dir="$HOME"
+exec pcmanfm-qt "$dir"

@@ -429,6 +429,25 @@ EEG_CHECKS = [
      'test "$L" = 2 && echo REVISAO_OK',
      rx(r"REVISAO_OK")),
 
+    # O usuário do ambiente de trabalho, que numa estação é o revisor
+    # (implementation_plan_desktop.md, Fase D1): o que o gerenciador de
+    # arquivos da barra pode abrir é o que este usuário pode. Os grupos são
+    # lidos da unidade e não repetidos aqui, para que a asserção siga a
+    # unidade. Três pernas: lê o BDF+ publicado, não lê o registro bruto, e
+    # não escreve onde lê. Numa imagem sem o ambiente (a de tela única) não
+    # há o que medir, e a saída diz isso em vez de dizer OK calado.
+    ("desktop-reach", "o usuário do ambiente lê o BDF+ publicado, não o bruto, e não escreve",
+     'systemctl cat med-desktop >/dev/null 2>&1 || { echo "sem ambiente: AMBIENTE_OK"; exit 0; }; '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); P=/data/review/eeg/${S##*/session-}.bdf; '
+     'G=$(systemctl show -p SupplementaryGroups --value med-desktop); '
+     'R="systemd-run -q --wait --pipe -p User=med-desktop -p ProtectSystem=strict"; '
+     'A=$($R -p "SupplementaryGroups=$G" /bin/sh -c "dd if=\'$P\' bs=1 count=8 2>/dev/null | wc -c"); '
+     'B=$($R -p "SupplementaryGroups=$G" /bin/sh -c "cat \'$S/raw.bin\' >/dev/null 2>&1 && echo LEU || echo NEGADO"); '
+     'C=$($R -p "SupplementaryGroups=$G" /bin/sh -c "touch /data/review/eeg/x 2>/dev/null && echo ESCREVEU || echo NEGADO"); '
+     'echo "grupos=[$G] bdf=$A bruto=$B escrita=$C"; '
+     'test "$A" = 8 && test "$B" = NEGADO && test "$C" = NEGADO && echo AMBIENTE_OK',
+     rx(r"AMBIENTE_OK")),
+
     # Uma configuração do front-end escolhida em runtime
     # (implementation_plan_hmi_desktop.md, Fase C). A última, porque abre e
     # fecha uma sessão própria. Sete pernas, e cada uma é um jeito de isto

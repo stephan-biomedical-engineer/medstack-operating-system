@@ -12,16 +12,29 @@ Type=simple
 # than in /etc/group so that this unit is where one reads what it may touch.
 User=med-desktop
 Group=med-desktop
-SupplementaryGroups=video input wayland
+SupplementaryGroups=video input wayland medreview
+# medreview: what is started from the task bar runs as this user, and on a
+# station that user is the reviewer. It reads the clinical files of closed
+# sessions and, like the reviewer's own unit, nothing of the raw record.
 
 # The runtime directory holds the compositor's socket. Clients are told its
 # full path; nothing looks for it in a per-user directory, because the clients
 # on this device are other system units and not this user's processes.
-RuntimeDirectory=med-desktop
+RuntimeDirectory=med-desktop med-desktop/home
 RuntimeDirectoryMode=0755
 Environment=XDG_RUNTIME_DIR=/run/med-desktop
-Environment=HOME=/run/med-desktop
+# A home of its own, beside the sockets and not on top of them: the file
+# manager opens the home when there is no record yet, and what it showed there
+# was the compositor's socket and the session bus as two files to click on.
+# Still a runtime directory - the root filesystem is read-only, and nothing
+# this user keeps is meant to outlive a boot.
+Environment=HOME=/run/med-desktop/home
 Environment=XDG_CONFIG_DIRS=/etc/xdg
+# One session bus for whatever the task bar starts, at a path and not found by
+# a login manager, because there is no login. The session's autostart is what
+# runs the daemon.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/med-desktop/bus
+Environment=QT_QPA_PLATFORM=wayland
 # The toolkit the task bar is written in looks for an accessibility bus and a
 # session bus at start. There is neither on this device, and waiting for them
 # is twenty-five seconds of an empty screen.
