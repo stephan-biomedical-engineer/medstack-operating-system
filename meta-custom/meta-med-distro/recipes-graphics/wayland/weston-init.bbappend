@@ -90,6 +90,15 @@ do_install:append() {
     # compositor and the first window, and the stock one is a test pattern.
     printf '\n[shell]\npanel-position=none\nbackground-color=0xff0b0f14\n' >> "$ini"
 
+    # --- No on-screen keyboard of the compositor's ---------------------------
+    # weston starts one for any text field unless told not to: an empty path is
+    # how it is told (compositor/text-backend.c - an empty string returns
+    # before anything is launched). It was judged on the board with a mouse
+    # and no keyboard: its backspace did nothing over a Qt text field, it
+    # covered the field being typed into, and it has no key that dismisses it.
+    # The one application here that takes typed text brings its own keys.
+    printf '\n[input-method]\npath=\n' >> "$ini"
+
     if [ -n "${MED_WESTON_OUTPUT_NAME}" ] && [ -n "${MED_WESTON_OUTPUT_MODE}" ]; then
         printf '\n[output]\nname=%s\nmode=%s\n' \
             "${MED_WESTON_OUTPUT_NAME}" "${MED_WESTON_OUTPUT_MODE}" >> "$ini"
