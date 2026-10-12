@@ -23,6 +23,9 @@
 #include <algorithm>
 #include <cstring>
 #include <type_traits>
+#include <vector>
+#include <string>
+#include <map>
 
 #include "MedicalDevice.h"
 #include "check.h"
@@ -315,5 +318,96 @@ void testAmpAbi() {
             }
         }
         CHECK_EQ(changed, 0LL);
+    }
+
+    medtest::section("canal de controle - um codec para os dois lados");
+    {
+        const std::map<std::string, std::string> request = {
+            {"verb", "session.start"}, {"operator", "ana"}, {"exam", "E-0042"}};
+        Result<std::vector<unsigned char>> sent = amp::encodeControl(request);
+        CHECK(sent.isOk());
+        CHECK_EQ(static_cast<long long>(sent.value().size()),
+                 static_cast<long long>(sizeof(amp::ControlMessage)));
+
+        Result<std::map<std::string, std::string>> got =
+            amp::decodeControl(sent.value().data(), sent.value().size());
+        CHECK(got.isOk());
+        CHECK(got.isOk() && got.value() == request);
+
+        // An empty request is a request: zero options, a CRC over nothing.
+        Result<std::vector<unsigned char>> empty = amp::encodeControl({});
+        CHECK(empty.isOk());
+        CHECK(amp::decodeControl(empty.value().data(), empty.value().size()).isOk());
+
+        // Refused, never trimmed.
+        std::map<std::string, std::string> nine;
+        for (int i = 0; i < 9; ++i) {
+            nine["k" + std::to_string(i)] = "v";
+        }
+        CHECK_STATUS(amp::encodeControl(nine).status(), Status::InvalidArgument);
+        CHECK_STATUS(amp::encodeControl({{"k", std::string(24, 'x')}}).status(),
+                     Status::InvalidArgument);
+        CHECK(amp::encodeControl({{"k", std::string(23, 'x')}}).isOk());
+        CHECK_STATUS(amp::encodeControl({{std::string(32, 'k'), "v"}}).status(),
+                     Status::InvalidArgument);
+
+        // Every way a message can be wrong on arrival.
+        std::vector<unsigned char> bytes = sent.value();
+        CHECK_STATUS(amp::decodeControl(bytes.data(), bytes.size() - 1).status(),
+                     Status::IntegrityError);
+        CHECK_STATUS(amp::decodeControl(nullptr, bytes.size()).status(), Status::IntegrityError);
+
+        std::vector<unsigned char> flipped = bytes;
+        flipped[offsetof(amp::ControlMessage, options) + 40] ^= 0x01;  // inside a value
+        CHECK_STATUS(amp::decodeControl(flipped.data(), flipped.size()).status(),
+                     Status::IntegrityError);
+
+        std::vector<unsigned char> otherMagic = bytes;
+        otherMagic[0] ^= 0xFF;
+        CHECK_STATUS(amp::decodeControl(otherMagic.data(), otherMagic.size()).status(),
+                     Status::IntegrityError);
+
+        amp::ControlMessage message;
+        std::memcpy(&message, bytes.data(), sizeof(message));
+        message.version = static_cast<std::uint16_t>(amp::kControlVersion + 1);
+        CHECK_STATUS(amp::decodeControl(&message, sizeof(message)).status(), Status::NotSupported);
+
+        std::memcpy(&message, bytes.data(), sizeof(message));
+        message.optionCount = 9;
+        CHECK_STATUS(amp::decodeControl(&message, sizeof(message)).status(),
+                     Status::IntegrityError);
+
+        // A value with no terminator, under a CRC that does close: the sender
+        // could not have built it, and it must not be read past its field.
+        std::memcpy(&message, bytes.data(), sizeof(message));
+        std::memset(message.options[0].value, 'A', sizeof(message.options[0].value));
+        message.crc32 = amp::crc32(message.options, message.optionCount * sizeof(amp::ControlOption));
+        CHECK_STATUS(amp::decodeControl(&message, sizeof(message)).status(),
+                     Status::IntegrityError);
+
+        // The answer.
+        std::vector<unsigned char> accepted = amp::encodeControlAck(0, "recording 2026-10-11T20:01:36.532Z");
+        Result<amp::ControlAck> ack = amp::decodeControlAck(accepted.data(), accepted.size());
+        CHECK(ack.isOk());
+        CHECK_EQ(static_cast<int>(ack.value().rejectedIndex), 0);
+        CHECK(std::string(ack.value().detail) == "recording 2026-10-11T20:01:36.532Z");
+
+        // A detail longer than its field is cut to the field and terminated.
+        std::vector<unsigned char> longAck = amp::encodeControlAck(3, std::string(200, 'd'));
+        Result<amp::ControlAck> cut = amp::decodeControlAck(longAck.data(), longAck.size());
+        CHECK(cut.isOk());
+        CHECK_EQ(static_cast<int>(cut.value().rejectedIndex), 3);
+        CHECK_EQ(static_cast<long long>(std::strlen(cut.value().detail)),
+                 static_cast<long long>(amp::kControlDetailSize - 1));
+
+        CHECK_STATUS(amp::decodeControlAck(accepted.data(), accepted.size() - 1).status(),
+                     Status::IntegrityError);
+        // A request is not an answer, and the other way round.
+        CHECK_STATUS(amp::decodeControlAck(bytes.data(), bytes.size()).status(),
+                     Status::IntegrityError);
+        std::vector<unsigned char> padded = accepted;
+        padded.resize(sizeof(amp::ControlMessage), 0);
+        CHECK_STATUS(amp::decodeControl(padded.data(), padded.size()).status(),
+                     Status::IntegrityError);
     }
 }

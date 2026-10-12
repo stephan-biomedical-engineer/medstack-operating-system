@@ -151,6 +151,122 @@ Result<SampleFrame> decodeFrame(const void* data, std::size_t length, double* sa
     return Result<SampleFrame>::ok(std::move(frame));
 }
 
+// --------------------------------------------------------- control messages
+//
+// Serialising DeviceConfig::driverOptions into the fixed-layout message the
+// producer decodes. Shared by every driver that has a producer on the other
+// end of a link, which today is "rpmsg" and tomorrow is any firmware.
+
+Result<std::vector<unsigned char>> encodeControl(
+    const std::map<std::string, std::string>& options) {
+    using EncodedResult = Result<std::vector<unsigned char>>;
+
+    if (options.size() > kControlMaxOptions) {
+        return EncodedResult::fail(
+            Status::InvalidArgument,
+            "the control message carries at most " +
+                std::to_string(kControlMaxOptions) +
+                " options and " + std::to_string(options.size()) +
+                " were given. Truncating would send half a prescription");
+    }
+
+    ControlMessage message;
+    std::memset(&message, 0, sizeof(message));
+    message.magic = kControlMagic;
+    message.version = kControlVersion;
+    message.optionCount = static_cast<std::uint16_t>(options.size());
+
+    std::size_t index = 0;
+    for (const std::pair<const std::string, std::string>& entry : options) {
+        if (entry.first.size() >= kControlKeySize ||
+            entry.second.size() >= kControlValueSize) {
+            return EncodedResult::fail(Status::InvalidArgument,
+                                       "control option '" + entry.first +
+                                           "' does not fit the wire format");
+        }
+        std::memcpy(message.options[index].key, entry.first.data(), entry.first.size());
+        std::memcpy(message.options[index].value, entry.second.data(),
+                    entry.second.size());
+        ++index;
+    }
+
+    message.crc32 = crc32(message.options,
+                               options.size() * sizeof(ControlOption));
+
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&message);
+    return EncodedResult::ok(std::vector<unsigned char>(bytes, bytes + sizeof(message)));
+}
+
+Result<std::map<std::string, std::string>> decodeControl(const void* data, std::size_t length) {
+    using DecodedResult = Result<std::map<std::string, std::string>>;
+
+    ControlMessage message;
+    if (data == nullptr || length < sizeof(message)) {
+        return DecodedResult::fail(Status::IntegrityError, "control message is too short");
+    }
+    std::memcpy(&message, data, sizeof(message));
+    if (message.magic != kControlMagic) {
+        return DecodedResult::fail(Status::IntegrityError, "not a control message");
+    }
+    if (message.version != kControlVersion) {
+        return DecodedResult::fail(Status::NotSupported,
+                                   "control protocol version " +
+                                       std::to_string(message.version));
+    }
+    if (message.optionCount > kControlMaxOptions) {
+        return DecodedResult::fail(Status::IntegrityError,
+                                   "control message claims more options than it can hold");
+    }
+    if (message.crc32 != crc32(message.options, message.optionCount * sizeof(ControlOption))) {
+        return DecodedResult::fail(Status::IntegrityError, "control message failed its checksum");
+    }
+
+    std::map<std::string, std::string> options;
+    for (std::uint16_t i = 0; i < message.optionCount; ++i) {
+        const ControlOption& option = message.options[i];
+        // A field with no terminator is not a long string, it is a message
+        // the sender could not have built: refused, not read past.
+        if (std::memchr(option.key, '\0', sizeof(option.key)) == nullptr ||
+            std::memchr(option.value, '\0', sizeof(option.value)) == nullptr) {
+            return DecodedResult::fail(Status::IntegrityError,
+                                       "control option is not terminated");
+        }
+        options[option.key] = option.value;
+    }
+    return DecodedResult::ok(std::move(options));
+}
+
+std::vector<unsigned char> encodeControlAck(std::uint16_t rejectedIndex,
+                                            const std::string& detail) {
+    ControlAck ack;
+    std::memset(&ack, 0, sizeof(ack));
+    ack.magic = kControlAckMagic;
+    ack.version = kControlVersion;
+    ack.rejectedIndex = rejectedIndex;
+    std::memcpy(ack.detail, detail.data(), std::min(detail.size(), sizeof(ack.detail) - 1));
+
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&ack);
+    return std::vector<unsigned char>(bytes, bytes + sizeof(ack));
+}
+
+Result<ControlAck> decodeControlAck(const void* data, std::size_t length) {
+    ControlAck ack;
+    if (data == nullptr || length < sizeof(ack)) {
+        return Result<ControlAck>::fail(Status::IntegrityError, "control answer is too short");
+    }
+    std::memcpy(&ack, data, sizeof(ack));
+    if (ack.magic != kControlAckMagic) {
+        return Result<ControlAck>::fail(Status::IntegrityError, "not a control answer");
+    }
+    if (ack.version != kControlVersion) {
+        return Result<ControlAck>::fail(Status::NotSupported,
+                                        "control protocol version " +
+                                            std::to_string(ack.version));
+    }
+    ack.detail[sizeof(ack.detail) - 1] = '\0';
+    return Result<ControlAck>::ok(ack);
+}
+
 }  // namespace amp
 
 namespace {
@@ -208,52 +324,6 @@ std::vector<std::string> splitOn(const std::string& text, char separator) {
     }
     parts.push_back(current);
     return parts;
-}
-
-// --------------------------------------------------------- control messages
-//
-// Serialising DeviceConfig::driverOptions into the fixed-layout message the
-// producer decodes. Shared by every driver that has a producer on the other
-// end of a link, which today is "rpmsg" and tomorrow is any firmware.
-
-Result<std::vector<unsigned char>> encodeControl(
-    const std::map<std::string, std::string>& options) {
-    using EncodedResult = Result<std::vector<unsigned char>>;
-
-    if (options.size() > amp::kControlMaxOptions) {
-        return EncodedResult::fail(
-            Status::InvalidArgument,
-            "the control message carries at most " +
-                std::to_string(amp::kControlMaxOptions) +
-                " options and " + std::to_string(options.size()) +
-                " were given. Truncating would send half a prescription");
-    }
-
-    amp::ControlMessage message;
-    std::memset(&message, 0, sizeof(message));
-    message.magic = amp::kControlMagic;
-    message.version = amp::kControlVersion;
-    message.optionCount = static_cast<std::uint16_t>(options.size());
-
-    std::size_t index = 0;
-    for (const std::pair<const std::string, std::string>& entry : options) {
-        if (entry.first.size() >= amp::kControlKeySize ||
-            entry.second.size() >= amp::kControlValueSize) {
-            return EncodedResult::fail(Status::InvalidArgument,
-                                       "control option '" + entry.first +
-                                           "' does not fit the wire format");
-        }
-        std::memcpy(message.options[index].key, entry.first.data(), entry.first.size());
-        std::memcpy(message.options[index].value, entry.second.data(),
-                    entry.second.size());
-        ++index;
-    }
-
-    message.crc32 = amp::crc32(message.options,
-                               options.size() * sizeof(amp::ControlOption));
-
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(&message);
-    return EncodedResult::ok(std::vector<unsigned char>(bytes, bytes + sizeof(message)));
 }
 
 /// A synthetic converter.
@@ -589,7 +659,7 @@ public:
         using DeviceResult = Result<std::unique_ptr<MedicalDevice>>;
 
         if (!config.driverOptions.empty()) {
-            Result<std::vector<unsigned char>> encoded = encodeControl(config.driverOptions);
+            Result<std::vector<unsigned char>> encoded = amp::encodeControl(config.driverOptions);
             if (!encoded) {
                 return DeviceResult::fail(encoded.status(), encoded.message());
             }
@@ -733,7 +803,7 @@ private:
             return Status::Ok;
         }
 
-        Result<std::vector<unsigned char>> encoded = encodeControl(config_.driverOptions);
+        Result<std::vector<unsigned char>> encoded = amp::encodeControl(config_.driverOptions);
         if (!encoded) {
             lastError_ = encoded.message();
             return encoded.status();

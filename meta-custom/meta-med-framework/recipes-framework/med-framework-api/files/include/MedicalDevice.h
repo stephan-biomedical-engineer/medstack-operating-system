@@ -258,6 +258,34 @@ using ControlOption = ::med_amp_control_option;
 using ControlMessage = ::med_amp_control_message;
 using ControlAck = ::med_amp_control_ack;
 
+/// The one codec of the control channel, as encodeFrame/decodeFrame are the one
+/// codec of the sample stream. A control message is spoken on two hops - from
+/// an application to a producer of samples, and from whoever asks something of
+/// an application to that application - and both ends of both hops call these,
+/// so that "a message is well formed" is decided by the same code wherever it
+/// is read.
+///
+/// encodeControl refuses rather than trims: more than kControlMaxOptions
+/// options, or a key or value that does not fit its field, is InvalidArgument.
+/// Half a request is a different request.
+Result<std::vector<unsigned char>> encodeControl(
+    const std::map<std::string, std::string>& options);
+
+/// IntegrityError on a short buffer, another magic, an option count beyond
+/// the format, a CRC that does not close or a field with no terminator;
+/// NotSupported on another version.
+Result<std::map<std::string, std::string>> decodeControl(const void* data, std::size_t length);
+
+/// `rejectedIndex` 0 is acceptance; otherwise it is 1 + the index of the
+/// first option refused, in the order the sender's map iterates (sorted by
+/// key). `detail` is cut to the field, never past it.
+std::vector<unsigned char> encodeControlAck(std::uint16_t rejectedIndex,
+                                            const std::string& detail);
+
+/// IntegrityError on a short buffer or another magic, NotSupported on another
+/// version. The detail is NUL terminated on return whatever was received.
+Result<ControlAck> decodeControlAck(const void* data, std::size_t length);
+
 /// Table-driven, and deliberately a second implementation of the
 /// med_amp_crc32 the firmware uses: tests/framework holds the two equal on the
 /// standard check vector and on frame-sized buffers.
