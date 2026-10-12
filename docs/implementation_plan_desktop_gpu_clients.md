@@ -1,6 +1,7 @@
 # Plano — clientes acelerados no ambiente de trabalho, na placa
 
-> **Estado**: Fases 0, 1, 2 e 4 cumpridas; Fase 3 parcial (§7). A HMI desenha pela GPU dentro do
+> **Estado**: Fases 0, 1, 2 e 4 cumpridas; Fase 3 parcial (§7); o erro do diário resolvido por
+> um quarto *patch* (§7.2, §7.3). A HMI desenha pela GPU dentro do
 > ambiente, na placa. O perfil da placa em `kas/` **não** foi mudado no repositório: a linha do
 > ensaio fica fora dos commits até a Fase 3 fechar.
 > **Origem**: `implementation_plan_desktop.md` §6.4 — na STM32MP257F-DK o compositor do ambiente
@@ -204,3 +205,89 @@ compilado no perfil QEMU e **ainda não rodado na placa**.
 
 Consequência para o que já foi medido: desde a primeira imagem do ambiente na placa, a barra
 consumia um núcleo inteiro. Os 17% da HMI foram medidos com esse núcleo ocupado.
+
+### 7.2 O erro `invalid state=1`: o que é (2026-10-12)
+
+Três rastros do mesmo programa, na mesma placa:
+
+| | sob o labwc, com o porte | sob o weston |
+|---|---|---|
+| `wl_buffer.release` recebidos | 45 em 48 quadros | **0 em 51** |
+| `invalid state=1` | 45 | **0** |
+| buffers em rodízio | 2 | 4 |
+| como o buffer volta | `wl_buffer.release` | `zwp_linux_buffer_release_v1.fenced_release` |
+
+Sob o weston o driver usa **sincronização explícita** (`zwp_linux_explicit_synchronization_v1`):
+entrega uma cerca com cada quadro (`set_acquire_fence`), pede um objeto de devolução
+(`get_release`) e recebe o buffer de volta por ele. O `wl_buffer.release` nunca é enviado. O
+wlroots 0.17 não tem esse protocolo; o driver cai no modo antigo, roda com dois buffers e retoma
+o buffer anterior por conta própria antes de ler a fila onde a devolução está - e reclama quando
+a lê.
+
+O que isto decide:
+
+- **O compositor não está errado.** A devolução sai ~3 ms depois do `commit`, antes da resposta
+  ao `sync`, na ordem do protocolo. A hipótese de que ela chegava tarde foi testada e caiu.
+- **A imagem não é afetada à taxa da HMI** (18 quadros/s): o buffer é reusado ~50 ms depois de o
+  compositor tê-lo soltado. Um cliente que desenhe tão depressa quanto o compositor compõe pode
+  reusar um buffer ainda em uso; nenhum foi testado.
+- **O diário é afetado**: ~18 linhas por segundo num diário persistente, que é o mesmo onde vive
+  a trilha de auditoria. Isto não pode ir para uma imagem sem ser tratado.
+
+Dois caminhos: filtrar a linha na entrada do diário (trata o diário, não a causa), ou
+implementar o protocolo de sincronização explícita no wlroots (trata a causa). **O operador
+escolheu o segundo** - §7.3.
+
+A comparação também devolveu à placa um slot com o compositor de tela única.
+
+### 7.3 P4 — a sincronização explícita (2026-10-12)
+
+**Estado**: cumprido na placa na primeira rodada, sem a injeção.
+
+| Critério | Medido na placa |
+|---|---|
+| `invalid state` | **0** no rastro (50 quadros) e **0** no diário da HMI desde o boot |
+| `wl_buffer.release` | **0** |
+| devolução pelo protocolo | 48 `immediate_release` em 50 quadros; nenhum `fenced_release` |
+| buffers em rodízio | **4** (eram 2) |
+| HMI | desenhando, vista pelo operador; `NRestarts=0` no compositor e na HMI; **17% de um núcleo** em 20 s |
+| espera da cerca | nenhuma linha "not finished" no diário do compositor |
+| regressão | `make qemu && make check` **35/35** (o QEMU não anuncia o protocolo) |
+
+O driver aceitou `immediate_release`, que sob o weston ele nunca recebe. **Não medido**: a
+injeção (`WLR_NO_EXPLICIT_SYNC=1` → o erro volta); quanto tempo o commit espera pela cerca; um
+cliente mais rápido que a HMI.
+
+O protocolo não foi escrito do zero: o repositório do wlroots tem uma implementação de Simon
+Ser, nunca incorporada (`4f5909ca6`, `785549bc3`, sobre a série 0.15), com a metade do
+protocolo completa. O que ela fazia com *render timelines*, que a 0.17 não tem, ficou assim:
+
+| O protocolo pede | Como ficou | O que isso custa |
+|---|---|---|
+| esperar a cerca do cliente antes de usar o quadro | `poll()` na cerca, no commit, limitado a 100 ms. O commit vem antes do próximo quadro da saída, então nada amostrou o buffer ainda | o laço do compositor para enquanto o cliente termina de desenhar. Um quadro que estourar o limite é mostrado como está, e o diário diz isso uma vez |
+| devolver o buffer por `zwp_linux_buffer_release_v1` | `immediate_release`, no instante em que o `wl_buffer.release` sairia e **no lugar dele** | sem cerca própria do compositor: um quadro já entregue à GPU ainda pode estar lendo o buffer antigo. É o mesmo risco que o `wl_buffer.release` já tinha |
+
+O global só é anunciado quando o *bind* da Fase 1 teve sucesso; num driver que nunca pediu
+aquilo, nada muda. `WLR_NO_EXPLICIT_SYNC=1` o retira, para a injeção.
+
+**Critérios**, na placa, pelo mesmo rastro da §7.2: `invalid state` = 0; `wl_buffer.release` = 0;
+`fenced_release` ou `immediate_release` por quadro; mais de dois buffers em rodízio; HMI
+desenhando, `NRestarts=0`, CPU ≤ 25%; nenhuma linha "not finished 100 ms" no diário do
+compositor.
+**Injeção**: `WLR_NO_EXPLICIT_SYNC=1` → o erro volta, um por quadro.
+**O que uma reprovação significa**: se o driver não aceitar `immediate_release` (sob o weston
+ele recebe `fenced_release`), falta a cerca do compositor, e isso é trabalho no renderizador,
+não neste arquivo. Se a espera da cerca travar o compositor, o limite e o lugar da espera são o
+que se revê.
+
+### 7.4 O fundo e os ícones (2026-10-12)
+
+Com a HMI minimizada o operador via uma tela preta com um ponteiro. A sessão passou a iniciar o
+gerenciador de arquivos também como área de trabalho (`pcmanfm-qt --desktop`, depois do
+barramento): fundo liso e um ícone `Records`, que abre a mesma janela do `Files`.
+
+Visto no QEMU (capturas `09`, `10`) e na placa (captura `11`, e o operador: "a HMI está normal,
+a barra apareceu e o ícone Records abre"). Para o ícone abrir sem a pergunta "executar?" a
+execução por duplo clique foi ligada no gerenciador - ele só confia num lançador por um
+armazenamento de metadados que esta imagem não tem. Vale também para qualquer executável achado
+ao navegar; o alcance é o do lançador da barra. Decisão mantida pelo operador.
