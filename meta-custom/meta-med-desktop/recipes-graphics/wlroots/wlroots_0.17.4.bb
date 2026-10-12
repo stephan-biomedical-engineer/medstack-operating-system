@@ -13,6 +13,7 @@ SRC_URI = " \
     file://0001-render-egl-empty-device-extensions-are-not-fatal.patch \
     file://0002-render-bind-the-wayland-display-to-egl.patch \
     file://0003-render-accept-and-draw-buffers-submitted-through-egl.patch \
+    file://0004-linux-explicit-synchronization-v1-for-egl-clients.patch \
 "
 # tag 0.17.4
 SRCREV = "a2d2c38a3127745629293066beeed0a649dff8de"

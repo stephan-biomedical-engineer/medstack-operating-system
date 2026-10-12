@@ -1,0 +1,574 @@
+From: MedPlatform <noreply@medplatform.invalid>
+Subject: [PATCH] linux-explicit-synchronization-v1: enough of it for a vendor EGL's clients
+
+With the display bound, a client of the vendor's EGL draws - and logs
+"__buffer_handle_release: ERROR: invalid state=1" at every frame. Under a
+compositor that offers zwp_linux_explicit_synchronization_v1 the same
+client hands over a fence with each frame, cycles four buffers and takes
+them back through zwp_linux_buffer_release_v1; wl_buffer.release is never
+sent to it. Without the protocol it falls back to two buffers, takes the
+older one back by itself, and objects to the release when it reads it.
+
+The protocol half is Simon Ser's unmerged implementation (4f5909ca6,
+785549bc3). What that one did with render timelines, which 0.17 does not
+have, is done here in the plainest way that is correct:
+
+- the acquire fence is waited for at commit, bounded at 100 ms, before
+  anything can sample the buffer. A frame not ready by then is shown as it
+  is and the log says so once;
+- the release is "immediate_release", sent when wl_buffer.release would
+  have been and instead of it. A buffer type asks
+  linux_explicit_synchronization_v1_release_buffer() first; the EGL client
+  buffers and linux-dmabuf buffers do.
+
+Advertised only when the display was bound to EGL, so nothing changes for
+a compositor on a driver that never asked for that.
+WLR_NO_EXPLICIT_SYNC=1 leaves the global out.
+
+Not done: a release fence of the compositor's own. The old buffer is no
+longer sampled once the new one is committed, but a frame already handed
+to the GPU may still be reading it.
+
+Upstream-Status: Inappropriate [upstream chose linux-drm-syncobj-v1 instead]
+---
+diff --git a/include/types/wlr_linux_explicit_synchronization_v1.h b/include/types/wlr_linux_explicit_synchronization_v1.h
+new file mode 100644
+index 000000000..96fdfc9c6
+--- /dev/null
++++ b/include/types/wlr_linux_explicit_synchronization_v1.h
+@@ -0,0 +1,23 @@
++#ifndef TYPES_WLR_LINUX_EXPLICIT_SYNCHRONIZATION_V1_H
++#define TYPES_WLR_LINUX_EXPLICIT_SYNCHRONIZATION_V1_H
++
++#include <stdbool.h>
++#include <wayland-server-core.h>
++
++struct wlr_buffer;
++
++/**
++ * Advertises zwp_linux_explicit_synchronization_v1. Returns false when
++ * WLR_NO_EXPLICIT_SYNC is set or the global could not be created.
++ */
++bool linux_explicit_synchronization_v1_create(struct wl_display *display);
++
++/**
++ * To be called by a buffer type when its buffer is released, before it sends
++ * wl_buffer.release. Returns true when a client asked to be told through
++ * zwp_linux_buffer_release_v1 instead - it has been, and wl_buffer.release
++ * must not be sent for this cycle.
++ */
++bool linux_explicit_synchronization_v1_release_buffer(struct wlr_buffer *buffer);
++
++#endif
+diff --git a/protocol/meson.build b/protocol/meson.build
+index af0ae03f6..6331ebef0 100644
+--- a/protocol/meson.build
++++ b/protocol/meson.build
+@@ -35,6 +35,7 @@ protocols = {
+ 	'idle-inhibit-unstable-v1': wl_protocol_dir / 'unstable/idle-inhibit/idle-inhibit-unstable-v1.xml',
+ 	'keyboard-shortcuts-inhibit-unstable-v1': wl_protocol_dir / 'unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml',
+ 	'linux-dmabuf-unstable-v1': wl_protocol_dir / 'unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml',
++	'linux-explicit-synchronization-unstable-v1': wl_protocol_dir / 'unstable/linux-explicit-synchronization/linux-explicit-synchronization-unstable-v1.xml',
+ 	'pointer-constraints-unstable-v1': wl_protocol_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
+ 	'pointer-gestures-unstable-v1': wl_protocol_dir / 'unstable/pointer-gestures/pointer-gestures-unstable-v1.xml',
+ 	'primary-selection-unstable-v1': wl_protocol_dir / 'unstable/primary-selection/primary-selection-unstable-v1.xml',
+diff --git a/render/egl.c b/render/egl.c
+index 8db00e667..5e23731e7 100644
+--- a/render/egl.c
++++ b/render/egl.c
+@@ -13,6 +13,7 @@
+ #include <wlr/util/region.h>
+ #include <xf86drm.h>
+ #include "render/egl.h"
++#include "types/wlr_linux_explicit_synchronization_v1.h"
+ #include "util/env.h"
+ 
+ static enum wlr_log_importance egl_log_importance_to_wlr(EGLint type) {
+@@ -671,6 +672,11 @@ static void egl_wl_buffer_handle_release(struct wl_listener *listener,
+ 		void *data) {
+ 	struct wlr_egl_wl_buffer *buffer =
+ 		wl_container_of(listener, buffer, release);
++	// A client that asked for the release through an object of the
++	// explicit synchronization protocol gets it there and nowhere else.
++	if (linux_explicit_synchronization_v1_release_buffer(&buffer->base)) {
++		return;
++	}
+ 	if (buffer->resource != NULL) {
+ 		wl_buffer_send_release(buffer->resource);
+ 	}
+diff --git a/render/wlr_renderer.c b/render/wlr_renderer.c
+index 0beb864a1..708df24a1 100644
+--- a/render/wlr_renderer.c
++++ b/render/wlr_renderer.c
+@@ -27,6 +27,7 @@
+ #endif // WLR_HAS_VULKAN_RENDERER
+ 
+ #include "backend/backend.h"
++#include "types/wlr_linux_explicit_synchronization_v1.h"
+ #if WLR_HAS_GLES2_RENDERER
+ #include "render/egl.h"
+ #endif
+@@ -242,6 +243,14 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
+ 	}
+ #endif
+ 
++	// The same drivers' clients hand over each frame with a fence and take
++	// its buffer back through the explicit synchronization protocol. Left
++	// without it they fall back to wl_buffer.release, on two buffers, and
++	// log an error of their own at every frame.
++	if (egl_bound) {
++		linux_explicit_synchronization_v1_create(wl_display);
++	}
++
+ 	if (wlr_renderer_get_dmabuf_texture_formats(r) != NULL &&
+ 			wlr_renderer_get_drm_fd(r) >= 0) {
+ 		if (!egl_bound && wlr_drm_create(wl_display, r) == NULL) {
+diff --git a/types/meson.build b/types/meson.build
+index ba41e3e27..97904162b 100644
+--- a/types/meson.build
++++ b/types/meson.build
+@@ -55,6 +55,7 @@ wlr_files += files(
+ 	'wlr_keyboard_shortcuts_inhibit_v1.c',
+ 	'wlr_layer_shell_v1.c',
+ 	'wlr_linux_dmabuf_v1.c',
++	'wlr_linux_explicit_synchronization_v1.c',
+ 	'wlr_matrix.c',
+ 	'wlr_output_layer.c',
+ 	'wlr_output_layout.c',
+diff --git a/types/wlr_linux_dmabuf_v1.c b/types/wlr_linux_dmabuf_v1.c
+index d018d7738..84255f5ad 100644
+--- a/types/wlr_linux_dmabuf_v1.c
++++ b/types/wlr_linux_dmabuf_v1.c
+@@ -13,6 +13,7 @@
+ #include <wlr/types/wlr_output_layer.h>
+ #include <wlr/util/log.h>
+ #include <xf86drm.h>
++#include "types/wlr_linux_explicit_synchronization_v1.h"
+ #include "linux-dmabuf-unstable-v1-protocol.h"
+ #include "render/drm_format_set.h"
+ #include "util/shm.h"
+@@ -122,6 +123,9 @@ static const struct wlr_buffer_impl buffer_impl = {
+ static void buffer_handle_release(struct wl_listener *listener, void *data) {
+ 	struct wlr_dmabuf_v1_buffer *buffer =
+ 		wl_container_of(listener, buffer, release);
++	if (linux_explicit_synchronization_v1_release_buffer(&buffer->base)) {
++		return;
++	}
+ 	if (buffer->resource != NULL) {
+ 		wl_buffer_send_release(buffer->resource);
+ 	}
+diff --git a/types/wlr_linux_explicit_synchronization_v1.c b/types/wlr_linux_explicit_synchronization_v1.c
+new file mode 100644
+index 000000000..56b285d63
+--- /dev/null
++++ b/types/wlr_linux_explicit_synchronization_v1.c
+@@ -0,0 +1,409 @@
++/*
++ * zwp_linux_explicit_synchronization_v1, as far as a client of a vendor EGL
++ * needs it: the client hands over a fence with each frame and asks to be told
++ * of the buffer's release through an object of this protocol instead of
++ * through wl_buffer.release.
++ *
++ * The protocol half is taken from an implementation by Simon Ser that was
++ * never merged (wlroots 4f5909ca6, 785549bc3). What that one did with render
++ * timelines, which this version of the library does not have, is done here in
++ * the plainest way that is correct:
++ *
++ *  - the acquire fence is waited for at commit, with a bound, before anything
++ *    can sample the buffer;
++ *  - the release is "immediate": sent at the moment wl_buffer.release would
++ *    have been, with no fence of the compositor's own.
++ */
++#include <assert.h>
++#include <poll.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <wlr/interfaces/wlr_buffer.h>
++#include <wlr/types/wlr_buffer.h>
++#include <wlr/types/wlr_compositor.h>
++#include <wlr/util/addon.h>
++#include <wlr/util/log.h>
++#include "linux-explicit-synchronization-unstable-v1-protocol.h"
++#include "types/wlr_linux_explicit_synchronization_v1.h"
++#include "util/env.h"
++
++#define LINUX_EXPLICIT_SYNCHRONIZATION_V1_VERSION 2
++
++// How long a commit may wait for the client's rendering to finish. A frame
++// that is not ready by then is shown as it is, and said so once.
++#define ACQUIRE_FENCE_TIMEOUT_MS 100
++
++struct buffer_release {
++	struct wl_resource *resource;
++	struct wl_list link; // buffer_releases.releases, or empty
++};
++
++// What a buffer owes: one release object per commit it was attached by
++struct buffer_releases {
++	struct wlr_addon addon;
++	struct wl_list releases; // buffer_release.link
++};
++
++struct surface_sync_state {
++	int acquire_fence_fd;
++	struct buffer_release *buffer_release;
++};
++
++struct surface_sync {
++	struct wl_resource *resource;
++	struct wlr_surface *surface;
++	struct wlr_addon addon;
++	struct surface_sync_state pending;
++	struct wl_listener surface_commit;
++};
++
++struct explicit_sync {
++	struct wl_global *global;
++	struct wl_listener display_destroy;
++};
++
++static const struct zwp_linux_explicit_synchronization_v1_interface
++	explicit_sync_impl;
++static const struct zwp_linux_surface_synchronization_v1_interface
++	surface_sync_impl;
++
++// Returns NULL if the surface sync is inert
++static struct surface_sync *surface_sync_from_resource(
++		struct wl_resource *resource) {
++	assert(wl_resource_instance_of(resource,
++		&zwp_linux_surface_synchronization_v1_interface, &surface_sync_impl));
++	return wl_resource_get_user_data(resource);
++}
++
++static void buffer_release_send(struct buffer_release *release) {
++	wl_list_remove(&release->link);
++	wl_list_init(&release->link);
++	zwp_linux_buffer_release_v1_send_immediate_release(release->resource);
++	wl_resource_destroy(release->resource);
++}
++
++static void buffer_release_handle_resource_destroy(
++		struct wl_resource *resource) {
++	struct buffer_release *release = wl_resource_get_user_data(resource);
++	wl_list_remove(&release->link);
++	free(release);
++}
++
++static void buffer_releases_handle_buffer_destroy(struct wlr_addon *addon) {
++	struct buffer_releases *releases =
++		wl_container_of(addon, releases, addon);
++	struct buffer_release *release, *tmp;
++	wl_list_for_each_safe(release, tmp, &releases->releases, link) {
++		buffer_release_send(release);
++	}
++	wlr_addon_finish(&releases->addon);
++	free(releases);
++}
++
++static const struct wlr_addon_interface buffer_releases_addon_impl = {
++	.name = "zwp_linux_buffer_release_v1",
++	.destroy = buffer_releases_handle_buffer_destroy,
++};
++
++static struct buffer_releases *buffer_releases_get(struct wlr_buffer *buffer,
++		bool create) {
++	struct wlr_addon *addon = wlr_addon_find(&buffer->addons,
++		&buffer_releases_addon_impl, &buffer_releases_addon_impl);
++	if (addon != NULL) {
++		struct buffer_releases *releases =
++			wl_container_of(addon, releases, addon);
++		return releases;
++	}
++	if (!create) {
++		return NULL;
++	}
++	struct buffer_releases *releases = calloc(1, sizeof(*releases));
++	if (releases == NULL) {
++		return NULL;
++	}
++	wl_list_init(&releases->releases);
++	wlr_addon_init(&releases->addon, &buffer->addons,
++		&buffer_releases_addon_impl, &buffer_releases_addon_impl);
++	return releases;
++}
++
++bool linux_explicit_synchronization_v1_release_buffer(
++		struct wlr_buffer *buffer) {
++	struct buffer_releases *releases = buffer_releases_get(buffer, false);
++	if (releases == NULL || wl_list_empty(&releases->releases)) {
++		return false;
++	}
++	struct buffer_release *release, *tmp;
++	wl_list_for_each_safe(release, tmp, &releases->releases, link) {
++		buffer_release_send(release);
++	}
++	return true;
++}
++
++static void surface_sync_handle_destroy(struct wl_client *client,
++		struct wl_resource *resource) {
++	wl_resource_destroy(resource);
++}
++
++static void surface_sync_handle_set_acquire_fence(struct wl_client *client,
++		struct wl_resource *resource, int fence_fd) {
++	struct surface_sync *surface_sync = surface_sync_from_resource(resource);
++	if (surface_sync == NULL) {
++		close(fence_fd);
++		wl_resource_post_error(resource,
++			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_NO_SURFACE,
++			"the surface has been destroyed");
++		return;
++	}
++
++	if (surface_sync->pending.acquire_fence_fd >= 0) {
++		close(fence_fd);
++		wl_resource_post_error(resource,
++			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_DUPLICATE_FENCE,
++			"a fence FD was already set for this commit");
++		return;
++	}
++
++	surface_sync->pending.acquire_fence_fd = fence_fd;
++}
++
++static void surface_sync_handle_get_release(struct wl_client *client,
++		struct wl_resource *resource, uint32_t id) {
++	struct surface_sync *surface_sync = surface_sync_from_resource(resource);
++	if (surface_sync == NULL) {
++		wl_resource_post_error(resource,
++			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_NO_SURFACE,
++			"the surface has been destroyed");
++		return;
++	}
++
++	if (surface_sync->pending.buffer_release != NULL) {
++		wl_resource_post_error(resource,
++			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_DUPLICATE_RELEASE,
++			"a buffer release has already been requested for this commit");
++		return;
++	}
++
++	struct buffer_release *release = calloc(1, sizeof(*release));
++	if (release == NULL) {
++		wl_resource_post_no_memory(resource);
++		return;
++	}
++
++	release->resource = wl_resource_create(client,
++		&zwp_linux_buffer_release_v1_interface,
++		wl_resource_get_version(resource), id);
++	if (release->resource == NULL) {
++		wl_resource_post_no_memory(resource);
++		free(release);
++		return;
++	}
++	wl_list_init(&release->link);
++	wl_resource_set_implementation(release->resource, NULL, release,
++		buffer_release_handle_resource_destroy);
++
++	surface_sync->pending.buffer_release = release;
++}
++
++static const struct zwp_linux_surface_synchronization_v1_interface
++		surface_sync_impl = {
++	.destroy = surface_sync_handle_destroy,
++	.set_acquire_fence = surface_sync_handle_set_acquire_fence,
++	.get_release = surface_sync_handle_get_release,
++};
++
++static void surface_sync_state_init(struct surface_sync_state *state) {
++	*state = (struct surface_sync_state){ .acquire_fence_fd = -1 };
++}
++
++static void surface_sync_state_finish(struct surface_sync_state *state) {
++	if (state->acquire_fence_fd >= 0) {
++		close(state->acquire_fence_fd);
++	}
++	if (state->buffer_release != NULL) {
++		buffer_release_send(state->buffer_release);
++	}
++	surface_sync_state_init(state);
++}
++
++static void surface_sync_destroy(struct surface_sync *surface_sync) {
++	if (surface_sync == NULL) {
++		return;
++	}
++	wl_list_remove(&surface_sync->surface_commit.link);
++	wlr_addon_finish(&surface_sync->addon);
++	wl_resource_set_user_data(surface_sync->resource, NULL);
++	surface_sync_state_finish(&surface_sync->pending);
++	free(surface_sync);
++}
++
++static void wait_for_acquire_fence(int fence_fd) {
++	struct pollfd pollfd = { .fd = fence_fd, .events = POLLIN };
++	int ret = poll(&pollfd, 1, ACQUIRE_FENCE_TIMEOUT_MS);
++	if (ret == 0) {
++		static bool said = false;
++		if (!said) {
++			said = true;
++			wlr_log(WLR_ERROR, "A client's frame was not finished %d ms after "
++				"it was committed; it is shown as it is (said once)",
++				ACQUIRE_FENCE_TIMEOUT_MS);
++		}
++	} else if (ret < 0) {
++		wlr_log_errno(WLR_ERROR, "poll() on an acquire fence failed");
++	}
++}
++
++static void surface_sync_handle_surface_commit(struct wl_listener *listener,
++		void *data) {
++	struct surface_sync *surface_sync =
++		wl_container_of(listener, surface_sync, surface_commit);
++	struct surface_sync_state *pending = &surface_sync->pending;
++
++	if (pending->acquire_fence_fd < 0 && pending->buffer_release == NULL) {
++		return;
++	}
++
++	struct wlr_client_buffer *client_buffer = surface_sync->surface->buffer;
++	if (client_buffer == NULL) {
++		wl_resource_post_error(surface_sync->resource,
++			ZWP_LINUX_SURFACE_SYNCHRONIZATION_V1_ERROR_NO_BUFFER,
++			"explicit synchronization requested but no buffer attached");
++		return;
++	}
++
++	// Nothing has sampled this buffer yet: the commit signal comes before
++	// the next output frame. Wait here, bounded, for the client's rendering.
++	if (pending->acquire_fence_fd >= 0) {
++		wait_for_acquire_fence(pending->acquire_fence_fd);
++		close(pending->acquire_fence_fd);
++		pending->acquire_fence_fd = -1;
++	}
++
++	if (pending->buffer_release != NULL) {
++		struct buffer_release *release = pending->buffer_release;
++		pending->buffer_release = NULL;
++
++		// The release belongs to the buffer this commit attached, and is
++		// due when that buffer is. One whose source is already gone has
++		// nothing left to wait for.
++		struct buffer_releases *releases = client_buffer->source != NULL ?
++			buffer_releases_get(client_buffer->source, true) : NULL;
++		if (releases != NULL) {
++			wl_list_insert(releases->releases.prev, &release->link);
++		} else {
++			buffer_release_send(release);
++		}
++	}
++}
++
++static void surface_sync_handle_resource_destroy(struct wl_resource *resource) {
++	surface_sync_destroy(surface_sync_from_resource(resource));
++}
++
++static void surface_sync_handle_surface_destroy(struct wlr_addon *addon) {
++	struct surface_sync *surface_sync =
++		wl_container_of(addon, surface_sync, addon);
++	surface_sync_destroy(surface_sync);
++}
++
++static const struct wlr_addon_interface surface_addon_impl = {
++	.name = "zwp_linux_surface_synchronization_v1",
++	.destroy = surface_sync_handle_surface_destroy,
++};
++
++static void explicit_sync_handle_destroy(struct wl_client *client,
++		struct wl_resource *resource) {
++	wl_resource_destroy(resource);
++}
++
++static void explicit_sync_handle_get_synchronization(struct wl_client *client,
++		struct wl_resource *resource, uint32_t id,
++		struct wl_resource *surface_resource) {
++	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
++
++	if (wlr_addon_find(&surface->addons, &surface_addon_impl,
++			&surface_addon_impl) != NULL) {
++		wl_resource_post_error(resource,
++			ZWP_LINUX_EXPLICIT_SYNCHRONIZATION_V1_ERROR_SYNCHRONIZATION_EXISTS,
++			"zwp_linux_surface_synchronization_v1 already created for this surface");
++		return;
++	}
++
++	struct surface_sync *surface_sync = calloc(1, sizeof(*surface_sync));
++	if (surface_sync == NULL) {
++		wl_resource_post_no_memory(resource);
++		return;
++	}
++
++	surface_sync->resource = wl_resource_create(client,
++		&zwp_linux_surface_synchronization_v1_interface,
++		wl_resource_get_version(resource), id);
++	if (surface_sync->resource == NULL) {
++		wl_resource_post_no_memory(resource);
++		free(surface_sync);
++		return;
++	}
++	wl_resource_set_implementation(surface_sync->resource,
++		&surface_sync_impl, surface_sync, surface_sync_handle_resource_destroy);
++
++	surface_sync->surface = surface;
++	surface_sync_state_init(&surface_sync->pending);
++
++	surface_sync->surface_commit.notify = surface_sync_handle_surface_commit;
++	wl_signal_add(&surface->events.commit, &surface_sync->surface_commit);
++
++	wlr_addon_init(&surface_sync->addon, &surface->addons,
++		&surface_addon_impl, &surface_addon_impl);
++}
++
++static const struct zwp_linux_explicit_synchronization_v1_interface
++		explicit_sync_impl = {
++	.destroy = explicit_sync_handle_destroy,
++	.get_synchronization = explicit_sync_handle_get_synchronization,
++};
++
++static void explicit_sync_bind(struct wl_client *client, void *data,
++		uint32_t version, uint32_t id) {
++	struct wl_resource *resource = wl_resource_create(client,
++		&zwp_linux_explicit_synchronization_v1_interface, version, id);
++	if (resource == NULL) {
++		wl_client_post_no_memory(client);
++		return;
++	}
++	wl_resource_set_implementation(resource, &explicit_sync_impl, NULL, NULL);
++}
++
++static void handle_display_destroy(struct wl_listener *listener, void *data) {
++	struct explicit_sync *explicit_sync =
++		wl_container_of(listener, explicit_sync, display_destroy);
++	wl_list_remove(&explicit_sync->display_destroy.link);
++	wl_global_destroy(explicit_sync->global);
++	free(explicit_sync);
++}
++
++bool linux_explicit_synchronization_v1_create(struct wl_display *display) {
++	if (env_parse_bool("WLR_NO_EXPLICIT_SYNC")) {
++		wlr_log(WLR_INFO, "Not advertising explicit synchronization, as asked");
++		return false;
++	}
++
++	struct explicit_sync *explicit_sync = calloc(1, sizeof(*explicit_sync));
++	if (explicit_sync == NULL) {
++		return false;
++	}
++
++	explicit_sync->global = wl_global_create(display,
++		&zwp_linux_explicit_synchronization_v1_interface,
++		LINUX_EXPLICIT_SYNCHRONIZATION_V1_VERSION, explicit_sync,
++		explicit_sync_bind);
++	if (explicit_sync->global == NULL) {
++		free(explicit_sync);
++		return false;
++	}
++
++	explicit_sync->display_destroy.notify = handle_display_destroy;
++	wl_display_add_destroy_listener(display, &explicit_sync->display_destroy);
++
++	return true;
++}
