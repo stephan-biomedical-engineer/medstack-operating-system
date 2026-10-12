@@ -1,0 +1,42 @@
+From: MedPlatform <noreply@medplatform.invalid>
+Subject: [PATCH] trigger: a function handed to g_main_context_invoke returns
+
+trigger_emit_in_main_context() was declared void and cast to GSourceFunc.
+When the caller owns the main context, g_main_context_invoke() runs
+
+    while (function (data));
+
+so the loop ends on whatever the return register happens to hold. With no
+trigger registered at all, an x86-64 build leaves zero there and returns;
+an aarch64 build leaves the function's own argument, and the first
+"window_focus" spins for ever at a full core, before the bar has created
+its surface. The process stays alive and reports nothing.
+
+Seen on an STM32MP257F-DK, 2026-10-12: 40 of 40 samples of the main thread
+in trigger.c:86-92 and gmain.c:6533.
+
+Upstream rewrote this function since and it returns gboolean there.
+
+Upstream-Status: Backport [the defect is gone upstream; this is the minimal fix for v1.0_beta16]
+---
+diff --git a/src/trigger.c b/src/trigger.c
+index c59d441..861a294 100644
+--- a/src/trigger.c
++++ b/src/trigger.c
+@@ -82,13 +82,15 @@ void trigger_remove ( gchar *name, GSourceFunc func, void *data )
+     }
+ }
+ 
+-void trigger_emit_in_main_context ( const gchar *name )
++static gboolean trigger_emit_in_main_context ( const gchar *name )
+ {
+   GList *iter;
+ 
+   if(trigger_list)
+     for(iter=g_hash_table_lookup(trigger_list, name); iter; iter=iter->next)
+       TRIGGER(iter->data)->func(TRIGGER(iter->data)->data);
++
++  return G_SOURCE_REMOVE;
+ }
+ 
+ void trigger_emit ( gchar *name )
