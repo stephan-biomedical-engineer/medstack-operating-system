@@ -1,0 +1,36 @@
+From: MedPlatform <noreply@medplatform.invalid>
+Subject: [PATCH] render/egl: an empty device extension string is not fatal
+
+A vendor EGL may advertise EGL_EXT_device_query and return NULL from
+eglQueryDeviceStringEXT(EGL_EXTENSIONS). The renderer then refused the
+display, and the compositor fell back to drawing in software on a board
+whose GPU the display had already been created on.
+
+Nothing read from that string is required: it says whether the device is a
+software one and names its DRM node, and on the GBM platform the node comes
+from the GBM device. Treat NULL as "no device extensions".
+
+Seen on an STM32MP257F-DK with the vendor's GPU driver, 2026-10-12:
+"eglQueryDeviceStringEXT(EGL_EXTENSIONS) failed" at render/egl.c:312.
+
+Upstream-Status: Pending
+---
+--- a/render/egl.c	2026-10-12 02:25:16.633317875 -0300
++++ b/render/egl.c	2026-10-12 02:25:16.665319041 -0300
+@@ -309,8 +309,14 @@
+ 		device_exts_str =
+ 			egl->procs.eglQueryDeviceStringEXT(egl->device, EGL_EXTENSIONS);
+ 		if (device_exts_str == NULL) {
+-			wlr_log(WLR_ERROR, "eglQueryDeviceStringEXT(EGL_EXTENSIONS) failed");
+-			return false;
++			/* A driver that offers the query and answers it with nothing.
++			 * Everything asked of the device below is optional - whether
++			 * it is a software one, and its DRM node, which the GBM
++			 * platform already supplies - so it is read as "no device
++			 * extensions" and not as a failure of the display. */
++			wlr_log(WLR_INFO, "eglQueryDeviceStringEXT(EGL_EXTENSIONS) "
++				"returned nothing; continuing without device extensions");
++			device_exts_str = "";
+ 		}
+ 
+ 		if (check_egl_ext(device_exts_str, "EGL_MESA_device_software")) {

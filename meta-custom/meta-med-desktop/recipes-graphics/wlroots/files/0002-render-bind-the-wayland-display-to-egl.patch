@@ -1,0 +1,157 @@
+From: MedPlatform <noreply@medplatform.invalid>
+Subject: [PATCH] render: hand the Wayland display to EGL when it asks for it
+
+Some vendor EGL implementations have their clients submit buffers through a
+protocol of the driver's own, and the driver advertises that protocol on the
+compositor's display only once eglBindWaylandDisplayWL() has been called.
+wlroots stopped calling it in 0.15. Without the global, such a client uses a
+proxy it never received and dies in libwayland-client right after
+wl_compositor.create_surface.
+
+Call it from wlr_renderer_init_wl_display() for the GLES2 renderer when
+EGL_WL_bind_wayland_display is present. When it succeeds the driver brings
+its own wl_drm, so ours is not created beside it.
+WLR_EGL_NO_BIND_WL_DISPLAY=1 restores the previous behaviour.
+
+This only makes the protocol appear. Buffers submitted through it are not
+understood until the following patches.
+
+Seen on an STM32MP257F-DK with the vendor's GPU driver, 2026-10-12: weston
+on that board advertises wl_viv, this library did not, and a Qt Quick
+client crashed in a loop.
+
+Upstream-Status: Inappropriate [upstream removed this path on purpose]
+---
+diff --git a/include/render/egl.h b/include/render/egl.h
+index e8b85964a..0461d300b 100644
+--- a/include/render/egl.h
++++ b/include/render/egl.h
+@@ -1,6 +1,7 @@
+ #ifndef RENDER_EGL_H
+ #define RENDER_EGL_H
+ 
++#include <wayland-server-core.h>
+ #include <wlr/render/egl.h>
+ 
+ struct wlr_egl {
+@@ -16,6 +17,7 @@ struct wlr_egl {
+ 		bool EXT_image_dma_buf_import_modifiers;
+ 		bool IMG_context_priority;
+ 		bool EXT_create_context_robustness;
++		bool WL_bind_wayland_display;
+ 
+ 		// Device extensions
+ 		bool EXT_device_drm;
+@@ -38,8 +40,17 @@ struct wlr_egl {
+ 		PFNEGLQUERYDISPLAYATTRIBEXTPROC eglQueryDisplayAttribEXT;
+ 		PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT;
+ 		PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT;
++		// EGL_WL_bind_wayland_display. Spelled out: the typedef's name is
++		// not the same in every vendor's eglext.h.
++		EGLBoolean (*eglBindWaylandDisplayWL)(EGLDisplay dpy,
++			struct wl_display *display);
++		EGLBoolean (*eglQueryWaylandBufferWL)(EGLDisplay dpy,
++			struct wl_resource *buffer, EGLint attribute, EGLint *value);
+ 	} procs;
+ 
++	// Set once the EGL implementation has been handed the display
++	struct wl_display *wl_display;
++
+ 	bool has_modifiers;
+ 	struct wlr_drm_format_set dmabuf_texture_formats;
+ 	struct wlr_drm_format_set dmabuf_render_formats;
+@@ -59,6 +70,14 @@ struct wlr_egl_context {
+  */
+ struct wlr_egl *wlr_egl_create_with_drm_fd(int drm_fd);
+ 
++/**
++ * Hands the Wayland display to the EGL implementation, which is how a driver
++ * whose clients submit buffers through a protocol of its own gets to
++ * advertise that protocol. Returns false when the implementation has no such
++ * notion, when it refuses, or when WLR_EGL_NO_BIND_WL_DISPLAY is set.
++ */
++bool wlr_egl_bind_wl_display(struct wlr_egl *egl, struct wl_display *display);
++
+ /**
+  * Frees all related EGL resources, makes the context not-current and
+  * unbinds a bound wayland display.
+diff --git a/render/egl.c b/render/egl.c
+index ec6d404ef..1def89042 100644
+--- a/render/egl.c
++++ b/render/egl.c
+@@ -282,6 +282,14 @@ static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display) {
+ 		load_egl_proc(&egl->procs.eglDestroyImageKHR, "eglDestroyImageKHR");
+ 	}
+ 
++	if (check_egl_ext(display_exts_str, "EGL_WL_bind_wayland_display")) {
++		egl->exts.WL_bind_wayland_display = true;
++		load_egl_proc(&egl->procs.eglBindWaylandDisplayWL,
++			"eglBindWaylandDisplayWL");
++		load_egl_proc(&egl->procs.eglQueryWaylandBufferWL,
++			"eglQueryWaylandBufferWL");
++	}
++
+ 	egl->exts.EXT_image_dma_buf_import =
+ 		check_egl_ext(display_exts_str, "EGL_EXT_image_dma_buf_import");
+ 	if (check_egl_ext(display_exts_str,
+@@ -612,6 +620,24 @@ struct wlr_egl *wlr_egl_create_with_context(EGLDisplay display,
+ 	return egl;
+ }
+ 
++bool wlr_egl_bind_wl_display(struct wlr_egl *egl, struct wl_display *display) {
++	if (!egl->exts.WL_bind_wayland_display) {
++		wlr_log(WLR_INFO, "EGL_WL_bind_wayland_display not supported");
++		return false;
++	}
++	if (env_parse_bool("WLR_EGL_NO_BIND_WL_DISPLAY")) {
++		wlr_log(WLR_INFO, "Not binding the Wayland display to EGL, as asked");
++		return false;
++	}
++	if (!egl->procs.eglBindWaylandDisplayWL(egl->display, display)) {
++		wlr_log(WLR_ERROR, "eglBindWaylandDisplayWL failed");
++		return false;
++	}
++	egl->wl_display = display;
++	wlr_log(WLR_INFO, "Wayland display bound to EGL");
++	return true;
++}
++
+ void wlr_egl_destroy(struct wlr_egl *egl) {
+ 	if (egl == NULL) {
+ 		return;
+diff --git a/render/wlr_renderer.c b/render/wlr_renderer.c
+index 2bdcff5a8..0beb864a1 100644
+--- a/render/wlr_renderer.c
++++ b/render/wlr_renderer.c
+@@ -27,6 +27,9 @@
+ #endif // WLR_HAS_VULKAN_RENDERER
+ 
+ #include "backend/backend.h"
++#if WLR_HAS_GLES2_RENDERER
++#include "render/egl.h"
++#endif
+ #include "render/pass.h"
+ #include "render/pixel_format.h"
+ #include "render/wlr_renderer.h"
+@@ -228,9 +231,20 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
+ 		return false;
+ 	}
+ 
++	// A driver that is handed the display advertises its own buffer
++	// protocols on it, wl_drm among them. Two globals of that name would
++	// leave the choice to the client, so ours is not created beside it.
++	bool egl_bound = false;
++#if WLR_HAS_GLES2_RENDERER
++	if (wlr_renderer_is_gles2(r)) {
++		egl_bound = wlr_egl_bind_wl_display(
++			wlr_gles2_renderer_get_egl(r), wl_display);
++	}
++#endif
++
+ 	if (wlr_renderer_get_dmabuf_texture_formats(r) != NULL &&
+ 			wlr_renderer_get_drm_fd(r) >= 0) {
+-		if (wlr_drm_create(wl_display, r) == NULL) {
++		if (!egl_bound && wlr_drm_create(wl_display, r) == NULL) {
+ 			return false;
+ 		}
+ 

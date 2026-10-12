@@ -8,7 +8,12 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=89e064f90bcb87796ca335cbd2ce4179"
 
 # 0.17 and not 0.18: 0.18 needs wayland-protocols 1.35 and this series has 1.33.
-SRC_URI = "git://gitlab.freedesktop.org/wlroots/wlroots.git;protocol=https;nobranch=1"
+SRC_URI = " \
+    git://gitlab.freedesktop.org/wlroots/wlroots.git;protocol=https;nobranch=1 \
+    file://0001-render-egl-empty-device-extensions-are-not-fatal.patch \
+    file://0002-render-bind-the-wayland-display-to-egl.patch \
+    file://0003-render-accept-and-draw-buffers-submitted-through-egl.patch \
+"
 # tag 0.17.4
 SRCREV = "a2d2c38a3127745629293066beeed0a649dff8de"
 
