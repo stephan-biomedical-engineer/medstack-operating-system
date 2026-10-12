@@ -63,6 +63,11 @@ prepare() {  # $1 directory, $2 montage
             -e "s/^record.montage = bipolar/record.montage = $2/" \
             /etc/medplatform/eeg.conf > "$BENCH/$1/eeg.conf"
     fi
+    # A record for as long as the unit runs, which is what this routine is
+    # built around: restart, wait, restart. The shipped configuration records
+    # only on request; the copy says otherwise, and says it here.
+    sed -i -e "s/^session.autostart = false/session.autostart = true/" "$BENCH/$1/eeg.conf"
+    test "$(grep -c "^session.autostart = true\$" "$BENCH/$1/eeg.conf")" = 1
     (cd "$BENCH/$1" && sha256sum eeg.conf | cut -d" " -f1 > eeg.conf.sha256)
     # The sed must have matched: a copy that still says the factory values
     # would record the factory configuration under the test's name.

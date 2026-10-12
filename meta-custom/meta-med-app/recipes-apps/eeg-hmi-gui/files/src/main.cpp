@@ -15,6 +15,7 @@
 
 #include "EegClient.h"
 #include "ReviewRequest.h"
+#include "SessionControl.h"
 #include "WaveformItem.h"
 
 int main(int argc, char* argv[]) {
@@ -32,10 +33,15 @@ int main(int argc, char* argv[]) {
     qmlRegisterType<WaveformItem>("MedPlatform.Eeg", 1, 0, "WaveformItem");
 
     ReviewRequest review(qEnvironmentVariable("MED_REVIEW_REQUEST"));
+    // Asking is not acquiring: this object can request a session and be
+    // refused one, and that is all it can do to the service.
+    SessionControl sessions(qEnvironmentVariable(
+        "MED_EEG_CONTROL_SOCKET", QStringLiteral("/run/medplatform/eeg-control.sock")));
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("eeg"), &client);
     engine.rootContext()->setContextProperty(QStringLiteral("review"), &review);
+    engine.rootContext()->setContextProperty(QStringLiteral("sessions"), &sessions);
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
 
     if (engine.rootObjects().isEmpty()) {

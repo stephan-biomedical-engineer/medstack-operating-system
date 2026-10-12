@@ -22,13 +22,14 @@ add_executable(eeg-acquisition-service src/main.cpp)
 # second program and not a thread of the first: acquisition never waits for
 # it, and it never runs in acquisition's path. Same single dependency.
 add_executable(eeg-record-export src/export_main.cpp src/record_export.cpp)
+add_executable(medctl src/medctl.cpp)
 
-foreach(target eeg-acquisition-service eeg-record-export)
+foreach(target eeg-acquisition-service eeg-record-export medctl)
     target_compile_options(${target} PRIVATE
         -Wall -Wextra -Wpedantic -Wshadow -Wconversion
     )
     target_link_libraries(${target} PRIVATE PkgConfig::MEDFRAMEWORK)
 endforeach()
 
-install(TARGETS eeg-acquisition-service eeg-record-export
+install(TARGETS eeg-acquisition-service eeg-record-export medctl
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

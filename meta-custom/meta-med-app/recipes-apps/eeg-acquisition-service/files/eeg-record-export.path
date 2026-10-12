@@ -1,0 +1,18 @@
+[Unit]
+Description=MedPlatform EEG clinical file export, when a session closes
+# The acquisition service names each session it closes in this file. A session
+# used to end only when the service did, and the service's ExecStopPost was
+# what started the conversion; a session now ends on a request, with the
+# service still running, and this is what notices.
+#
+# The file's content is not read. The converter derives the clinical file of
+# every closed session it has not dealt with, so one trigger too many - the
+# runtime directory going away when the service stops is one - converts
+# nothing twice.
+
+[Path]
+PathChanged=/run/medplatform/last-closed
+Unit=eeg-record-export.service
+
+[Install]
+WantedBy=multi-user.target

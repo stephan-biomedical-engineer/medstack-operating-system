@@ -18,6 +18,7 @@ SRC_URI = " \
     file://eeg.conf \
     file://eeg-acquisition.service \
     file://eeg-record-export.service \
+    file://eeg-record-export.path \
 "
 
 S = "${WORKDIR}/sources"
@@ -31,7 +32,7 @@ REQUIRED_DISTRO_FEATURES = "systemd"
 # The exporter is in the same package on purpose: the EEG's device-specific
 # delta is a number the thesis reports (RESULTS.md), and a clinical file is
 # part of the same device application, not a new one.
-SYSTEMD_SERVICE:${PN} = "eeg-acquisition.service eeg-record-export.service"
+SYSTEMD_SERVICE:${PN} = "eeg-acquisition.service eeg-record-export.service eeg-record-export.path"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # The knobs that make the same application binary serve every target and every
@@ -67,6 +68,8 @@ do_install:append() {
         ${D}${systemd_system_unitdir}/eeg-acquisition.service
     install -m 0644 ${WORKDIR}/eeg-record-export.service \
         ${D}${systemd_system_unitdir}/eeg-record-export.service
+    install -m 0644 ${WORKDIR}/eeg-record-export.path \
+        ${D}${systemd_system_unitdir}/eeg-record-export.path
 }
 
 # The afe.* block of eeg.conf is this device's prescription, in its own words,
@@ -122,199 +125,288 @@ python do_derive_device_options() {
                      "written by hand - two sources for one setting can disagree."
                      % prefix)
 
-    def required(key):
-        if key not in values:
-            bb.fatal("eeg.conf has no %s, and the front-end options for link '%s' "
-                     "are derived from it" % (key, link))
-        return values[key]
-
-    def number(key):
-        try:
-            return float(required(key))
-        except ValueError:
-            bb.fatal("eeg.conf: %s = '%s' is not a number" % (key, values[key]))
-
-    def boolean(key):
-        value = required(key).lower()
-        if value in ('true', '1', 'yes', 'on'):
-            return True
-        if value in ('false', '0', 'no', 'off'):
-            return False
-        bb.fatal("eeg.conf: %s = '%s' is not a boolean" % (key, values[key]))
-
     def compact(x):
         return '%.10g' % x
 
-    # The converter class this application was designed for resolves 24 bits on
-    # every link: the simulated converter quantises to it, the co-processor's
-    # firmware and the kernel driver read it. One number, so that the record's
-    # declaration and the simulator's behaviour cannot drift apart.
-    resolution_bits = 24
+    # A prescription the link cannot honour. Fatal for the one this device ships
+    # with; for the alternatives an operator may choose between, it only means
+    # that one is not offered.
+    class Refusal(Exception):
+        pass
 
-    gain = number('afe.gain')
-    reference_uv = number('afe.reference_uv')
-    lead_off = boolean('afe.lead_off_detection')
-    bias = boolean('afe.bias_drive')
-    test_signal = required('afe.test_signal')
-    if test_signal not in ('off', 'internal'):
-        bb.fatal("eeg.conf: afe.test_signal must be 'off' or 'internal', not '%s'"
-                 % test_signal)
-    montage = required('afe.montage')
-    if montage not in ('bipolar', 'referential'):
-        bb.fatal("eeg.conf: afe.montage must be 'bipolar' or 'referential', not '%s'"
-                 % montage)
-    if gain <= 0 or reference_uv <= 0:
-        bb.fatal("eeg.conf: afe.gain and afe.reference_uv must be positive")
+    def refuse(message):
+        raise Refusal(message)
 
-    if link == 'simulated':
-        # Lead-off and bias need no translation: a simulation has no electrodes,
-        # so either value is trivially what it does.
-        options = [
-            ('unit', 'uV'),
-            ('full_scale', compact(reference_uv / gain)),
-            ('resolution_bits', str(resolution_bits)),
-            ('noise_rms', '0.14'),
-            # amplitude uV @ frequency Hz @ phase step per channel, rad
-            ('tones', '20@10@0.4, 5@50@0, 2@0.3@0.4'),
-        ]
-        if test_signal == 'internal':
-            options.append(('square', '%s@%s' % (compact(reference_uv / 2400.0),
-                                                 compact(2048000.0 / 2 ** 21))))
+    # One prescription in, what the link is told and what the record declares
+    # out - or a Refusal. Written once and called for the shipped prescription
+    # and for every alternative, so that a choice made on the device at run
+    # time is translated by exactly the table that translates the factory one.
+    def translate(values):
+        def required(key):
+            if key not in values:
+                refuse("eeg.conf has no %s, and the front-end options for link '%s' "
+                         "are derived from it" % (key, link))
+            return values[key]
 
-    elif link == 'amp':
-        # The firmware on the real-time core is this application's own producer,
-        # so it speaks the prescription's words and answers each one in its
-        # control acknowledgement.
-        options = sorted((key, value) for key, value in values.items()
-                         if key.startswith('afe.'))
+        def number(key):
+            try:
+                return float(required(key))
+            except ValueError:
+                refuse("eeg.conf: %s = '%s' is not a number" % (key, values[key]))
 
-    elif link in ('spi', 'usb'):
-        # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
-        # input_mux, test_signal, bias_drive and montage are the driver's own.
-        # One prescription has no attribute at all, and is checked against what
-        # the driver does at probe instead of being passed and ignored.
-        if not lead_off:
-            bb.fatal("afe.lead_off_detection = false cannot be honoured on link '%s': "
-                     "the kernel driver enables the lead-off comparators at probe and "
-                     "offers no control to switch them off" % link)
-        if gain != int(gain):
-            bb.fatal("eeg.conf: afe.gain = %s is not an integer" % values['afe.gain'])
-        internal = test_signal == 'internal'
-        # The prescription is a boolean and the part offers three
-        # configurations, so the translation has to choose - and the choice is
-        # clinical, which is why it is made here and written down rather than
-        # defaulted inside the driver.
+        def boolean(key):
+            value = required(key).lower()
+            if value in ('true', '1', 'yes', 'on'):
+                return True
+            if value in ('false', '0', 'no', 'off'):
+                return False
+            refuse("eeg.conf: %s = '%s' is not a boolean" % (key, values[key]))
+
+        # The converter class this application was designed for resolves 24 bits on
+        # every link: the simulated converter quantises to it, the co-processor's
+        # firmware and the kernel driver read it. One number, so that the record's
+        # declaration and the simulator's behaviour cannot drift apart.
+        resolution_bits = 24
+
+        gain = number('afe.gain')
+        reference_uv = number('afe.reference_uv')
+        lead_off = boolean('afe.lead_off_detection')
+        bias = boolean('afe.bias_drive')
+        test_signal = required('afe.test_signal')
+        if test_signal not in ('off', 'internal'):
+            refuse("eeg.conf: afe.test_signal must be 'off' or 'internal', not '%s'"
+                     % test_signal)
+        montage = required('afe.montage')
+        if montage not in ('bipolar', 'referential'):
+            refuse("eeg.conf: afe.montage must be 'bipolar' or 'referential', not '%s'"
+                     % montage)
+        if gain <= 0 or reference_uv <= 0:
+            refuse("eeg.conf: afe.gain and afe.reference_uv must be positive")
+
+        if link == 'simulated':
+            # Lead-off and bias need no translation: a simulation has no electrodes,
+            # so either value is trivially what it does.
+            options = [
+                ('unit', 'uV'),
+                ('full_scale', compact(reference_uv / gain)),
+                ('resolution_bits', str(resolution_bits)),
+                ('noise_rms', '0.14'),
+                # amplitude uV @ frequency Hz @ phase step per channel, rad
+                ('tones', '20@10@0.4, 5@50@0, 2@0.3@0.4'),
+            ]
+            if test_signal == 'internal':
+                options.append(('square', '%s@%s' % (compact(reference_uv / 2400.0),
+                                                     compact(2048000.0 / 2 ** 21))))
+
+        elif link == 'amp':
+            # The firmware on the real-time core is this application's own producer,
+            # so it speaks the prescription's words and answers each one in its
+            # control acknowledgement.
+            options = sorted((key, value) for key, value in values.items()
+                             if key.startswith('afe.'))
+            # One combination the producer is known to refuse, said here so
+            # that it is never offered: with the internal test signal there is
+            # no electrode in the measurement, and the firmware will not
+            # monitor the contact of one.
+            if test_signal == 'internal' and lead_off:
+                refuse("afe.test_signal = internal with afe.lead_off_detection = true "
+                       "is refused by the producer on link 'amp'")
+
+        elif link in ('spi', 'usb'):
+            # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
+            # input_mux, test_signal, bias_drive and montage are the driver's own.
+            # One prescription has no attribute at all, and is checked against what
+            # the driver does at probe instead of being passed and ignored.
+            if not lead_off:
+                refuse("afe.lead_off_detection = false cannot be honoured on link '%s': "
+                         "the kernel driver enables the lead-off comparators at probe and "
+                         "offers no control to switch them off" % link)
+            if gain != int(gain):
+                refuse("eeg.conf: afe.gain = %s is not an integer" % values['afe.gain'])
+            internal = test_signal == 'internal'
+            # The prescription is a boolean and the part offers three
+            # configurations, so the translation has to choose - and the choice is
+            # clinical, which is why it is made here and written down rather than
+            # defaulted inside the driver.
+            #
+            # "on" means DERIVED: the amplifier drives the inverse of the average of
+            # every enabled channel, which is the driven-electrode arrangement that
+            # rejects common mode. The other one the driver offers, "reference",
+            # drives a mid-supply with no feedback from anything measured - a DC
+            # bias and no rejection. A prescription asking for bias drive is asking
+            # for the first; if a montage ever wants the second, it needs a
+            # prescription that can say so, not a different default here.
+            options = [
+                ('hardwaregain', str(int(gain))),
+                ('input_mux', 'test_signal' if internal else 'normal'),
+                ('test_signal', '1x_slow' if internal else 'off'),
+                ('bias_drive', 'derived' if bias else 'off'),
+                # The same two words on both sides. A kernel without the attribute
+                # makes the driver refuse the option and the service refuse to
+                # start, which is the right outcome for a montage nobody applied.
+                ('montage', montage),
+                # Not attributes, and never written to the device: the range and
+                # the resolution, from which the framework takes the exact step.
+                # The kernel publishes its scale as short text (five significant
+                # digits for this converter), and a record scaled by that text is
+                # off the converter's grid - the clinical file's converter refused
+                # every session of this link for it, on the board, on 2026-10-10.
+                # The kernel's text is still read, as the check on these two.
+                ('full_scale', compact(reference_uv / gain)),
+                ('resolution_bits', str(resolution_bits)),
+            ]
+
+        else:
+            refuse("MED_EEG_LINK = '%s' has no front-end option table; known links are "
+                     "simulated, amp, spi and usb" % link)
+
+        # What the record says about itself (implementation_plan_bdf.md, D7 and
+        # D10). The clinical file is derived from the raw record by a separate
+        # program, and that program must not reconstruct the scale from an eeg.conf
+        # that may not be the one the session ran with - so the session's metadata
+        # carries it, and it is derived here, once, by the same table that decides
+        # what the link is told.
         #
-        # "on" means DERIVED: the amplifier drives the inverse of the average of
-        # every enabled channel, which is the driven-electrode arrangement that
-        # rejects common mode. The other one the driver offers, "reference",
-        # drives a mid-supply with no feedback from anything measured - a DC
-        # bias and no rejection. A prescription asking for bias drive is asking
-        # for the first; if a montage ever wants the second, it needs a
-        # prescription that can say so, not a different default here.
-        options = [
-            ('hardwaregain', str(int(gain))),
-            ('input_mux', 'test_signal' if internal else 'normal'),
-            ('test_signal', '1x_slow' if internal else 'off'),
-            ('bias_drive', 'derived' if bias else 'off'),
-            # The same two words on both sides. A kernel without the attribute
-            # makes the driver refuse the option and the service refuse to
-            # start, which is the right outcome for a montage nobody applied.
-            ('montage', montage),
-            # Not attributes, and never written to the device: the range and
-            # the resolution, from which the framework takes the exact step.
-            # The kernel publishes its scale as short text (five significant
-            # digits for this converter), and a record scaled by that text is
-            # off the converter's grid - the clinical file's converter refused
-            # every session of this link for it, on the board, on 2026-10-10.
-            # The kernel's text is still read, as the check on these two.
-            ('full_scale', compact(reference_uv / gain)),
+        # The montage is what the link DOES, not what anyone wishes. By this point
+        # afe.montage is that: "amp" forwards it and the producer answers for it
+        # (a producer that cannot connect the reference refuses, and the service
+        # does not start), "spi"/"usb" write it to the kernel driver's attribute
+        # (a driver without one refuses, with the same outcome), and "simulated"
+        # has no inputs, so either is what it does.
+
+        # Where the operator put each electrode. Not part of the afe.* prescription
+        # on purpose: do_derive forwards every afe.* key to the producer, and a
+        # converter has no use for the name of a scalp position - nor would eight
+        # of them fit in a control message's value.
+        #
+        # Optional. Without it the clinical file gets generic labels, which is a
+        # valid file and an honest one; with it, every name is checked here,
+        # because a label that does not fit the file's 16-character field would
+        # otherwise be truncated into a different electrode's name.
+        electrodes = values.get('montage.electrodes', '').split()
+        reference = values.get('montage.reference', '')
+        name = re.compile(r'^[A-Za-z0-9]+$')
+        if electrodes:
+            try:
+                channels = int(required('acquisition.channels'))
+            except ValueError:
+                refuse("eeg.conf: acquisition.channels = '%s' is not an integer"
+                         % values['acquisition.channels'])
+            if len(electrodes) != channels:
+                refuse("eeg.conf: montage.electrodes names %d electrodes for %d channels"
+                         % (len(electrodes), channels))
+            for electrode in electrodes:
+                if montage == 'bipolar':
+                    parts = electrode.split('-')
+                    if len(parts) != 2 or not all(name.match(p) for p in parts):
+                        refuse("eeg.conf: montage.electrodes entry '%s' is not a pair "
+                                 "'A-B', and the montage is bipolar: each channel "
+                                 "measures between two electrodes" % electrode)
+                    label = 'EEG ' + electrode
+                else:
+                    if not name.match(electrode):
+                        refuse("eeg.conf: montage.electrodes entry '%s' is not a "
+                                 "single electrode name" % electrode)
+                    label = 'EEG %s-%s' % (electrode, reference)
+                if len(label) > 16:
+                    refuse("eeg.conf: the label '%s' is %d characters, and the "
+                             "clinical file's label field holds 16" % (label, len(label)))
+        if montage == 'bipolar' and reference:
+            refuse("eeg.conf: montage.reference is set, and the montage is bipolar: "
+                     "there is no common reference to name")
+        if montage == 'referential' and electrodes and not name.match(reference):
+            refuse("eeg.conf: montage.reference = '%s' is not an electrode name"
+                     % reference)
+
+        record = [
+            ('full_scale_uv', compact(reference_uv / gain)),
             ('resolution_bits', str(resolution_bits)),
+            ('montage', montage),
         ]
 
-    else:
-        bb.fatal("MED_EEG_LINK = '%s' has no front-end option table; known links are "
-                 "simulated, amp, spi and usb" % link)
+        # The converter's own filtering, for the clinical file's "prefiltering"
+        # field: DC-coupled, and the -3 dB band of its sinc3 decimation filter at
+        # the configured rate (SBAS499C Tables 1-4, the same at every gain - checked
+        # in implementation_plan_bdf.md phase 0). Only the converter's: whatever
+        # anti-aliasing the front-end board adds is not known and is not claimed.
+        # The simulated link filters nothing and declares nothing.
+        if link != 'simulated':
+            bandwidth = {250: 65, 500: 131, 1000: 262, 2000: 524, 4000: 1048,
+                         8000: 2096, 16000: 4193}
+            rate = number('acquisition.sample_rate_hz')
+            if rate not in bandwidth:
+                refuse("eeg.conf: acquisition.sample_rate_hz = %s is not a rate the "
+                         "converter offers" % values['acquisition.sample_rate_hz'])
+            record.append(('prefiltering', 'HP:DC LP:%dHz' % bandwidth[rate]))
 
-    # What the record says about itself (implementation_plan_bdf.md, D7 and
-    # D10). The clinical file is derived from the raw record by a separate
-    # program, and that program must not reconstruct the scale from an eeg.conf
-    # that may not be the one the session ran with - so the session's metadata
-    # carries it, and it is derived here, once, by the same table that decides
-    # what the link is told.
+        # The same cross-check the service makes before it will start: the
+        # artefact threshold has to be a voltage this gain can represent. Made
+        # here as well so that a combination the service would refuse is never
+        # offered - and so that a factory prescription with this defect fails
+        # the build instead of the boot.
+        if 'safety.max_input_uv' in values and reference_uv / gain < number('safety.max_input_uv'):
+            refuse("afe.gain = %s leaves a full scale of %s uV, below safety.max_input_uv = %s"
+                   % (values['afe.gain'], compact(reference_uv / gain),
+                      values['safety.max_input_uv']))
+
+        return options, record
+
+    try:
+        options, record = translate(values)
+    except Refusal as refusal:
+        bb.fatal(str(refusal))
+
+    # --- what an operator may choose instead -------------------------------
+    # Every combination of the settings below that THIS link can honour, each
+    # already translated by the table above, in a second sealed store. The
+    # service changes a setting by picking a row and applying it as written: it
+    # never translates, so its binary stays the same on every link, and a
+    # display shows what this file lists and nothing else - which is how a link
+    # that cannot do something comes to not offer it.
     #
-    # The montage is what the link DOES, not what anyone wishes. By this point
-    # afe.montage is that: "amp" forwards it and the producer answers for it
-    # (a producer that cannot connect the reference refuses, and the service
-    # does not start), "spi"/"usb" write it to the kernel driver's attribute
-    # (a driver without one refuses, with the same outcome), and "simulated"
-    # has no inputs, so either is what it does.
+    # The rate is not here. A rate enters this table for a link when it has
+    # been measured on that link, and so far only the shipped one has.
+    import itertools
 
-    # Where the operator put each electrode. Not part of the afe.* prescription
-    # on purpose: do_derive forwards every afe.* key to the producer, and a
-    # converter has no use for the name of a scalp position - nor would eight
-    # of them fit in a control message's value.
-    #
-    # Optional. Without it the clinical file gets generic labels, which is a
-    # valid file and an honest one; with it, every name is checked here,
-    # because a label that does not fit the file's 16-character field would
-    # otherwise be truncated into a different electrode's name.
-    electrodes = values.get('montage.electrodes', '').split()
-    reference = values.get('montage.reference', '')
-    name = re.compile(r'^[A-Za-z0-9]+$')
-    if electrodes:
-        try:
-            channels = int(required('acquisition.channels'))
-        except ValueError:
-            bb.fatal("eeg.conf: acquisition.channels = '%s' is not an integer"
-                     % values['acquisition.channels'])
-        if len(electrodes) != channels:
-            bb.fatal("eeg.conf: montage.electrodes names %d electrodes for %d channels"
-                     % (len(electrodes), channels))
-        for electrode in electrodes:
-            if montage == 'bipolar':
-                parts = electrode.split('-')
-                if len(parts) != 2 or not all(name.match(p) for p in parts):
-                    bb.fatal("eeg.conf: montage.electrodes entry '%s' is not a pair "
-                             "'A-B', and the montage is bipolar: each channel "
-                             "measures between two electrodes" % electrode)
-                label = 'EEG ' + electrode
-            else:
-                if not name.match(electrode):
-                    bb.fatal("eeg.conf: montage.electrodes entry '%s' is not a "
-                             "single electrode name" % electrode)
-                label = 'EEG %s-%s' % (electrode, reference)
-            if len(label) > 16:
-                bb.fatal("eeg.conf: the label '%s' is %d characters, and the "
-                         "clinical file's label field holds 16" % (label, len(label)))
-    if montage == 'bipolar' and reference:
-        bb.fatal("eeg.conf: montage.reference is set, and the montage is bipolar: "
-                 "there is no common reference to name")
-    if montage == 'referential' and electrodes and not name.match(reference):
-        bb.fatal("eeg.conf: montage.reference = '%s' is not an electrode name"
-                 % reference)
-
-    record = [
-        ('full_scale_uv', compact(reference_uv / gain)),
-        ('resolution_bits', str(resolution_bits)),
-        ('montage', montage),
+    domain = [
+        ('afe.gain', ['1', '2', '4', '6', '8', '12', '24']),
+        ('afe.lead_off_detection', ['true', 'false']),
+        ('afe.montage', ['bipolar', 'referential']),
+        ('afe.test_signal', ['off', 'internal']),
     ]
 
-    # The converter's own filtering, for the clinical file's "prefiltering"
-    # field: DC-coupled, and the -3 dB band of its sinc3 decimation filter at
-    # the configured rate (SBAS499C Tables 1-4, the same at every gain - checked
-    # in implementation_plan_bdf.md phase 0). Only the converter's: whatever
-    # anti-aliasing the front-end board adds is not known and is not claimed.
-    # The simulated link filters nothing and declares nothing.
-    if link != 'simulated':
-        bandwidth = {250: 65, 500: 131, 1000: 262, 2000: 524, 4000: 1048,
-                     8000: 2096, 16000: 4193}
-        rate = number('acquisition.sample_rate_hz')
-        if rate not in bandwidth:
-            bb.fatal("eeg.conf: acquisition.sample_rate_hz = %s is not a rate the "
-                     "converter offers" % values['acquisition.sample_rate_hz'])
-        record.append(('prefiltering', 'HP:DC LP:%dHz' % bandwidth[rate]))
+    def normalised(key, value):
+        if key == 'afe.gain':
+            return compact(float(value))
+        if key == 'afe.lead_off_detection':
+            return 'true' if value.lower() in ('true', '1', 'yes', 'on') else 'false'
+        return value
 
+    factory = tuple(normalised(key, values[key]) for key, _ in domain)
+    rows = []
+    refused = 0
+    for combination in itertools.product(*(choices for _, choices in domain)):
+        candidate = dict(values)
+        for (key, _), value in zip(domain, combination):
+            candidate[key] = value
+        try:
+            candidate_options, candidate_record = translate(candidate)
+        except Refusal:
+            refused += 1
+            continue
+        rows.append((combination, candidate_options, candidate_record))
+
+    shipped = [index for index, row in enumerate(rows) if row[0] == factory]
+    if len(shipped) != 1:
+        bb.fatal("the shipped prescription %s is not one of the %d choices derived for "
+                 "link '%s': the table an operator chooses from would not contain the "
+                 "state the device starts in" % (dict(zip((k for k, _ in domain), factory)),
+                                                 len(rows), link))
+
+    # Nothing is written until everything has been derived. This task appends
+    # to a file do_install produced; a run that failed half way used to leave
+    # that file already appended to, and the next run then refused it as
+    # hand-edited - a build that could only be repaired by cleaning the recipe.
     with open(config, 'a') as handle:
         handle.write("\n# --- device options, derived at build time for this link ------------------\n"
                      "# Generated by do_derive_device_options from the afe.* prescription above.\n"
@@ -328,6 +420,35 @@ python do_derive_device_options() {
 
     bb.note("derived %d device options and %d record declarations for link %s"
             % (len(options), len(record), link))
+
+    choices = os.path.join(os.path.dirname(config), 'eeg-choices.conf')
+    with open(choices, 'w') as handle:
+        handle.write("# MedPlatform EEG - what an operator may choose, on this link.\n"
+                     "#\n"
+                     "# Generated by do_derive_device_options and sealed like eeg.conf: the\n"
+                     "# service refuses to load it without its sidecar. Each choice is one\n"
+                     "# whole prescription and, under it, exactly what the link is told and\n"
+                     "# what the record declares when it is in force. Do not edit.\n"
+                     "# Link: %s\n\n" % link)
+        handle.write("choices.count = %d\n" % len(rows))
+        handle.write("choices.keys = %s\n" % ' '.join(key for key, _ in domain))
+        handle.write("choices.factory = %d\n" % shipped[0])
+        if link != 'simulated':
+            # The front-end board's reference switch is manual and no software
+            # can read it. Whoever changes the montage has to say where it is,
+            # and the record carries that as said, not as known.
+            handle.write("choices.affirm.afe.montage = reference_switch\n")
+        for index, (combination, candidate_options, candidate_record) in enumerate(rows):
+            handle.write("\n")
+            for (key, _), value in zip(domain, combination):
+                handle.write("choice.%d.%s = %s\n" % (index, key, value))
+            for key, value in candidate_options:
+                handle.write("choice.%d.device.option.%s = %s\n" % (index, key, value))
+            for key, value in candidate_record:
+                handle.write("choice.%d.record.%s = %s\n" % (index, key, value))
+
+    bb.note("derived %d choices for link %s (%d combinations the link cannot honour)"
+            % (len(rows), link, refused))
 }
 addtask derive_device_options after do_install before do_seal_configuration
 do_derive_device_options[fakeroot] = "1"
@@ -385,12 +506,19 @@ python do_seal_configuration() {
                      "line %d: %s" % (n, l) for n, l in inline) +
                  "\nPut the comment on its own line.")
 
-    digest = bb.utils.sha256_file(config)
-    sidecar = config + '.sha256'
-    with open(sidecar, 'w') as handle:
-        handle.write(digest + '\n')
-    os.chmod(sidecar, 0o640)
-    bb.note("sealed %s with sha256 %s" % (config, digest))
+    # The table of choices is sealed by the same hand, for the same reason: a
+    # device must not take a front-end setting from a file nobody vouched for.
+    choices = os.path.join(os.path.dirname(config), 'eeg-choices.conf')
+    if not os.path.exists(choices):
+        bb.fatal("eeg-choices.conf was not derived; nothing to seal")
+
+    for store in (config, choices):
+        digest = bb.utils.sha256_file(store)
+        sidecar = store + '.sha256'
+        with open(sidecar, 'w') as handle:
+            handle.write(digest + '\n')
+        os.chmod(sidecar, 0o640)
+        bb.note("sealed %s with sha256 %s" % (store, digest))
 }
 addtask seal_configuration after do_derive_device_options before do_package
 
@@ -407,4 +535,5 @@ FILES:${PN} += " \
     ${sysconfdir}/medplatform \
     ${systemd_system_unitdir}/eeg-acquisition.service \
     ${systemd_system_unitdir}/eeg-record-export.service \
+    ${systemd_system_unitdir}/eeg-record-export.path \
 "

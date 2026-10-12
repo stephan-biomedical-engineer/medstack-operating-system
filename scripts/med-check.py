@@ -284,6 +284,26 @@ EEG_CHECKS = [
     # O quadro é cabeçalho (40), amostras e, desde a v2 do formato, o bloco de
     # 8 bytes de contato de eletrodo. Sem os 8 a asserção superestimava a taxa
     # em ~1,6% - a favor de passar, que é o lado errado para errar.
+    # Nada é gravado até alguém pedir. Uma sessão já foi a vida do processo:
+    # cada boot e cada reinício do serviço deixavam um registro que ninguém
+    # tinha pedido - nove num dia de bancada, até 82 MiB cada. As duas
+    # asserções abaixo são as duas metades da correção: ocioso depois do boot
+    # (sem marcador de sessão viva, e o serviço diz "idle"), e gravando depois
+    # do pedido. A segunda vem antes de tudo o que precisa de uma sessão.
+    ("session-idle-at-boot", "depois do boot o serviço adquire e não grava",
+     'L=$(ls /run/medplatform/session 2>/dev/null); T=$(medctl session.status); '
+     'A=$(du -s /data/eeg 2>/dev/null | cut -f1); sleep 5; '
+     'B=$(du -s /data/eeg 2>/dev/null | cut -f1); '
+     'echo "marcador=[$L] estado=$T dados=$A->$B"; '
+     'test -z "$L" && test "$T" = idle && test "$A" = "$B" && echo IDLE_OK',
+     rx(r"IDLE_OK")),
+
+    ("session-start", "uma sessão começa quando é pedida, pela linha de comando",
+     'R=$(medctl session.start operator=suite exam=med-check); E=$?; '
+     'T=$(medctl session.status); echo "resposta=$R saida=$E estado=$T"; '
+     'test $E = 0 && echo "$T" | grep -q "^recording " && echo START_OK',
+     rx(r"START_OK")),
+
     ("acq-sample-rate", "a taxa entregue é a configurada, com a HMI conectada",
      "C=/etc/medplatform/eeg.conf; "
      "g() { grep \"^$1\" $C | cut -d= -f2 | tr -d ' '; }; "
@@ -329,34 +349,54 @@ EEG_CHECKS = [
      'test -n "$L" && test "$L" = "${S##*/session-}" && echo LIVE_OK',
      rx(r"LIVE_OK")),
 
-    # Perto do fim, de propósito: é a única que reinicia o serviço, e um
-    # reinício abre uma sessão nova. Só a record-bdf vem depois, porque usa a
-    # sessão que esta fecha. O fechamento é comparado com o próprio
+    # Perto do fim, de propósito: é a que encerra a sessão que as anteriores
+    # usam - por pedido, com o serviço de pé, que é como uma sessão passou a
+    # terminar. Depois dela vêm só as que usam a sessão fechada. O fechamento é comparado com o próprio
     # registro de auditoria da sessão (MED_FRAMES do AcquisitionStopped), não
     # com um número esperado: o marcador tem de dizer o mesmo que a trilha, e
     # é a concordância que se verifica.
     ("session-closed", "uma sessão encerrada tem closed.json que bate com a auditoria",
      'S=$(ls -d /data/eeg/session-* | tail -n 1); '
-     'systemctl restart eeg-acquisition.service; '
+     'medctl session.stop >/dev/null; '
      'F=$(sed -n "s/.*\\"frames\\": \\([0-9]*\\).*/\\1/p" $S/closed.json); '
      'J=$(journalctl -b -o export MED_AUDIT_EVENT=ACQUISITION_STOPPED '
      'MED_SESSION=${S##*/session-} | sed -n "s/^MED_FRAMES=//p"); '
      'M=$(grep -c "\\"full_scale_uv\\": [0-9]" $S/metadata.json); '
-     'test -e /run/medplatform/session && N=$(cat /run/medplatform/session); '
-     'echo "closed=$F auditoria=$J escala=$M nova=$N"; '
+     # N começa vazio de propósito. As asserções rodam todas no mesmo shell,
+     # e a acq-sample-rate deixa N=14 (amostras por quadro): sem isto, um
+     # marcador ausente - que é o resultado certo - era lido como "viva=[14]",
+     # e a asserção reprovava um serviço que tinha feito tudo certo.
+     'N=; test -e /run/medplatform/session && N=$(cat /run/medplatform/session); '
+     'T=$(medctl session.status); '
+     'echo "closed=$F auditoria=$J escala=$M viva=[$N] estado=$T"; '
      'test -n "$F" && test "$F" = "$J" && test "$M" = 1 && '
-     'test "$N" != "${S##*/session-}" && echo CLOSED_OK',
+     'test -z "$N" && test "$T" = idle && echo CLOSED_OK',
      rx(r"CLOSED_OK")),
 
+    # Um pedido que não pode ser atendido é recusado, e a recusa tem de ser
+    # visível nos três lugares em que alguém a procuraria: no código de saída
+    # de quem pediu, no texto que o serviço devolveu e na trilha de auditoria.
+    # Encerrar uma sessão que não existe é o caso mais simples - e o serviço
+    # tem de continuar de pé depois dele, sem reinício: uma recusa derrota o
+    # pedido, não o serviço.
+    ("control-refusal", "um pedido impossível é recusado, auditado, e o serviço segue",
+     'R=$(medctl session.stop 2>&1); E=$?; '
+     'U=$(medctl session.frobnicate 2>&1); F=$?; '
+     'J=$(journalctl -b -o cat MED_AUDIT_EVENT=SECURITY_EVENT | grep -c "control request refused"); '
+     'N=$(systemctl show eeg-acquisition.service -p NRestarts --value); '
+     'echo "stop=[$R] saida=$E verbo=[$U] saida=$F auditadas=$J reinicios=$N"; '
+     'test $E = 1 && test $F = 1 && test "$J" -ge 2 && test "$N" = 0 && echo REFUSAL_OK',
+     rx(r"REFUSAL_OK")),
+
     # O arquivo clínico da sessão que a session-closed encerrou
-    # (implementation_plan_bdf.md, Fase 3): o ExecStopPost da aquisição dispara
+    # (implementation_plan_bdf.md, Fase 3): fechar uma sessão dispara
     # o conversor, que não bloqueia a parada - daí a espera limitada pelo
     # export.json. O número de registros vem do próprio cabeçalho BDF+ (offset
     # 236, 8 octetos) e é comparado com os quadros do closed.json, que a
     # session-closed já comparou com a auditoria: três fontes, um número. O
     # selo é conferido por quem o lê, não por quem o escreveu.
     ("record-bdf", "a sessão encerrada ganhou o BDF+, selado, um registro por quadro",
-     'S=$(ls -d /data/eeg/session-* | tail -n 2 | head -n 1); '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
      'for i in $(seq 1 60); do test -e $S/export.json && break; sleep 1; done; '
      'F=$(sed -n "s/.*\\"frames\\": \\([0-9]*\\).*/\\1/p" $S/closed.json); '
      'R=$(dd if=$S/record.bdf bs=1 skip=236 count=8 2>/dev/null | tr -d " "); '
@@ -376,7 +416,7 @@ EEG_CHECKS = [
     # revisor que não lê nada passa em três delas, e um que lê tudo passa na
     # outra. Depois da record-bdf, que é quem garante que o BDF+ existe.
     ("review-reach", "o revisor lê o BDF+ publicado e nada mais da sessão",
-     'S=$(ls -d /data/eeg/session-* | tail -n 2 | head -n 1); I=${S##*/session-}; '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); I=${S##*/session-}; '
      'P=/data/review/eeg/$I.bdf; '
      'for i in $(seq 1 30); do test -e "$P" && break; sleep 1; done; '
      'A=$(su -s /bin/sh med-review -c "dd if=\'$P\' bs=1 count=8 2>/dev/null | wc -c"); '

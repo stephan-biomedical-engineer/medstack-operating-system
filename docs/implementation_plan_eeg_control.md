@@ -422,3 +422,53 @@ falha que outro plano já declarou como pendente.
 | 5 | quatro verbos por CLI, saída não-zero em recusa | — | — |
 | 6 | HMI como `med-hmi`, sem `/data`, sem front-end | — | — |
 | 7 | `make check` abre, anota e fecha uma sessão | — | — |
+
+### 13.1 Gravação sob pedido — o que foi escrito, e onde ele se afasta deste plano (2026-10-11)
+
+**Por que agora**: o operador viu que a estação gravava o tempo todo - nove sessões num dia de
+bancada, até 82 MiB cada, uma por boot ou reinício do serviço. É o primeiro sintoma da tabela da
+§2, e passou a ser o que bloqueia o uso.
+
+O que existe no código (não commitado, **nunca inicializado em imagem nenhuma**):
+
+| Peça | Onde |
+|---|---|
+| Uma sessão começa e termina por pedido; fora dela nada é escrito em `/data` | `eeg-acquisition-service`, `main.cpp` |
+| Socket de controle `/run/medplatform/eeg-control.sock`, separado do de amostras | idem; chave `ipc.control_socket` |
+| Verbos `session.start` (`operator`, `exam`, `subject`), `session.stop`, `session.status` | idem |
+| Recusa com motivo, auditada como `SecurityEvent`; opção desconhecida recusa o pedido inteiro | idem |
+| O codec da mensagem de controle, público, um só para os dois saltos | `amp::encodeControl`/`decodeControl`/`encodeControlAck`/`decodeControlAck` |
+| `medctl` | `eeg-acquisition-service`, `src/medctl.cpp`; saída 0 aceito, 1 recusado, 2 sem resposta |
+| Botão `Record`/`Stop`, campos de operador e exame, indicador `RECORDING mm:ss` | `eeg-hmi-gui`, `SessionControl` |
+| O BDF+ é derivado quando a sessão fecha, com o serviço de pé | `eeg-record-export.path`, sobre `/run/medplatform/last-closed` |
+| `metadata.json` com `affirmed_operator`, `affirmed_exam`, `affirmed_subject` | rotulados como afirmados; nada foi verificado |
+
+**Onde se afasta da §4, de propósito.** O plano dizia que em `ready` não há leitura de
+dispositivo. O que foi escrito adquire e publica **desde a partida**, e a sessão é a parte disso
+que alguém pediu para guardar: o operador vê o sinal, confere os eletrodos, e só então grava. A
+consequência é que `device.start()` continua no caminho de partida - então a decisão 2 da §4
+(uma prescrição recusada derrota a sessão, não o serviço) **não foi feita**, e um front-end
+ausente continua derrubando o serviço como hoje. O laço não mudou de âncora: quem o ritma é a
+leitura do dispositivo nos dois casos, e um pedido espera no máximo um quadro pela resposta.
+
+**O que não foi feito, por fase**:
+- Fase 2: o estado não é dito ao systemd (`STATUS=`); o critério de CPU em ocioso não se aplica,
+  porque não há estado ocioso sem aquisição;
+- Fase 3: **nenhuma credencial de par.** O socket é `0660 root`, e a HMI ainda roda como root.
+  Quem alcança o socket comanda; o `uid` de quem pediu não está no registro;
+- Fase 4: sem `session.annotate` e sem `device.status`; a ressalva do `medctl` com sessão aberta
+  e par que trava não foi exercitada;
+- Fase 6: a HMI não é `med-hmi`;
+- `session.autostart = true` existe para as rotinas de bancada que reiniciam o serviço para
+  delimitar um registro (`montage-bench.sh` o liga na cópia); o `ROTEIRO_PLACA.md` §7 **não** foi
+  atualizado e, como está, deixa de gravar.
+
+| O quê | Comando | Resultado |
+|---|---|---|
+| Codec, no host | `make -C tests/framework check` | **1548 verificações, 0 falhas** (26 novas) |
+| Injeção: o CRC do controle não é conferido | idem | 1 falha, a do bit trocado |
+| Injeção: campo sem terminador aceito | idem | 1 falha, a do terminador |
+| Serviço e `medctl` compilam | `make service`, `-Wall -Wextra -Wpedantic -Wshadow -Wconversion` | sem avisos |
+| HMI compila; QML | `bitbake eeg-hmi-gui`; `qmllint` | sem avisos |
+| Suíte, primeira execução | `make qemu && make check` (QEMU, perfil com o ambiente de trabalho) | **30/31**. Passaram `session-idle-at-boot`, `session-start`, `control-refusal`, `record-bdf` e `review-reach` sobre uma sessão pedida e encerrada por `medctl`. A que falhou, `session-closed`, falhou **por defeito da asserção**: `closed=512 auditoria=512 escala=1 viva=[14] estado=idle` - o `14` é a variável `N` deixada pela `acq-sample-rate` no mesmo shell (amostras por quadro), lida como marcador de sessão viva. Corrigida (`N=` antes do teste) e **não reexecutada** |
+

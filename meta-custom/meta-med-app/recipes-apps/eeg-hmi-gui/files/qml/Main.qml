@@ -141,10 +141,20 @@ Window {
         function onLayoutChanged() { root.laneScales = [] }
     }
 
-    Shortcut { sequence: "Space"; onActivated: eeg.frozen = !eeg.frozen }
-    Shortcut { sequences: ["+", "="]; onActivated: root.stepAll(-1) }
-    Shortcut { sequence: "-"; onActivated: root.stepAll(1) }
-    Shortcut { sequence: "A"; onActivated: root.fitAll() }
+    // Not while a name is being typed: a space or a minus in the operator's
+    // name is a character, not a command.
+    readonly property bool typing: operatorField.typing || examField.typing
+
+    function elapsed(seconds) {
+        var m = Math.floor(seconds / 60)
+        var s = seconds % 60
+        return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
+    }
+
+    Shortcut { sequence: "Space"; enabled: !root.typing; onActivated: eeg.frozen = !eeg.frozen }
+    Shortcut { sequences: ["+", "="]; enabled: !root.typing; onActivated: root.stepAll(-1) }
+    Shortcut { sequence: "-"; enabled: !root.typing; onActivated: root.stepAll(1) }
+    Shortcut { sequence: "A"; enabled: !root.typing; onActivated: root.fitAll() }
     // --- header --------------------------------------------------------------
     Rectangle {
         id: header
@@ -187,6 +197,47 @@ Window {
                 color: eeg.connected ? theme.dim : theme.warn
                 font.pixelSize: 14
                 anchors.verticalCenter: parent.verticalCenter
+            }
+            Rectangle {
+                // Said by the service, not by this screen: it shows for a
+                // session opened from a command line just the same.
+                visible: sessions.recording
+                anchors.verticalCenter: parent.verticalCenter
+                radius: 4
+                color: "#3a1014"
+                border.width: 1
+                border.color: theme.bad
+                width: recText.implicitWidth + 34
+                height: 26
+                Rectangle {
+                    id: recDot
+                    width: 10; height: 10; radius: 5
+                    color: theme.bad
+                    anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                    SequentialAnimation on opacity {
+                        running: sessions.recording
+                        loops: Animation.Infinite
+                        NumberAnimation { to: 0.25; duration: 700 }
+                        NumberAnimation { to: 1.0; duration: 700 }
+                    }
+                }
+                Text {
+                    id: recText
+                    anchors { left: recDot.right; leftMargin: 8; verticalCenter: parent.verticalCenter }
+                    text: "RECORDING  " + root.elapsed(sessions.elapsedSeconds)
+                    color: "#ffb3b8"
+                    font.pixelSize: 13
+                    font.weight: Font.Bold
+                }
+            }
+            Text {
+                visible: !sessions.recording && sessions.reachable
+                anchors.verticalCenter: parent.verticalCenter
+                text: "NOT RECORDING"
+                color: theme.faint
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                font.letterSpacing: 1.0
             }
             Rectangle {
                 visible: eeg.electrodeOff
@@ -287,10 +338,12 @@ Window {
         cursorColor: eeg.frozen ? theme.warn : theme.accent
         clip: true
 
-        // Wheel over a lane: that lane's scale.
+        // Wheel over a lane: that lane's scale. A click takes the keyboard
+        // back from a text field, so the shortcuts answer again.
         MouseArea {
             anchors.fill: parent
-            acceptedButtons: Qt.NoButton
+            acceptedButtons: Qt.LeftButton
+            onPressed: plot.forceActiveFocus()
             onWheel: (wheel) => {
                 if (eeg.channelCount <= 0)
                     return
@@ -379,6 +432,38 @@ Window {
             Row {
                 spacing: 6
                 Text {
+                    text: "SESSION"; color: theme.faint; font.pixelSize: 10
+                    font.letterSpacing: 1.2; font.weight: Font.DemiBold
+                    anchors.verticalCenter: parent.verticalCenter
+                    rightPadding: 4
+                }
+                Field {
+                    id: operatorField
+                    placeholder: "operator"
+                    implicitWidth: 120
+                    enabled: !sessions.recording
+                }
+                Field {
+                    id: examField
+                    placeholder: "exam"
+                    implicitWidth: 110
+                    enabled: !sessions.recording
+                }
+                Chip {
+                    // The one control on this screen that causes a record to
+                    // be written - by asking for it.
+                    text: sessions.recording ? "■  Stop" : "●  Record"
+                    checked: sessions.recording
+                    accent: theme.bad
+                    enabled: sessions.reachable
+                    onClicked: sessions.recording ? sessions.stop()
+                                                  : sessions.start(operatorField.text, examField.text)
+                }
+            }
+
+            Row {
+                spacing: 6
+                Text {
                     text: "WINDOW"; color: theme.faint; font.pixelSize: 10
                     font.letterSpacing: 1.2; font.weight: Font.DemiBold
                     anchors.verticalCenter: parent.verticalCenter
@@ -457,11 +542,15 @@ Window {
             spacing: 16
 
             Text {
+                // What the last request came to, as the service worded it. A
+                // refusal stays red until the next request.
                 anchors.verticalCenter: parent.verticalCenter
-                text: "filters and scale change the picture, never the record"
-                color: theme.faint
-                font.pixelSize: 11
-                visible: toolbar.width > 1500
+                visible: sessions.message.length > 0
+                text: sessions.message
+                color: sessions.refused ? theme.bad : theme.dim
+                font.pixelSize: 12
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, 420)
             }
             Chip {
                 // Present only where a reviewer is installed. It asks; the

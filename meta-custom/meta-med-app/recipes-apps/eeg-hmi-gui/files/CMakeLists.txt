@@ -25,6 +25,8 @@ qt_add_executable(eeg-hmi-gui
     src/EegClient.h
     src/ReviewRequest.cpp
     src/ReviewRequest.h
+    src/SessionControl.cpp
+    src/SessionControl.h
     src/TraceStore.cpp
     src/TraceStore.h
     src/WaveformItem.cpp
@@ -38,6 +40,7 @@ qt_add_resources(eeg-hmi-gui "qml"
         qml/Chip.qml
         qml/Stat.qml
         qml/LaneLabel.qml
+        qml/Field.qml
 )
 
 target_compile_options(eeg-hmi-gui PRIVATE -Wall -Wextra)

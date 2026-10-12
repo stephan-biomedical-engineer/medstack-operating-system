@@ -456,28 +456,87 @@ int main(int argc, char** argv) {
                     {{"status", med::toString(ready)}});
     }
 
-    const std::string sessionId = med::formatTimestamp(med::Clock::now());
-    const std::string sessionDir = "session-" + sessionId;
     const med::DeviceInfo info = device.info();
     const std::string link = config.getString("acquisition.link", "unknown");
-    const med::Timestamp sessionStart = med::Clock::now();
+    // What the link configured (the recipe derives it; see record.montage in
+    // the metadata), so that the audit names the electrode the bits mean.
+    const bool referential = config.getString("record.montage", "") == "referential";
 
-    // Named as live BEFORE its directory exists, so that there is no instant
-    // at which the session is on disk, unclosed and unclaimed - which is what
-    // an interrupted one looks like.
-    {
-        const med::Status claimed = runtime.writeString("session", sessionId + "\n");
+    // --------------------------------------------------------------- control
+    // A second socket, apart from the sample stream: watching is not
+    // commanding, and the two must be separable by file permission. One
+    // request, one mandatory answer, in the same fixed-layout message the
+    // framework already speaks to a producer of samples.
+    med::IpcEndpoint controlEndpoint;
+    controlEndpoint.transport = med::IpcTransport::UnixSeqpacket;
+    controlEndpoint.address =
+        config.getString("ipc.control_socket", "/run/medplatform/eeg-control.sock");
+    controlEndpoint.socketMode = 0660;
+
+    med::Result<std::unique_ptr<med::MedicalIpcServer>> controlResult =
+        med::MedicalIpcServer::listen(controlEndpoint);
+    if (!controlResult) {
+        logger.audit(med::AuditEvent::DeviceFault, "cannot publish the control channel",
+                     {{"socket", controlEndpoint.address}, {"detail", controlResult.message()}});
+        std::fprintf(stderr, "eeg-acquisition-service: %s\n", controlResult.message().c_str());
+        return 1;
+    }
+    med::MedicalIpcServer& control = *controlResult.value();
+
+    // --------------------------------------------------------------- session
+    // A session is not the life of this process. The process acquires and
+    // publishes for as long as it runs, so that an operator can look at the
+    // signal - and check the electrodes - before deciding to record. A session
+    // is the part of that somebody asked to keep: it begins on a request, ends
+    // on a request, and nothing is written to the record volume outside one.
+    //
+    // It used to be the life of the process, and every boot and every restart
+    // of the unit made a record nobody had asked for: nine of them on the
+    // board in one day of bench work, up to 82 MiB each.
+    struct Session {
+        bool open = false;
+        std::string id;
+        std::string dir;
+        med::Timestamp start{};
+        std::uint64_t frames = 0;
+        std::uint64_t dropped = 0;
+        /// Frames a viewer could not keep up with while this session was
+        /// open. Not the same failure as `dropped`, which counts frames that
+        /// never reached the record: a viewer missing a frame costs nothing
+        /// clinically, and the only reason to count it at all is that the
+        /// alternative - waiting for the viewer - costs samples.
+        std::uint64_t viewerMissed = 0;
+    };
+    Session session;
+    med::LeadOff lastContact;
+
+    auto optional = [](const std::map<std::string, std::string>& request, const char* key) {
+        const std::map<std::string, std::string>::const_iterator found = request.find(key);
+        return found == request.end() || found->second.empty() ? std::string("null")
+                                                               : jsonString(found->second);
+    };
+
+    // Opens a session. Empty on success, the reason otherwise - and on a
+    // reason, nothing was left on the record volume.
+    auto openSession = [&](const std::map<std::string, std::string>& request) -> std::string {
+        session = Session{};
+        session.id = med::formatTimestamp(med::Clock::now());
+        session.dir = "session-" + session.id;
+        session.start = med::Clock::now();
+
+        // Named as live BEFORE its directory exists, so that there is no
+        // instant at which the session is on disk, unclosed and unclaimed -
+        // which is what an interrupted one looks like.
+        const med::Status claimed = runtime.writeString("session", session.id + "\n");
         if (claimed != med::Status::Ok) {
             logger.audit(med::AuditEvent::DeviceFault, "cannot mark the session as live",
-                         {{"session", sessionId}, {"status", med::toString(claimed)}});
-            return 1;
+                         {{"session", session.id}, {"status", med::toString(claimed)}});
+            return std::string("cannot mark the session as live");
         }
-    }
 
-    {
         std::string metadata;
         metadata += "{\n";
-        metadata += "  \"session\": \"" + sessionId + "\",\n";
+        metadata += "  \"session\": \"" + session.id + "\",\n";
         metadata += "  \"device_id\": \"" + info.id + "\",\n";
         metadata += "  \"driver\": \"" + info.driver + "\",\n";
         metadata += "  \"model\": \"" + info.model + "\",\n";
@@ -548,24 +607,176 @@ int main(int argc, char** argv) {
         // formats defined in local time will use.
         metadata += "  \"clock_synchronized\": " +
                     std::string(med::clockSynchronized() ? "true" : "false") + ",\n";
-        metadata += "  \"utc_offset\": " + jsonString(med::utcOffset(sessionStart)) + "\n";
+        metadata += "  \"utc_offset\": " + jsonString(med::utcOffset(session.start)) + ",\n";
+
+        // Who asked for this session and under what name, AS THEY SAID IT.
+        // Nothing here was verified: no person logged in, and the string came
+        // over a socket from whoever was allowed to write to it. Named
+        // "affirmed" in the record so that a reader does not take a claim for
+        // an identity. null where the request named none.
+        metadata += "  \"affirmed_operator\": " + optional(request, "operator") + ",\n";
+        metadata += "  \"affirmed_exam\": " + optional(request, "exam") + ",\n";
+        metadata += "  \"affirmed_subject\": " + optional(request, "subject") + "\n";
         metadata += "}\n";
-        storage.writeString(sessionDir + "/metadata.json", metadata);
+        const med::Status written = storage.writeString(session.dir + "/metadata.json", metadata);
+        if (written != med::Status::Ok) {
+            runtime.remove("session");
+            logger.audit(med::AuditEvent::DeviceFault, "session metadata could not be written",
+                         {{"session", session.id}, {"status", med::toString(written)}});
+            return std::string("the record volume refused the session");
+        }
+
+        session.open = true;
+        // So that the first recorded frame states the electrodes' contact:
+        // a session's audit trail begins with it, whatever was seen before.
+        lastContact = med::LeadOff{};
+        logger.audit(med::AuditEvent::AcquisitionStarted, "acquisition session started",
+                     {{"session", session.id},
+                      {"driver", info.driver},
+                      {"link", link},
+                      {"affirmed operator",
+                       request.count("operator") != 0 ? request.at("operator") : ""},
+                      {"affirmed exam", request.count("exam") != 0 ? request.at("exam") : ""}});
+        return std::string();
+    };
+
+    auto closeSession = [&](const char* reason) {
+        if (!session.open) {
+            return;
+        }
+        // The close marker, in the session directory: the only thing on disk
+        // that says the record ended because the service ended it, and how.
+        // Written before the live marker is dropped, so that a session is
+        // never unclosed and unclaimed at the same time. A session without it,
+        // and not named as live, was interrupted - power loss, a killed
+        // process - and the clinical file derived from it will say so.
+        std::string closed;
+        closed += "{\n";
+        closed += "  \"session\": " + jsonString(session.id) + ",\n";
+        closed += "  \"closed\": " + jsonString(med::formatTimestamp(med::Clock::now())) + ",\n";
+        closed += "  \"reason\": " + jsonString(reason) + ",\n";
+        closed += "  \"frames\": " + std::to_string(session.frames) + ",\n";
+        closed += "  \"dropped\": " + std::to_string(session.dropped) + ",\n";
+        closed += "  \"viewer_missed\": " + std::to_string(session.viewerMissed) + "\n";
+        closed += "}\n";
+        const med::Status written = storage.writeString(session.dir + "/closed.json", closed);
+        if (written != med::Status::Ok) {
+            logger.error("session close marker could not be written",
+                         {{"session", session.id}, {"status", med::toString(written)}});
+        }
+        runtime.remove("session");
+        // What the unit that derives the clinical file watches for. Its
+        // content is not read: that program converts every closed session it
+        // finds, and this only says that there is one more.
+        runtime.writeString("last-closed", session.id + "\n");
+
+        logger.audit(med::AuditEvent::AcquisitionStopped, "acquisition session stopped",
+                     {{"session", session.id},
+                      {"reason", reason},
+                      {"frames", std::to_string(session.frames)},
+                      {"dropped", std::to_string(session.dropped)},
+                      // In the audit record and not only in a counter: a
+                      // viewer that missed frames is a statement about what
+                      // the operator saw, which is not the same as what was
+                      // recorded, and a reviewer of the session is entitled to
+                      // know the two differed.
+                      {"viewer missed", std::to_string(session.viewerMissed)}});
+        logger.audit(med::AuditEvent::PatientDataWritten, "session record closed",
+                     {{"session", session.id}, {"path", storage.basePath() + "/" + session.dir}});
+        session.open = false;
+    };
+
+    // One request in, one answer out. The answer is never optional and a
+    // request that is not understood whole is refused whole: an option this
+    // side does not know is not skipped, because the sender believes it was
+    // honoured.
+    auto answer = [&](const unsigned char* data, std::size_t length) -> std::vector<unsigned char> {
+        const med::Result<std::map<std::string, std::string>> decoded =
+            med::amp::decodeControl(data, length);
+        if (!decoded) {
+            logger.audit(med::AuditEvent::SecurityEvent, "control request refused",
+                         {{"reason", decoded.message()}});
+            return med::amp::encodeControlAck(1, decoded.message());
+        }
+        const std::map<std::string, std::string>& request = decoded.value();
+
+        auto refuse = [&](const std::string& key, const std::string& reason) {
+            // 1 + the position of the option at fault, in the order both
+            // sides iterate; 1 when the fault is the request as a whole.
+            std::uint16_t index = 1;
+            std::uint16_t position = 0;
+            for (const std::pair<const std::string, std::string>& entry : request) {
+                if (entry.first == key) {
+                    index = static_cast<std::uint16_t>(position + 1);
+                }
+                ++position;
+            }
+            logger.audit(med::AuditEvent::SecurityEvent, "control request refused",
+                         {{"verb", request.count("verb") != 0 ? request.at("verb") : ""},
+                          {"reason", reason}});
+            return med::amp::encodeControlAck(index, reason);
+        };
+
+        const std::map<std::string, std::string>::const_iterator verb = request.find("verb");
+        if (verb == request.end()) {
+            return refuse("", "the request names no verb");
+        }
+
+        if (verb->second == "session.start") {
+            for (const std::pair<const std::string, std::string>& entry : request) {
+                if (entry.first != "verb" && entry.first != "operator" && entry.first != "exam" &&
+                    entry.first != "subject") {
+                    return refuse(entry.first, "unknown option: " + entry.first);
+                }
+            }
+            if (session.open) {
+                return refuse("verb", "a session is already open: " + session.id);
+            }
+            const std::string failed = openSession(request);
+            if (!failed.empty()) {
+                return refuse("verb", failed);
+            }
+            return med::amp::encodeControlAck(0, "recording " + session.id);
+        }
+
+        if (verb->second == "session.stop" || verb->second == "session.status") {
+            if (request.size() != 1) {
+                return refuse("", verb->second + " takes no option");
+            }
+            if (verb->second == "session.status") {
+                // Not audited: a display asks this every second.
+                return med::amp::encodeControlAck(
+                    0, session.open ? "recording " + session.id + " " +
+                                          std::to_string(session.frames)
+                                    : std::string("idle"));
+            }
+            if (!session.open) {
+                return refuse("verb", "no session is open");
+            }
+            const std::string id = session.id;
+            const std::uint64_t recorded = session.frames;
+            closeSession("stop requested");
+            return med::amp::encodeControlAck(0, "closed " + id + " " + std::to_string(recorded));
+        }
+
+        return refuse("verb", "unknown verb: " + verb->second);
+    };
+
+    // For a bench routine that wants the old behaviour - a record for as long
+    // as the unit runs - and says so in the configuration it runs under. The
+    // shipped configuration says false, and a session then waits to be asked
+    // for.
+    if (config.getBool("session.autostart", false)) {
+        const std::string failed = openSession({});
+        if (!failed.empty()) {
+            return 1;
+        }
     }
 
-    logger.audit(med::AuditEvent::AcquisitionStarted, "acquisition session started",
-                 {{"session", sessionId}, {"driver", info.driver}, {"link", link}});
-
     std::vector<std::unique_ptr<med::MedicalIpcChannel>> clients;
+    std::vector<std::unique_ptr<med::MedicalIpcChannel>> controllers;
     std::vector<unsigned char> encoded;
-    std::uint64_t frames = 0;
-    std::uint64_t dropped = 0;
-    /// Frames a viewer could not keep up with. Not the same failure as
-    /// `dropped`, which counts frames that never reached the record: a viewer
-    /// missing a frame costs nothing clinically, and the only reason to count
-    /// it at all is that the alternative - waiting for the viewer - costs
-    /// samples.
-    std::uint64_t viewerMissed = 0;
+    std::uint64_t viewerMissedTotal = 0;
     /// Why the loop ended. A front-end that stops answering is a fault, and the
     /// exit status has to say so: this used to fall through to `return 0`, and
     /// with Restart=on-failure systemd read a clean exit and did not restart.
@@ -573,10 +784,6 @@ int main(int argc, char** argv) {
     /// good - the bridge came back, passed its self test, and nothing ever
     /// read it again, with the unit "inactive" rather than "failed".
     bool deviceFault = false;
-    med::LeadOff lastContact;
-    // What the link configured (the recipe derives it; see record.montage in
-    // the metadata), so that the audit names the electrode the bits mean.
-    const bool referential = config.getString("record.montage", "") == "referential";
 
     while (g_stopRequested == 0) {
         // Non-blocking: a viewer connecting or leaving must never stall the
@@ -586,6 +793,34 @@ int main(int argc, char** argv) {
         if (client) {
             logger.info("HMI client connected", {{"clients", std::to_string(clients.size() + 1)}});
             clients.push_back(client.take());
+        }
+
+        // Control, between two frames and never instead of one: the device
+        // read below stays what paces this loop, so a request waits at most
+        // one frame for its answer and costs acquisition nothing.
+        med::Result<std::unique_ptr<med::MedicalIpcChannel>> controller =
+            control.accept(std::chrono::milliseconds(0));
+        if (controller) {
+            controllers.push_back(controller.take());
+        }
+        for (std::size_t i = 0; i < controllers.size();) {
+            unsigned char request[1024];
+            const med::Result<std::size_t> received =
+                controllers[i]->receive(request, sizeof(request), std::chrono::milliseconds(0));
+            if (!received) {
+                if (received.status() == med::Status::Timeout) {
+                    ++i;
+                    continue;
+                }
+                controllers.erase(controllers.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            const std::vector<unsigned char> reply = answer(request, received.value());
+            if (controllers[i]->send(reply.data(), reply.size()) != med::Status::Ok) {
+                controllers.erase(controllers.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            ++i;
         }
 
         med::Result<med::SampleFrame> frame = device.read(std::chrono::milliseconds(500));
@@ -599,43 +834,48 @@ int main(int argc, char** argv) {
             deviceFault = true;
             break;
         }
-        ++frames;
-
-        // Electrode contact, audited when it changes and not per frame - once
-        // per frame would bury the trail. The per-frame status needs no line
-        // here: it is part of the encoded frame, so it is in the record.
-        const med::LeadOff& contact = frame.value().leadOff;
-        if (frames == 1 ? contact.monitored() : contact != lastContact) {
-            const bool detached =
-                contact.detachedPositive() != 0 || contact.detachedNegative() != 0;
-            const char* what = !contact.monitored() ? "electrode contact no longer monitored"
-                               : frames == 1        ? "electrode contact monitored"
-                               : detached           ? "electrode contact lost"
-                                                    : "electrode contact restored";
-            logger.audit(med::AuditEvent::ElectrodeContactChanged, what,
-                         {{"session", sessionId},
-                          {"sequence", std::to_string(frame.value().sequence)},
-                          {"monitored", describeElectrodes(contact.monitoredPositive,
-                                                           contact.monitoredNegative,
-                                                           referential)},
-                          {"detached", describeElectrodes(contact.detachedPositive(),
-                                                          contact.detachedNegative(),
-                                                          referential)}});
-        }
-        lastContact = contact;
 
         med::amp::encodeFrame(frame.value(), info.sampleRateHz, encoded);
 
-        // The record is written before it is published: what a clinician later
-        // reviews is authoritative, what the screen shows is a convenience.
-        const med::Status stored =
-            storage.append(sessionDir + "/raw.bin", encoded.data(), encoded.size());
-        if (stored != med::Status::Ok) {
-            ++dropped;
-            if (dropped == 1 || dropped % 100 == 0) {
-                logger.error("sample frame could not be persisted",
-                             {{"status", med::toString(stored)},
-                              {"dropped", std::to_string(dropped)}});
+        if (session.open) {
+            ++session.frames;
+
+            // Electrode contact, audited when it changes and not per frame -
+            // once per frame would bury the trail. The per-frame status needs
+            // no line here: it is part of the encoded frame, so it is in the
+            // record.
+            const med::LeadOff& contact = frame.value().leadOff;
+            if (session.frames == 1 ? contact.monitored() : contact != lastContact) {
+                const bool detached =
+                    contact.detachedPositive() != 0 || contact.detachedNegative() != 0;
+                const char* what = !contact.monitored()   ? "electrode contact no longer monitored"
+                                   : session.frames == 1 ? "electrode contact monitored"
+                                   : detached            ? "electrode contact lost"
+                                                         : "electrode contact restored";
+                logger.audit(med::AuditEvent::ElectrodeContactChanged, what,
+                             {{"session", session.id},
+                              {"sequence", std::to_string(frame.value().sequence)},
+                              {"monitored", describeElectrodes(contact.monitoredPositive,
+                                                               contact.monitoredNegative,
+                                                               referential)},
+                              {"detached", describeElectrodes(contact.detachedPositive(),
+                                                              contact.detachedNegative(),
+                                                              referential)}});
+            }
+            lastContact = contact;
+
+            // The record is written before it is published: what a clinician
+            // later reviews is authoritative, what the screen shows is a
+            // convenience.
+            const med::Status stored =
+                storage.append(session.dir + "/raw.bin", encoded.data(), encoded.size());
+            if (stored != med::Status::Ok) {
+                ++session.dropped;
+                if (session.dropped == 1 || session.dropped % 100 == 0) {
+                    logger.error("sample frame could not be persisted",
+                                 {{"status", med::toString(stored)},
+                                  {"dropped", std::to_string(session.dropped)}});
+                }
             }
         }
 
@@ -649,10 +889,13 @@ int main(int argc, char** argv) {
                 // previous behaviour, where a blocking write let the display
                 // set the sample rate and the record silently contained fewer
                 // samples than its own metadata claimed.
-                ++viewerMissed;
-                if (viewerMissed == 1 || viewerMissed % 250 == 0) {
+                ++viewerMissedTotal;
+                if (session.open) {
+                    ++session.viewerMissed;
+                }
+                if (viewerMissedTotal == 1 || viewerMissedTotal % 250 == 0) {
                     logger.info("HMI client is not keeping up with the sample stream",
-                                {{"missed frames", std::to_string(viewerMissed)},
+                                {{"missed frames", std::to_string(viewerMissedTotal)},
                                  {"clients", std::to_string(clients.size())}});
                 }
                 ++i;
@@ -672,49 +915,15 @@ int main(int argc, char** argv) {
 
     device.stop();
 
-    // The close marker, in the session directory: the only thing on disk that
-    // says the record ended because the service ended it, and how. Written
-    // before the live marker is dropped, so that a session is never unclosed
-    // and unclaimed at the same time. A session without it, and not named as
-    // live, was interrupted - power loss, a killed process - and the clinical
-    // file derived from it will say so.
-    {
-        std::string closed;
-        closed += "{\n";
-        closed += "  \"session\": " + jsonString(sessionId) + ",\n";
-        closed += "  \"closed\": " + jsonString(med::formatTimestamp(med::Clock::now())) + ",\n";
-        closed += "  \"reason\": " +
-                  jsonString(deviceFault ? "front-end fault" : "stop requested") + ",\n";
-        closed += "  \"frames\": " + std::to_string(frames) + ",\n";
-        closed += "  \"dropped\": " + std::to_string(dropped) + ",\n";
-        closed += "  \"viewer_missed\": " + std::to_string(viewerMissed) + "\n";
-        closed += "}\n";
-        const med::Status written = storage.writeString(sessionDir + "/closed.json", closed);
-        if (written != med::Status::Ok) {
-            logger.error("session close marker could not be written",
-                         {{"session", sessionId}, {"status", med::toString(written)}});
-        }
-    }
-    runtime.remove("session");
+    // A session still open when the service goes is closed by the service,
+    // and says why. It is a complete record of what was acquired until then.
+    closeSession(deviceFault ? "front-end fault" : "service stopped");
 
-    logger.audit(med::AuditEvent::AcquisitionStopped, "acquisition session stopped",
-                 {{"session", sessionId},
-                  {"reason", deviceFault ? "front-end fault" : "stop requested"},
-                  {"frames", std::to_string(frames)},
-                  {"dropped", std::to_string(dropped)},
-                  // In the audit record and not only in a counter: a viewer
-                  // that missed frames is a statement about what the operator
-                  // saw, which is not the same as what was recorded, and a
-                  // reviewer of the session is entitled to know the two
-                  // differed.
-                  {"viewer missed", std::to_string(viewerMissed)}});
-    logger.audit(med::AuditEvent::PatientDataWritten, "session record closed",
-                 {{"session", sessionId}, {"path", storage.basePath() + "/" + sessionDir}});
     logger.audit(med::AuditEvent::SystemStop, "EEG acquisition service stopped", {});
 
     // Non-zero so that the unit's Restart=on-failure brings acquisition back
     // when the front-end does. While it is absent each attempt fails its self
-    // test and leaves no session behind (device.start() runs before one is
-    // created), so the retries cost a log line each and nothing in the record.
+    // test and leaves no session behind, so the retries cost a log line each
+    // and nothing in the record.
     return deviceFault ? 1 : 0;
 }
