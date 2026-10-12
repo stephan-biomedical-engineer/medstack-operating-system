@@ -69,14 +69,26 @@ receita `pcmanfm_1.3.2.bb` tem `REQUIRED_DISTRO_FEATURES = "x11"`, por causa do
 receita em 2026-10-11, depois de a rota já ter sido escolhida - o mesmo erro de método que o
 plano do front-end registra: concluir sobre uma receita sem abri-la.
 
-| Candidato | Situação |
+| Candidato | Situação, lida nos fontes e nas receitas em 2026-10-11 |
 |---|---|
-| **PCManFM-Qt** (LXQt) | Qt6, que a imagem já tem, e Wayland nativo. Sem receita nas camadas: `pcmanfm-qt`, `libfm-qt` e `lxqt-build-tools` a escrever (o `menu-cache` existe) |
-| **Thunar** (`meta-xfce`) | a receita aceita Wayland (`ANY_OF_DISTRO_FEATURES` do GTK3), mas depende de `xfce4-panel`, `exo` e `libxfce4ui`, cujas classes exigem `x11`. A conferir se a cadeia fecha sem ele |
-| PCManFM (GTK) sem X11 | exigiria remover o Xlib do programa: é manter um *fork* |
+| **PCManFM-Qt** 2.1.0 (LXQt) | **Não constrói sem X11.** `libfm-qt` tem `find_package(XCB REQUIRED)` (até a 2.4.0) e inclui `<xcb/xcb.h>`; `pcmanfm-qt` inclui `<X11/Xlib.h>` e usa `QNativeInterface::QX11Application`, que só existe num Qt construído com o plugin xcb. O `libxcb` desta série tem `REQUIRED_DISTRO_FEATURES = "x11"`. Roda em Wayland, mas é **compilado** contra o X. E a cadeia são seis receitas, não três: `lxqt-build-tools`, `lxqt-menu-data`, `libfm-qt`, `extra-cmake-modules`, `layer-shell-qt`, `pcmanfm-qt`, mais `qttools-native` |
+| **Thunar** 4.19 (`meta-xfce`) | A receita aceita Wayland, mas depende de `xfce4-panel`, cujo `DEPENDS` tem `virtual/libx11`. E habilitar a `meta-xfce` traz, por `LAYERDEPENDS`, a `meta-gnome` e a `meta-multimedia` |
+| PCManFM (GTK), do `poky` | `REQUIRED_DISTRO_FEATURES = "x11"` e Xlib no próprio programa |
+| Nautilus (`meta-gnome`) | `REQUIRED_DISTRO_FEATURES = "x11 opengl …"` e a cadeia do GNOME |
 
-A escolha é da Fase D0, por qual cadeia de dependências fecha sem `x11`. O favorito é o
-PCManFM-Qt, por não trazer um segundo toolkit para a imagem.
+**Nenhum gerenciador de arquivos de uso geral desta série constrói, como empacotado, sem as
+bibliotecas do X11.** É a segunda vez neste plano que um candidato foi nomeado antes de os seus
+arquivos de build serem abertos - o PCManFM primeiro, o PCManFM-Qt depois, este dito "Wayland
+nativo" e de "três receitas". As duas afirmações eram falsas e foram feitas ao operador.
+
+O que resta são quatro caminhos, e a escolha é de projeto:
+
+| Caminho | O que é | Custo |
+|---|---|---|
+| **A. Um navegador de registros próprio** | programa pequeno em Qt, deste repositório: lista as sessões da árvore de revisão, abre uma no EDFbrowser, copia para um pendrive | código nosso, sem SOUP e sem biblioteca do X. **Não é um gerenciador de arquivos de uso geral** |
+| B. PCManFM-Qt com o X11 retirado por *patch* | `#ifdef` em `libfm-qt` e `pcmanfm-qt`, mantidos por nós a cada versão | seis receitas e dois *forks* de fato |
+| C. Bibliotecas clientes do X na imagem, sem servidor | `libxcb`/`libX11` e um Qt com xcb, sem Xorg e sem Xwayland | exige `x11` nas `DISTRO_FEATURES` (política do MedOS, recompila tudo), ou derrubar a exigência receita por receita. "Sem X11" vira "sem servidor X" |
+| D. Thunar sem o painel | receitas próprias ou `bbappend`, se o Thunar e a `libxfce4ui` 4.19 fecharem sem X | não verificado; três camadas a mais no parse |
 
 ### 2.2 Onde isso mora
 
