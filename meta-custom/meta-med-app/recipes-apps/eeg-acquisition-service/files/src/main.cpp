@@ -20,6 +20,7 @@
 // changes one value in a configuration file. That is the number the
 // portability metric of the thesis reports.
 
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 #include <cstdio>
@@ -332,21 +333,25 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "eeg-acquisition-service: %s\n", deviceResult.message().c_str());
         return 1;
     }
-    med::MedicalDevice& device = *deviceResult.value();
+    // Held by a handle that can be replaced: changing a front-end setting is
+    // closing this device and opening another with other options, which is
+    // the only way a driver is ever configured.
+    std::unique_ptr<med::MedicalDevice> deviceHandle = deviceResult.take();
+    med::MedicalDevice* device = deviceHandle.get();
 
-    const med::Status selfTest = device.selfTest();
+    const med::Status selfTest = device->selfTest();
     if (selfTest != med::Status::Ok) {
         logger.audit(med::AuditEvent::SelfTestFailed, "front-end self test failed",
                      {{"driver", deviceConfig.driver},
                       {"status", med::toString(selfTest)},
-                      {"detail", device.lastError()}});
+                      {"detail", device->lastError()}});
         return 1;
     }
     logger.audit(med::AuditEvent::SelfTestPassed, "front-end self test passed",
-                 {{"driver", device.info().driver},
-                  {"model", device.info().model},
-                  {"channels", std::to_string(device.info().channelCount)},
-                  {"sample rate hz", std::to_string(device.info().sampleRateHz)}});
+                 {{"driver", device->info().driver},
+                  {"model", device->info().model},
+                  {"channels", std::to_string(device->info().channelCount)},
+                  {"sample rate hz", std::to_string(device->info().sampleRateHz)}});
 
     // --------------------------------------------------------------- storage
     med::StorageConfig storageConfig;
@@ -425,11 +430,11 @@ int main(int argc, char** argv) {
     // goes into the audit record: the driver knows exactly which setting was
     // refused, and "refused to start" alone sent that diagnosis to a shell.
     {
-        const med::Status started = device.start();
+        const med::Status started = device->start();
         if (started != med::Status::Ok) {
             logger.audit(med::AuditEvent::DeviceFault, "front-end refused to start",
                          {{"status", med::toString(started)},
-                          {"detail", device.lastError()}});
+                          {"detail", device->lastError()}});
             return 1;
         }
     }
@@ -445,7 +450,7 @@ int main(int argc, char** argv) {
     // booted slot good (rauc-mark-good.service) only once that target is
     // reached - so a slot whose acquisition never starts is never confirmed,
     // and the bootloader falls back when its attempts run out. This used to
-    // call markBootedGood() itself, before device.start(), and both halves were
+    // call markBootedGood() itself, before device->start(), and both halves were
     // wrong: on the board, start() failed 54 times and the slot was confirmed
     // on every one, and rauc-mark-good.service had already confirmed it at
     // 12.9 s, before this service ran at all. One writer of the bootloader's
@@ -456,11 +461,97 @@ int main(int argc, char** argv) {
                     {{"status", med::toString(ready)}});
     }
 
-    const med::DeviceInfo info = device.info();
+    med::DeviceInfo info = device->info();
     const std::string link = config.getString("acquisition.link", "unknown");
     // What the link configured (the recipe derives it; see record.montage in
     // the metadata), so that the audit names the electrode the bits mean.
-    const bool referential = config.getString("record.montage", "") == "referential";
+    bool referential = config.getString("record.montage", "") == "referential";
+
+    // ------------------------------------------------------------- choices
+    // What an operator may choose instead of the shipped prescription: a
+    // second sealed store beside the configuration, derived by the build for
+    // this link, each row already in the words the link understands. This
+    // program picks a row and applies it as written. It translates nothing,
+    // which is why its source is the same on every link.
+    //
+    // Absent is a state, not a fault: a bench configuration in /run has no
+    // table beside it, and then nothing can be chosen.
+    std::unique_ptr<med::MedicalConfiguration> choices;
+    {
+        const std::string::size_type slash = configPath.rfind('/');
+        const std::string beside =
+            (slash == std::string::npos ? std::string() : configPath.substr(0, slash + 1)) +
+            "eeg-choices.conf";
+        med::Result<std::unique_ptr<med::MedicalConfiguration>> loaded =
+            med::MedicalConfiguration::load(beside, true);
+        if (loaded) {
+            choices = loaded.take();
+            logger.info("table of choices verified",
+                        {{"digest", choices->digest()},
+                         {"choices", choices->getString("choices.count", "0")}});
+        } else {
+            logger.info("no table of choices beside this configuration; the prescription is fixed",
+                        {{"store", beside}, {"detail", loaded.message()}});
+        }
+    }
+
+    // The keys a choice is made of, and what is in force for each when it is
+    // not the sealed configuration's own value. Empty until a choice is made.
+    std::vector<std::string> choiceKeys;
+    if (choices) {
+        const std::string listed = choices->getString("choices.keys", "");
+        std::size_t begin = listed.find_first_not_of(' ');
+        while (begin != std::string::npos) {
+            const std::size_t end = listed.find(' ', begin);
+            choiceKeys.push_back(listed.substr(begin, end - begin));
+            begin = end == std::string::npos ? end : listed.find_first_not_of(' ', end);
+        }
+    }
+    std::map<std::string, std::string> effective;
+    std::string affirmedSwitch;
+    long currentChoice = -1;
+
+    // A key as it is in force now: the choice's value where one was made, the
+    // sealed configuration's otherwise.
+    auto inForce = [&](const std::string& key) -> med::Result<std::string> {
+        const std::map<std::string, std::string>::const_iterator chosen = effective.find(key);
+        if (chosen != effective.end()) {
+            return med::Result<std::string>::ok(chosen->second);
+        }
+        return config.getString(key);
+    };
+    auto inForceJson = [&](const std::string& key) -> std::string {
+        const med::Result<std::string> text = inForce(key);
+        if (!text) {
+            return "null";
+        }
+        return isJsonNumber(text.value()) ? text.value() : jsonString(text.value());
+    };
+    auto choiceMatching = [&](const std::map<std::string, std::string>& wanted) -> long {
+        const long count = choices ? choices->getInt("choices.count", 0) : 0;
+        for (long index = 0; index < count; ++index) {
+            bool same = true;
+            for (const std::string& key : choiceKeys) {
+                const std::string value = choices->getString(
+                    "choice." + std::to_string(index) + "." + key, "");
+                if (wanted.count(key) == 0 || wanted.at(key) != value) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) {
+                return index;
+            }
+        }
+        return -1;
+    };
+    if (choices) {
+        std::map<std::string, std::string> shipped;
+        for (const std::string& key : choiceKeys) {
+            shipped[key] = config.getString(key, "");
+        }
+        currentChoice = choiceMatching(shipped);
+    }
 
     // --------------------------------------------------------------- control
     // A second socket, apart from the sample stream: watching is not
@@ -509,6 +600,26 @@ int main(int argc, char** argv) {
     };
     Session session;
     med::LeadOff lastContact;
+
+    // What a session must leave free on the record volume. The volume used to
+    // be written until its last byte: on the board, 2026-10-11, fifteen
+    // sessions nobody had asked for filled it, frames were dropped by the
+    // hundred, a clinical file was left half derived - and the update that
+    // would have fixed the service could not be installed, because the
+    // updater keeps its own state on the same volume and had nowhere to write
+    // it. A record that stops with room to spare is a complete record of less;
+    // one that runs into the end of the disk takes other things with it.
+    const std::uint64_t reserveBytes =
+        static_cast<std::uint64_t>(std::max<long long>(0, config.getInt("storage.reserve_mib", 32))) *
+        1024ULL * 1024ULL;
+    auto freeBytes = [&]() -> std::uint64_t {
+        const med::Result<med::StorageInfo> volume = storage.info();
+        // Unknown is not "plenty": a volume that cannot be asked is treated as
+        // full, so that the reserve fails towards not recording.
+        return volume ? volume.value().availableBytes : 0;
+    };
+    /// Set when a change of prescription left no front-end running at all.
+    bool frontEndLost = false;
 
     auto optional = [](const std::map<std::string, std::string>& request, const char* key) {
         const std::map<std::string, std::string>::const_iterator found = request.find(key);
@@ -561,15 +672,15 @@ int main(int argc, char** argv) {
         // converts this session reads it here and nowhere else - not from an
         // eeg.conf that may have changed since - and refuses a session where
         // it is null.
-        metadata += "  \"full_scale_uv\": " + jsonValue(config, "record.full_scale_uv") + ",\n";
-        metadata += "  \"resolution_bits\": " + jsonValue(config, "record.resolution_bits") + ",\n";
+        metadata += "  \"full_scale_uv\": " + inForceJson("record.full_scale_uv") + ",\n";
+        metadata += "  \"resolution_bits\": " + inForceJson("record.resolution_bits") + ",\n";
 
         // The montage the link actually configured, and the names the
         // operator declared for the electrodes. null where nothing was
         // declared: generic labels, which is a statement about the record and
         // not a gap in it.
-        metadata += "  \"montage\": " + jsonValue(config, "record.montage") + ",\n";
-        metadata += "  \"prefiltering\": " + jsonValue(config, "record.prefiltering") + ",\n";
+        metadata += "  \"montage\": " + inForceJson("record.montage") + ",\n";
+        metadata += "  \"prefiltering\": " + inForceJson("record.prefiltering") + ",\n";
         {
             const std::string declared = config.getString("montage.electrodes", "");
             std::string list;
@@ -593,7 +704,7 @@ int main(int argc, char** argv) {
             for (const std::string& key : config.keys()) {
                 if (key.rfind("afe.", 0) == 0) {
                     prescription += std::string(prescription.empty() ? "" : ",\n") + "    " +
-                                    jsonString(key) + ": " + jsonValue(config, key);
+                                    jsonString(key) + ": " + inForceJson(key);
                 }
             }
             metadata += "  \"prescription\": {" +
@@ -616,7 +727,17 @@ int main(int argc, char** argv) {
         // an identity. null where the request named none.
         metadata += "  \"affirmed_operator\": " + optional(request, "operator") + ",\n";
         metadata += "  \"affirmed_exam\": " + optional(request, "exam") + ",\n";
-        metadata += "  \"affirmed_subject\": " + optional(request, "subject") + "\n";
+        metadata += "  \"affirmed_subject\": " + optional(request, "subject") + ",\n";
+
+        // Whether the prescription above is the one this device shipped with
+        // or one an operator chose from the sealed table, and - for a setting
+        // whose other half is a manual switch no software can read - where
+        // the operator SAID the switch was. Affirmed, like the names.
+        metadata += "  \"prescription_source\": " +
+                    jsonString(effective.empty() ? "factory" : "operator choice") + ",\n";
+        metadata += "  \"affirmed_reference_switch\": " +
+                    (affirmedSwitch.empty() ? std::string("null") : jsonString(affirmedSwitch)) +
+                    "\n";
         metadata += "}\n";
         const med::Status written = storage.writeString(session.dir + "/metadata.json", metadata);
         if (written != med::Status::Ok) {
@@ -732,6 +853,15 @@ int main(int argc, char** argv) {
             if (session.open) {
                 return refuse("verb", "a session is already open: " + session.id);
             }
+            {
+                const std::uint64_t available = freeBytes();
+                if (available < reserveBytes) {
+                    return refuse("verb", "record volume has " +
+                                              std::to_string(available / (1024 * 1024)) +
+                                              " MiB free, under the reserve of " +
+                                              std::to_string(reserveBytes / (1024 * 1024)));
+                }
+            }
             const std::string failed = openSession(request);
             if (!failed.empty()) {
                 return refuse("verb", failed);
@@ -757,6 +887,161 @@ int main(int argc, char** argv) {
             const std::uint64_t recorded = session.frames;
             closeSession("stop requested");
             return med::amp::encodeControlAck(0, "closed " + id + " " + std::to_string(recorded));
+        }
+
+        if (verb->second == "device.prescription") {
+            if (request.size() != 1) {
+                return refuse("", verb->second + " takes no option");
+            }
+            return med::amp::encodeControlAck(
+                0, currentChoice >= 0 ? "choice " + std::to_string(currentChoice)
+                                      : std::string("unlisted"));
+        }
+
+        if (verb->second == "session.configure") {
+            if (!choices) {
+                return refuse("verb", "this configuration has no table of choices");
+            }
+            // Not in the middle of a record: its metadata states one
+            // prescription, and a record whose second half was acquired under
+            // another would be false about itself. Another setting is another
+            // session.
+            if (session.open) {
+                return refuse("verb", "a session is open; close it to change a setting");
+            }
+
+            // What is wanted: every key of a choice, as asked for where the
+            // request names it and as in force where it does not.
+            std::map<std::string, std::string> wanted;
+            std::map<std::string, std::string> before;
+            for (const std::string& key : choiceKeys) {
+                const med::Result<std::string> now = inForce(key);
+                before[key] = now ? now.value() : std::string();
+                wanted[key] = request.count(key) != 0 ? request.at(key) : before[key];
+            }
+            // What may ride along: for a setting that needs it, the word the
+            // sealed table says must be stated.
+            std::map<std::string, std::string> affirmations;
+            for (const std::string& key : choiceKeys) {
+                const std::string name = choices->getString("choices.affirm." + key, "");
+                if (!name.empty()) {
+                    affirmations[name] = key;
+                }
+            }
+            for (const std::pair<const std::string, std::string>& entry : request) {
+                if (entry.first != "verb" && wanted.count(entry.first) == 0 &&
+                    affirmations.count(entry.first) == 0) {
+                    return refuse(entry.first, "unknown option: " + entry.first);
+                }
+            }
+            for (const std::pair<const std::string, std::string>& entry : affirmations) {
+                if (wanted[entry.second] != before[entry.second] &&
+                    (request.count(entry.first) == 0 || request.at(entry.first).empty())) {
+                    return refuse(entry.second,
+                                  "state " + entry.first + " to change " + entry.second);
+                }
+            }
+
+            const long index = choiceMatching(wanted);
+            if (index < 0) {
+                // Named by the first setting the request touched, which is
+                // what the person asking can act on.
+                std::string touched;
+                for (const std::string& key : choiceKeys) {
+                    if (request.count(key) != 0) {
+                        touched = key;
+                        break;
+                    }
+                }
+                return refuse(touched, "not offered on this link in this combination");
+            }
+            if (index == currentChoice) {
+                return med::amp::encodeControlAck(0, "choice " + std::to_string(index));
+            }
+
+            // Apply: the device is closed and another opened with the row's
+            // options, exactly as written. If the front-end refuses them the
+            // previous options go back, and the refusal goes to whoever asked
+            // - a setting that cannot be had defeats the request, never the
+            // acquisition that was running before it.
+            const std::string prefix = "choice." + std::to_string(index) + ".";
+            const std::string optionPrefix = prefix + "device.option.";
+            med::DeviceConfig candidate = deviceConfig;
+            candidate.driverOptions.clear();
+            for (const std::string& key : choices->keys()) {
+                if (key.rfind(optionPrefix, 0) == 0) {
+                    candidate.driverOptions[key.substr(optionPrefix.size())] =
+                        choices->getString(key, "");
+                }
+            }
+
+            device->stop();
+            std::string failure;
+            med::Result<std::unique_ptr<med::MedicalDevice>> replacement =
+                med::MedicalDeviceFactory::create(candidate);
+            if (!replacement) {
+                failure = replacement.message();
+            } else {
+                const med::Status started = replacement.value()->start();
+                if (started != med::Status::Ok) {
+                    failure = replacement.value()->lastError();
+                    if (failure.empty()) {
+                        failure = med::toString(started);
+                    }
+                }
+            }
+            if (!failure.empty()) {
+                replacement = med::MedicalDeviceFactory::create(deviceConfig);
+                if (!replacement || replacement.value()->start() != med::Status::Ok) {
+                    // Neither the new prescription nor the old one: there is
+                    // no front-end to go on with. Said as a fault, and the
+                    // unit's restart policy takes it from here.
+                    logger.audit(med::AuditEvent::DeviceFault,
+                                 "front-end did not return to its previous prescription",
+                                 {{"refused", failure}});
+                    frontEndLost = true;
+                    return refuse("verb", "front-end refused: " + failure);
+                }
+                deviceHandle = replacement.take();
+                device = deviceHandle.get();
+                return refuse("verb", "front-end refused: " + failure);
+            }
+
+            deviceHandle = replacement.take();
+            device = deviceHandle.get();
+            deviceConfig = candidate;
+            info = device->info();
+
+            std::string was;
+            std::string now;
+            for (const std::string& key : choiceKeys) {
+                was += (was.empty() ? "" : " ") + key + "=" + before[key];
+                now += (now.empty() ? "" : " ") + key + "=" + wanted[key];
+                effective[key] = wanted[key];
+            }
+            const std::string recordPrefix = prefix + "record.";
+            for (const std::string& key : choices->keys()) {
+                if (key.rfind(recordPrefix, 0) == 0) {
+                    effective["record." + key.substr(recordPrefix.size())] =
+                        choices->getString(key, "");
+                }
+            }
+            referential = effective.count("record.montage") != 0 &&
+                          effective.at("record.montage") == "referential";
+            for (const std::pair<const std::string, std::string>& entry : affirmations) {
+                if (request.count(entry.first) != 0) {
+                    affirmedSwitch = request.at(entry.first);
+                }
+            }
+            currentChoice = index;
+
+            logger.audit(med::AuditEvent::ConfigurationChanged,
+                         "front-end prescription changed on request",
+                         {{"choice", std::to_string(index)},
+                          {"before", was},
+                          {"after", now},
+                          {"affirmed reference switch", affirmedSwitch}});
+            return med::amp::encodeControlAck(0, "choice " + std::to_string(index));
         }
 
         return refuse("verb", "unknown verb: " + verb->second);
@@ -823,7 +1108,12 @@ int main(int argc, char** argv) {
             ++i;
         }
 
-        med::Result<med::SampleFrame> frame = device.read(std::chrono::milliseconds(500));
+        if (frontEndLost) {
+            deviceFault = true;
+            break;
+        }
+
+        med::Result<med::SampleFrame> frame = device->read(std::chrono::milliseconds(500));
         if (!frame) {
             if (frame.status() == med::Status::Timeout) {
                 continue;
@@ -836,6 +1126,16 @@ int main(int argc, char** argv) {
         }
 
         med::amp::encodeFrame(frame.value(), info.sampleRateHz, encoded);
+
+        // Looked at every few seconds, not every frame: the reserve is tens of
+        // megabytes and a session writes a few kilobytes a second.
+        if (session.open && session.frames % 64 == 63 && freeBytes() < reserveBytes) {
+            logger.audit(med::AuditEvent::DeviceFault,
+                         "record volume reached its reserve; the session was closed",
+                         {{"session", session.id},
+                          {"reserve mib", std::to_string(reserveBytes / (1024 * 1024))}});
+            closeSession("record volume full");
+        }
 
         if (session.open) {
             ++session.frames;
@@ -913,7 +1213,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    device.stop();
+    device->stop();
 
     // A session still open when the service goes is closed by the service,
     // and says why. It is a complete record of what was acquired until then.

@@ -23,6 +23,8 @@ qt_add_executable(eeg-hmi-gui
     src/main.cpp
     src/EegClient.cpp
     src/EegClient.h
+    src/PrescriptionTable.cpp
+    src/PrescriptionTable.h
     src/ReviewRequest.cpp
     src/ReviewRequest.h
     src/SessionControl.cpp
@@ -41,6 +43,8 @@ qt_add_resources(eeg-hmi-gui "qml"
         qml/Stat.qml
         qml/LaneLabel.qml
         qml/Field.qml
+        qml/Keypad.qml
+        qml/SettingsPanel.qml
 )
 
 target_compile_options(eeg-hmi-gui PRIVATE -Wall -Wextra)

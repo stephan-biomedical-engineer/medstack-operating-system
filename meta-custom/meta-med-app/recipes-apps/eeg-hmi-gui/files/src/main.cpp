@@ -14,6 +14,7 @@
 #include <QUrl>
 
 #include "EegClient.h"
+#include "PrescriptionTable.h"
 #include "ReviewRequest.h"
 #include "SessionControl.h"
 #include "WaveformItem.h"
@@ -38,10 +39,16 @@ int main(int argc, char* argv[]) {
     SessionControl sessions(qEnvironmentVariable(
         "MED_EEG_CONTROL_SOCKET", QStringLiteral("/run/medplatform/eeg-control.sock")));
 
+    // What the front-end can be set to on this link: the table the service
+    // chooses from, read and verified here only to be shown.
+    PrescriptionTable prescriptions(qEnvironmentVariable(
+        "MED_EEG_CHOICES", QStringLiteral("/etc/medplatform/eeg-choices.conf")));
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("eeg"), &client);
     engine.rootContext()->setContextProperty(QStringLiteral("review"), &review);
     engine.rootContext()->setContextProperty(QStringLiteral("sessions"), &sessions);
+    engine.rootContext()->setContextProperty(QStringLiteral("prescriptions"), &prescriptions);
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
 
     if (engine.rootObjects().isEmpty()) {

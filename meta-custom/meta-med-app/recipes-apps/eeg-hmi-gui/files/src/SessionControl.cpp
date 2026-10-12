@@ -93,7 +93,55 @@ void SessionControl::applyStatus(const Answer& answer) {
 }
 
 void SessionControl::refresh() {
+    // What the screen is told, before: the service is asked every second and
+    // answers the same thing almost every time, and an answer that changed
+    // nothing must not make the engine re-evaluate everything bound to this
+    // object. Measured on the board with the signal announced every second
+    // regardless: 1.5 s of GUI thread in 20 s, against 0.4 s before this
+    // object existed.
+    const bool wasReachable = reachable_;
+    const bool wasRecording = recording_;
+    const QString wasSession = session_;
+    const qulonglong wasFrames = frames_;
+    const int wasElapsed = elapsedSeconds_;
+    const int wasChoice = choice_;
+    const QString wasMessage = message_;
+    const bool wasRefused = refused_;
+
     applyStatus(ask({{"verb", "session.status"}}));
+
+    // "choice <row>", or "unlisted".
+    choice_ = -1;
+    if (reachable_) {
+        const Answer prescription = ask({{"verb", "device.prescription"}});
+        const QStringList words =
+            prescription.detail.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (prescription.delivered && prescription.accepted && words.size() == 2 &&
+            words.at(0) == QLatin1String("choice")) {
+            bool isNumber = false;
+            const int row = words.at(1).toInt(&isNumber);
+            choice_ = isNumber ? row : -1;
+        }
+    }
+
+    if (wasReachable != reachable_ || wasRecording != recording_ || wasSession != session_ ||
+        wasFrames != frames_ || wasElapsed != elapsedSeconds_ || wasChoice != choice_ ||
+        wasMessage != message_ || wasRefused != refused_) {
+        emit changed();
+    }
+}
+
+void SessionControl::configure(const QVariantMap& settings) {
+    std::map<std::string, std::string> request = {{"verb", "session.configure"}};
+    for (QVariantMap::const_iterator it = settings.constBegin(); it != settings.constEnd(); ++it) {
+        request[it.key().toStdString()] = it.value().toString().toStdString();
+    }
+    const Answer answer = ask(request);
+    refused_ = !(answer.delivered && answer.accepted);
+    message_ = !answer.delivered ? QStringLiteral("the acquisition service did not answer")
+               : answer.accepted ? QStringLiteral("front-end settings applied")
+                                 : answer.detail;
+    refresh();
     emit changed();
 }
 
@@ -111,6 +159,9 @@ void SessionControl::start(const QString& operatorName, const QString& exam) {
                : answer.accepted ? QStringLiteral("recording")
                                  : answer.detail;
     refresh();
+    // Said whatever refresh() found: the answer to a request is news even
+    // when it changed nothing - a refusal, most of all.
+    emit changed();
 }
 
 void SessionControl::stop() {
@@ -126,4 +177,7 @@ void SessionControl::stop() {
                            .arg(words.at(1), words.at(2))
                      : QStringLiteral("saved");
     refresh();
+    // Said whatever refresh() found: the answer to a request is news even
+    // when it changed nothing - a refusal, most of all.
+    emit changed();
 }

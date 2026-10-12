@@ -428,6 +428,75 @@ EEG_CHECKS = [
      'test "$A" = 8 && test "$B" = NEGADO && test "$C" = NEGADO && test "$D" = NEGADO && '
      'test "$L" = 2 && echo REVISAO_OK',
      rx(r"REVISAO_OK")),
+
+    # Uma configuração do front-end escolhida em runtime
+    # (implementation_plan_hmi_desktop.md, Fase C). A última, porque abre e
+    # fecha uma sessão própria. Sete pernas, e cada uma é um jeito de isto
+    # estar errado: a escolha é aceita; um valor fora da tabela selada é
+    # recusado; uma troca no meio de uma sessão é recusada; a sessão gravada
+    # sob a escolha DECLARA a escolha (fundo de escala e prescrição) e diz
+    # que não é a de fábrica; a troca foi auditada; o serviço não reiniciou;
+    # e a configuração de fábrica volta ao ser pedida.
+    #
+    # No link simulado o fundo de escala é a referência sobre o ganho,
+    # 4500000 / 12 = 375000 uV - um número que só aparece se o dispositivo
+    # foi de fato reaberto com as opções da linha escolhida.
+    ("configure-choice", "uma configuração do front-end é escolhida, ou recusada com motivo",
+     'A=$(medctl session.configure afe.gain=12); EA=$?; '
+     'B=$(medctl session.configure afe.gain=3 2>&1); EB=$?; '
+     'medctl session.start exam=configure >/dev/null; sleep 3; '
+     'C=$(medctl session.configure afe.gain=24 2>&1); EC=$?; '
+     'medctl session.stop >/dev/null; Q=$(medctl device.prescription); '
+     'echo "aceita=[$A]/$EA fora=[$B]/$EB aberta=[$C]/$EC agora=[$Q]"; '
+     'test $EA = 0 && test $EB = 1 && test $EC = 1 && test "$Q" = "$A" && echo CONFIGURE_OK',
+     rx(r"CONFIGURE_OK")),
+
+    # A segunda metade, sobre a sessão que a de cima gravou: o registro
+    # declara a escolha, a troca foi auditada, a de fábrica volta, e o
+    # serviço não reiniciou em nenhum momento. Separada da primeira por uma
+    # razão que não é de projeto: as duas juntas passavam de 1024 caracteres,
+    # que é quanto o shell do alvo aceita numa linha - a linha chegava cortada,
+    # o shell ficava esperando o resto, e a asserção reprovava por "sem
+    # resposta do guest" um serviço que tinha feito tudo certo.
+    ("configure-record", "a sessão gravada sob uma escolha a declara, e a de fábrica volta",
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'F=$(sed -n "s/.*\\"full_scale_uv\\": \\([0-9.]*\\).*/\\1/p" $S/metadata.json); '
+     'G=$(grep -c "\\"afe.gain\\": 12" $S/metadata.json); '
+     'P=$(grep -c "operator choice" $S/metadata.json); '
+     'J=$(journalctl -b -o cat MED_AUDIT_EVENT=CONFIGURATION_CHANGED | grep -c "prescription changed"); '
+     'D=$(medctl session.configure afe.gain=24); ED=$?; Q=$(medctl device.prescription); '
+     'N=$(systemctl show eeg-acquisition.service -p NRestarts --value); '
+     'F0=$(grep "^choices.factory" /etc/medplatform/eeg-choices.conf | tr -dc 0-9); '
+     'echo "escala=$F ganho=$G fonte=$P auditadas=$J volta=[$D]/$ED agora=[$Q] fabrica=$F0 reinicios=$N"; '
+     'test "$F" = 375000 && test "$G" = 1 && test "$P" = 1 && test "$J" -ge 1 && '
+     'test $ED = 0 && test "$N" = 0 && test "$Q" = "choice $F0" && echo RECORD_OK',
+     rx(r"RECORD_OK")),
+
+    # A reserva do volume de registros, com o volume quase cheio de verdade:
+    # um arquivo de enchimento que deixa 16 MiB livres, metade da reserva. Não
+    # até o último octeto - a reserva existe para que o serviço feche a sessão
+    # ENQUANTO ainda há onde escrever o marcador de fechamento, e um disco
+    # enchido de fora num segundo não é o caso que ela cobre. Três pernas - uma sessão em
+    # curso é FECHADA pelo serviço, como registro completo e com o motivo no
+    # marcador; uma sessão nova é recusada; e, liberado o espaço, o serviço
+    # volta a aceitar sem ter reiniciado. Existe porque isto aconteceu na
+    # placa em 2026-10-11 sem reserva nenhuma: quadros perdidos, um arquivo
+    # clínico pela metade e uma atualização que não instalava, porque o
+    # atualizador guarda o estado dele no mesmo volume.
+    ("storage-reserve", "com o volume cheio a sessão fecha inteira e outra é recusada",
+     'medctl session.start exam=reserve >/dev/null; sleep 2; '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'A=$(df -m /data | tail -n 1 | tr -s " " | cut -d" " -f4); '
+     'dd if=/dev/zero of=/data/enchimento bs=1M count=$((A - 16)) 2>/dev/null; sync; '
+     'for i in $(seq 1 20); do test -e $S/closed.json && break; sleep 1; done; '
+     'C=$(grep -c "record volume full" $S/closed.json 2>/dev/null); '
+     'R=$(medctl session.start exam=cheio 2>&1); E=$?; '
+     'rm -f /data/enchimento; sync; '
+     'G=$(medctl session.start exam=livre); EG=$?; medctl session.stop >/dev/null; '
+     'N=$(systemctl show eeg-acquisition.service -p NRestarts --value); '
+     'echo "fechada=$C recusa=[$R]/$E depois=[$G]/$EG reinicios=$N"; '
+     'test "$C" = 1 && test $E = 1 && test $EG = 0 && test "$N" = 0 && echo RESERVE_OK',
+     rx(r"RESERVE_OK")),
 ]
 
 PROFILES = {
@@ -528,6 +597,16 @@ def main():
     argv = target.split()
     if os.environ.get("NATIVE") == "1":
         argv.append("NATIVE=1")
+
+    # Uma linha de comando que o shell do alvo não aceita inteira é um
+    # defeito da suíte, e é melhor dito aqui, em um segundo, do que depois de
+    # um boot e de um timeout de 90 s que não diz por quê. O limite do editor
+    # de linha do alvo é 1024; os marcadores que run() acrescenta levam ~80.
+    too_long = [(cid, len(command)) for cid, _, command, _ in checks if len(command) > 900]
+    if too_long:
+        print("FALHA: comando longo demais para o shell do alvo (limite 900): " +
+              ", ".join(f"{cid} ({n})" for cid, n in too_long), file=sys.stderr)
+        return 2
 
     print(f"== MedPlatform :: suite de aceitação em runtime :: perfil {profile} ==\n")
     print("bootando a imagem QEMU ...", flush=True)

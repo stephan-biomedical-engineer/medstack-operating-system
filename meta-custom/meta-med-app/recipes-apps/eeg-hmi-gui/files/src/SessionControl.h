@@ -16,6 +16,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <map>
 #include <string>
@@ -34,6 +35,9 @@ class SessionControl : public QObject {
     /// Seconds since this display first saw the session open. Its own clock,
     /// for the operator's eye; the record's duration is the record's.
     Q_PROPERTY(int elapsedSeconds READ elapsedSeconds NOTIFY changed)
+    /// The row of the sealed table of choices the service says is in force,
+    /// or -1 when it says none is.
+    Q_PROPERTY(int choice READ choice NOTIFY changed)
     /// What the last request came to, in the service's words.
     Q_PROPERTY(QString message READ message NOTIFY changed)
     Q_PROPERTY(bool refused READ refused NOTIFY changed)
@@ -46,6 +50,7 @@ public:
     QString session() const { return session_; }
     qulonglong frames() const { return frames_; }
     int elapsedSeconds() const { return elapsedSeconds_; }
+    int choice() const { return choice_; }
     QString message() const { return message_; }
     bool refused() const { return refused_; }
 
@@ -53,6 +58,11 @@ public:
     /// typed; the service records them as affirmed, not as verified.
     Q_INVOKABLE void start(const QString& operatorName, const QString& exam);
     Q_INVOKABLE void stop();
+    /// Asks for another front-end prescription: the settings to change, and,
+    /// where the table demands one, the word that has to be stated with them.
+    /// Refused while a session is open, and refused whole if the combination
+    /// is not a row of the table - the service decides both.
+    Q_INVOKABLE void configure(const QVariantMap& settings);
 
 signals:
     void changed();
@@ -76,6 +86,7 @@ private:
     QString session_;
     qulonglong frames_ = 0;
     int elapsedSeconds_ = 0;
+    int choice_ = -1;
     QString message_;
     bool refused_ = false;
 };

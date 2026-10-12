@@ -437,18 +437,6 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                     rightPadding: 4
                 }
-                Field {
-                    id: operatorField
-                    placeholder: "operator"
-                    implicitWidth: 120
-                    enabled: !sessions.recording
-                }
-                Field {
-                    id: examField
-                    placeholder: "exam"
-                    implicitWidth: 110
-                    enabled: !sessions.recording
-                }
                 Chip {
                     // The one control on this screen that causes a record to
                     // be written - by asking for it.
@@ -456,8 +444,7 @@ Window {
                     checked: sessions.recording
                     accent: theme.bad
                     enabled: sessions.reachable
-                    onClicked: sessions.recording ? sessions.stop()
-                                                  : sessions.start(operatorField.text, examField.text)
+                    onClicked: sessions.recording ? sessions.stop() : recordDialog.open()
                 }
             }
 
@@ -560,11 +547,133 @@ Window {
                 onClicked: review.open()
             }
             Chip {
+                // Present only where the device has a table of choices.
+                visible: prescriptions.available
+                text: "Settings"
+                checked: settings.visible
+                onClicked: settings.visible = !settings.visible
+            }
+            Chip {
                 text: eeg.frozen ? "Resume" : "Freeze"
                 checked: eeg.frozen
                 accent: theme.warn
                 onClicked: eeg.frozen = !eeg.frozen
             }
         }
+    }
+
+    // --- starting a session ------------------------------------------------------
+    // A panel of its own, with the keys to fill it in. The two names were
+    // first typed in the bottom bar, through the compositor's on-screen
+    // keyboard: it covered them, had no key to put it away, and its backspace
+    // did nothing. The panel carries its own few keys instead (Keypad.qml), so
+    // typing a name works the same with or without a keyboard attached, and
+    // under any compositor.
+    Rectangle {
+        id: recordDialog
+        visible: false
+        z: 20
+        anchors { top: header.bottom; topMargin: 16; horizontalCenter: parent.horizontalCenter }
+        width: 620
+        height: dialogBody.implicitHeight + 36
+        radius: 10
+        color: theme.panel
+        border.width: 1
+        border.color: "#263140"
+
+        // Which of the two fields the keys below type into.
+        property var editing: operatorField
+
+        function open() {
+            editing = operatorField
+            visible = true
+        }
+        function close() {
+            visible = false
+            plot.forceActiveFocus()
+            Qt.inputMethod.hide()
+        }
+        function begin() {
+            sessions.start(operatorField.text, examField.text)
+            close()
+        }
+
+        MouseArea { anchors.fill: parent }
+
+        Column {
+            id: dialogBody
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 18 }
+            spacing: 12
+
+            Text {
+                text: "Start recording"
+                color: theme.text
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+            }
+            Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Both are optional. They are written into the session's record and its "
+                    + "audit trail as you state them, to tell one recording from another later - "
+                    + "nothing verifies them."
+                color: theme.faint
+                font.pixelSize: 12
+            }
+            Row {
+                spacing: 10
+                Field {
+                    id: operatorField
+                    placeholder: "operator (optional)"
+                    implicitWidth: 287
+                    selected: recordDialog.editing === operatorField
+                    onPicked: recordDialog.editing = operatorField
+                    onAccepted: recordDialog.editing = examField
+                }
+                Field {
+                    id: examField
+                    placeholder: "exam (optional)"
+                    implicitWidth: 287
+                    selected: recordDialog.editing === examField
+                    onPicked: recordDialog.editing = examField
+                    onAccepted: recordDialog.begin()
+                }
+            }
+            Keypad {
+                width: parent.width
+                target: recordDialog.editing
+                // The tick moves on: from the first name to the second, and
+                // from the second to nothing left to type.
+                onDone: recordDialog.editing = (recordDialog.editing === operatorField) ? examField
+                                                                                        : null
+            }
+            Item {
+                width: parent.width
+                height: 34
+                Row {
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                    spacing: 8
+                    Chip { text: "Cancel"; onClicked: recordDialog.close() }
+                    Chip {
+                        text: "●  Start"
+                        checked: true
+                        accent: theme.bad
+                        enabled: sessions.reachable && !sessions.recording
+                        onClicked: recordDialog.begin()
+                    }
+                }
+            }
+        }
+    }
+
+    // --- front-end settings ------------------------------------------------------
+    // Over the traces, not instead of them: the signal stays in view while a
+    // setting is chosen, which is the reason to choose one.
+    SettingsPanel {
+        id: settings
+        visible: false
+        z: 10
+        anchors { right: parent.right; rightMargin: 20; bottom: toolbar.top; bottomMargin: 12 }
+        onCloseRequested: visible = false
     }
 }
