@@ -14,3 +14,23 @@ sfwbar -f /etc/xdg/sfwbar/sfwbar.config &
 # another one is already running, asks that one - which does not exist - to
 # open a window, and exits. Nothing is drawn and nothing is reported.
 dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile &
+
+# The desktop itself: a background and the station's icons, drawn by the file
+# manager. Without it a minimised window leaves a black screen with a pointer
+# on it, which is what the operator saw and asked about.
+#
+# After the bus, and waited for: this is the first instance of the file
+# manager, and the one every later "Files" click talks to. Started before the
+# bus exists it would take itself for a second instance and exit.
+#
+# The icons are copied into the home because that is where a desktop is looked
+# for, and the home is empty at every boot.
+mkdir -p "$HOME/Desktop" && cp /usr/share/medplatform/desktop/*.desktop "$HOME/Desktop/"
+(
+    i=0
+    while [ ! -S /run/med-desktop/bus ] && [ $i -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    exec pcmanfm-qt --desktop
+) &

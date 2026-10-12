@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Records
+Comment=Clinical files of closed sessions
+Exec=med-files
+Icon=folder-documents
+Terminal=false

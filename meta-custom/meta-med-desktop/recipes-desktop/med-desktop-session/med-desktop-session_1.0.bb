@@ -14,6 +14,7 @@ SRC_URI = " \
     file://autostart \
     file://med-files \
     file://file-manager-settings.conf \
+    file://records.desktop \
 "
 
 S = "${WORKDIR}"
@@ -91,6 +92,10 @@ do_install() {
         bbfatal "MED_WESTON_OUTPUT_NAME='${MED_WESTON_OUTPUT_NAME}' and MED_WESTON_OUTPUT_MODE='${MED_WESTON_OUTPUT_MODE}' for ${MACHINE}: a pinned output needs both"
     fi
     install -D -m 0755 ${WORKDIR}/med-files ${D}${bindir}/med-files
+    # The station's desktop icons. Copied into the user's home at every
+    # session start, by the autostart.
+    install -D -m 0644 ${WORKDIR}/records.desktop \
+        ${D}${datadir}/medplatform/desktop/records.desktop
     # The file manager reads its "default" profile from here when the user has
     # none, and this user never has one: its home is a runtime directory.
     install -D -m 0644 ${WORKDIR}/file-manager-settings.conf \
@@ -104,6 +109,7 @@ FILES:${PN} = " \
     ${sysconfdir}/xdg/labwc \
     ${sysconfdir}/xdg/pcmanfm-qt/default \
     ${bindir}/med-files \
+    ${datadir}/medplatform/desktop \
 "
 
 # dbus: the session bus the file manager needs to be one program however many
