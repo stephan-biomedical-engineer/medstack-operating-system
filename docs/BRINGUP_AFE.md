@@ -1175,6 +1175,90 @@ espera (o offset ainda derivava 3,4 µV/s). O `BIAS_DRV` não foi medido com o m
 captura. E em C o canal 3, aberto e dentro da escala (−71 mV), tinha só 0,016 mV de rede entre
 vizinhos com milivolts: o mesmo sintoma do canal 1 antes de cortar, sem causa conferida.
 
+**Corrigido em 2026-10-11 (§6.10).** Os 74 µV de D não são um resíduo estável nem são do link: a
+rede em D ainda crescia dentro da captura, e a mesma fiação pelo `amp` mostra a mesma forma de
+onda. A primeira das três hipóteses acima (a ponte e o cabo USB) está descartada.
+
+### 6.10 A fiação da captura D pelo link `amp` · **2026-10-11, na placa**
+
+A pergunta era se os 74 µV de rede da captura D (§6.9) eram do link `usb`. A resposta é não, e o
+caminho até ela mostrou que o número de D não era o que parecia.
+
+**Montagem.** Cartão regravado com a imagem `amp` construída no dia
+(`med-image-eeg-stm32mp25-disco.rootfs-20261011033749.wic`; manifesto só com `med-m33-firmware`,
+config selada `acquisition.link = amp`). Front-end no header, ponte USB desconectada. Fiação da
+captura D: `BIAS_DRV` (pino 1) a `IN_SRB` (pino 13), `IN1P` (pino 24) e `IN1N` (pino 11); canais 2
+a 8 abertos. Chave manual do SRB1 em **GNDA** do começo ao fim. `scripts/montage-bench.sh`, passo
+`bipolar`, e depois `fabrica`.
+
+**O registro.** Sessão `2026-10-11T04:27:02.751Z`, 179,4 s, 3204 quadros, 0 lacunas, 0 CRC errado,
+`dropped` 0; `NRestarts=0`. O firmware leu de volta `CONFIG1 96 CONFIG2 c0 CONFIG3 ec CHnSET 60
+SENS ff ff 00 00 MISC1 00 CONFIG4 00`. `sha256` do `raw.bin` igual dos dois lados (`a7551ab6…`),
+selo do `record.bdf` conferido. Dados em `build/med-bench/20261011-0130-amp/`.
+
+**O juiz resumiu uma sessão que não é estacionária.** `amp-bench.py noise` deu, para o canal 1,
+0,191 µV rms, 1,09 µV de pico a pico e **0,041 µV de rede**, com "pior s" de 152,9 µV. Os três
+primeiros são medianas de janelas de 1 s, e a mediana caiu no regime quieto. Segundo a segundo, o
+canal 1 tem três regimes:
+
+| Trecho | Ruído rms | Rede 60 Hz (pico) | Leitura |
+|---|---|---|---|
+| 0 a 27 s e 62 a 113 s | 0,17–0,19 µV (~1 µV pico a pico) | 0,01–0,07 µV | canal medindo |
+| 32 a 60 s | 0,03 µV, 9 códigos distintos por segundo | 0,01 µV | abaixo do piso do próprio canal: não mede |
+| 28 a 31 s; 61 s; 114 s até o fim | 45–150 µV | 70–210 µV | rede com forma cortada: piso fixo em −40 µV, picos só para cima, até +447 µV |
+
+No trecho final o espectro tem o pico em 60,00 Hz (154 µV entre 120 e 124 s).
+
+**Os canais abertos, nos mesmos instantes.** Os sete começam cravados no topo (+187,5 mV) e saem e
+voltam ao trilho durante a sessão.
+
+| Instante | Canal 1 | Canais 2 a 8 |
+|---|---|---|
+| 28 a 31 s | rajada, 250–480 µV pico a pico | **nada visível**: 2 a 5 no topo, 6 a 8 descendo sem degrau |
+| 61 s | um segundo de 424 µV pico a pico | 4, 5, 6 e 8 sobem 50–60 mV de uma vez; 4 e 5 voltam ao topo em seguida |
+| 114 s em diante | rede contínua, ~425 µV pico a pico | 3 e 8 saem do topo nesse segundo |
+
+**A captura D relida.** No `d.bin` do `usb` o canal 1 tem o mesmo piso em −40 µV e picos só para
+cima, e a rede **cresce de 19 para 121 µV** ao longo dos 20 s. Os 0,074 mV da tabela do §6.9 eram
+a mediana de algo que ainda subia. As quatro capturas do `hum/` ganharam BDF (`a.bdf` a `d.bdf`,
+pelo conversor do projeto compilado no host, 0 códigos diferentes em 40.320 cada), com metadados
+emprestados da sessão bipolar do `srb1-usb`: servem para ver o sinal, não são registro de sessão.
+
+**A CPU não trocou de frequência.** Conferido depois da sessão: governador `performance`, 1,5 GHz,
+`total_trans` 275 e `time_in_state` de 5,17 s em 1,2 GHz contra 1717 s em 1,5 GHz, ou seja, as
+trocas cabem no início do boot. Foi uma leitura só, sem segunda leitura para ver o contador parado.
+
+**O que se conclui, só do canal 1 e só com as duas entradas no mesmo nó.**
+
+- **Não é o link.** O `amp` chega à mesma rede, com a mesma forma e o mesmo piso, que o `usb`.
+- **Com o canal medindo, a rede some**: 0,01 a 0,07 µV por mais de um minuto, com ruído de
+  0,17–0,19 µV rms. A placa, a alimentação e o caminho digital não injetam rede o tempo todo.
+- **A rede que aparece não entra pelas entradas do canal**, que estão em curto entre si. A forma
+  cortada e a coincidência aos 61 e aos 114 s apontam o canal saindo da faixa linear pelo modo
+  comum, com o bias (`SENS ff ff`) somando catorze entradas abertas. **É hipótese**: o `BIAS_DRV`
+  não foi medido.
+
+**O que isto não diz.**
+
+- **A rajada dos 28 s não tem causa.** Nenhum canal aberto muda nesse instante e ninguém mexeu na
+  bancada. Pode ser algo que a média por segundo dos outros canais não mostra.
+- **O piso de −40 µV** aparece igual nos dois links e não foi explicado.
+- **Nada sobre eletrodos.** Entradas em curto não têm impedância nem desbalanço de contato, e o
+  bias nunca foi visto com um corpo ligado. Este é o melhor caso possível do canal.
+- O ruído de 0,17–0,19 µV rms não foi comparado com a tabela do datasheet.
+- A análise por segundo foi feita à mão sobre o `raw.bin`, com o leitor de quadros do
+  `amp-bench.py`. Nenhum comando do repositório a reproduz.
+
+**O que fica devendo.**
+
+- **O plugue de curto** (`ROTEIRO_PLACA.md` §7.9), com as dezesseis entradas no `BIAS_DRV`: sem
+  canal aberto para mover o bias, todos os canais deveriam ficar no primeiro regime do começo ao
+  fim. Uma rajada que reapareça ali não depende de entrada solta.
+- **Eletrodos**, e antes deles o plugue de resistores na faixa de um eletrodo.
+- **O juiz de ruído**: marcar janelas abaixo do piso do canal e recusar o resumo por mediana de uma
+  sessão que muda de regime. É a segunda vez que "quieto" foi lido como "bom" (a primeira, os
+  0,02 mV do §6.9).
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
