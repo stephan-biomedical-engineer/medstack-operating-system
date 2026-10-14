@@ -456,55 +456,98 @@ static void test_converter_registers(void)
     /* Reset values of CONFIG1 (0x96) and CONFIG2 (0xC0) ARE the 250 SPS and
      * no-test-signal images - and the bridge bench read those reset values
      * from the part (BRINGUP_AFE.md §4.3). */
-    afe_registers(6, 0, 0, 0, 0, &r);
-    CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xE0 && r.chset == 0x60,
+    afe_registers(6, 6, 0, 0, 0, 0, 0, 0, &r);
+    CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xE0 && r.chset[0] == 0x60 && r.chset[7] == 0x60,
           "eletrodos, ganho 24: %02x %02x %02x %02x, esperado 96 c0 e0 60",
-          r.config1, r.config2, r.config3, r.chset);
+          r.config1, r.config2, r.config3, r.chset[0]);
     CHECK(r.loff == 0 && r.sens[0] == 0 && r.sens[1] == 0 && r.sens[2] == 0 && r.sens[3] == 0 &&
               r.config4 == 0,
           "sem bias nem lead-off, algo ligado: LOFF %02x SENS %02x %02x %02x %02x CONFIG4 %02x",
           r.loff, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4);
-    afe_registers(6, 1, 0, 0, 0, &r);
-    CHECK(r.config2 == 0xD0 && r.chset == 0x65,
-          "sinal de teste, ganho 24: CONFIG2 %02x CHnSET %02x, esperado d0 65", r.config2, r.chset);
-    afe_registers(2, 0, 0, 0, 0, &r);
-    CHECK(r.chset == 0x20, "ganho 4: CHnSET %02x, esperado 20", r.chset);
+    afe_registers(6, 6, 1, 0, 0, 0, 0, 0, &r);
+    CHECK(r.config2 == 0xD0 && r.chset[0] == 0x65 && r.chset[7] == 0x65,
+          "sinal de teste, ganho 24: CONFIG2 %02x CHnSET %02x, esperado d0 65", r.config2, r.chset[0]);
+    afe_registers(6, 2, 0, 0, 0, 0, 0, 0, &r);
+    CHECK(r.chset[0] == 0x20 && r.chset[7] == 0x20, "ganho 4: CHnSET %02x, esperado 20", r.chset[0]);
+
+    /* The input switch: shorted is MUX 001 on every channel, and the test
+     * signal, asked for at the same time, wins - it is a position of the same
+     * switch. Nothing else in the image moves. */
+    afe_registers(6, 6, 0, 0, 0, 0, 1, 0, &r);
+    CHECK(r.chset[0] == 0x61 && r.chset[7] == 0x61 && r.config2 == 0xC0 && r.config3 == 0xE0 &&
+              r.misc1 == 0,
+          "entradas em curto, ganho 24: CHnSET %02x..%02x CONFIG2 %02x, esperado 61..61 c0",
+          r.chset[0], r.chset[7], r.config2);
+    afe_registers(6, 6, 1, 0, 0, 0, 1, 0, &r);
+    CHECK(r.chset[0] == 0x65 && r.chset[7] == 0x65,
+          "sinal de teste sobre curto: CHnSET %02x..%02x, esperado 65..65", r.chset[0], r.chset[7]);
+
+    /* The temperature sensor: MUX 100 on the LAST channel and on no other,
+     * and that channel out of all four per-channel masks - it has no
+     * electrodes to average into the bias or to pass a lead-off current to. */
+    afe_registers(6, 6, 0, 1, 1, 0, 0, 1, &r);
+    /* ...at a gain of its own: the prescribed one, capped at 12. At 24 the
+     * sensor saturated the amplifier on the board and read -79 C. */
+    CHECK(r.chset[0] == 0x60 && r.chset[6] == 0x60 && r.chset[7] == 0x54,
+          "temperatura, ganho 24: CHnSET %02x %02x %02x, esperado 60 60 54", r.chset[0],
+          r.chset[6], r.chset[7]);
+    CHECK(afe_sensor_gain(24) == 12 && afe_sensor_gain(12) == 12 && afe_sensor_gain(8) == 8 &&
+              afe_sensor_gain(6) == 6 && afe_sensor_gain(4) == 4 && afe_sensor_gain(1) == 1,
+          "ganho do canal do sensor: 24->%g 12->%g 8->%g", afe_sensor_gain(24),
+          afe_sensor_gain(12), afe_sensor_gain(8));
+    CHECK(r.sens[0] == 0x7F && r.sens[1] == 0x7F && r.sens[2] == 0x7F && r.sens[3] == 0x7F,
+          "temperatura, bipolar: SENS %02x %02x %02x %02x, esperado 7f 7f 7f 7f", r.sens[0],
+          r.sens[1], r.sens[2], r.sens[3]);
+    afe_registers(6, 2, 0, 0, 0, 0, 0, 1, &r);
+    CHECK(r.chset[0] == 0x20 && r.chset[7] == 0x24,
+          "temperatura, ganho 4: CHnSET %02x..%02x, esperado 20..24", r.chset[0], r.chset[7]);
+    afe_registers(6, 5, 0, 1, 1, 1, 0, 1, &r);
+    CHECK(r.chset[7] == 0x54 && r.sens[0] == 0x7F && r.sens[1] == 0x00 && r.sens[2] == 0x7F &&
+              r.sens[3] == 0x01 && r.misc1 == 0x20,
+          "temperatura, referencial, ganho 12: CHnSET8 %02x SENS %02x %02x %02x %02x MISC1 %02x",
+          r.chset[7], r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.misc1);
+    /* With the test signal: seven channels on the generator, the last on the
+     * sensor. */
+    afe_registers(6, 6, 1, 0, 0, 0, 0, 1, &r);
+    CHECK(r.chset[0] == 0x65 && r.chset[7] == 0x54,
+          "temperatura com sinal de teste: CHnSET %02x..%02x, esperado 65..54", r.chset[0],
+          r.chset[7]);
 
     /* Bias, derived: ti-ads1299.c's set_bias(DERIVED) writes BIAS_SENSP and
      * BIAS_SENSN = GENMASK(channels - 1, 0) and sets BIASREF_INT | PD_BIAS
      * (CONFIG3 bits 3 and 2) - 0xE0 | 0x0C. */
-    afe_registers(6, 0, 1, 0, 0, &r);
+    afe_registers(6, 6, 0, 1, 0, 0, 0, 0, &r);
     CHECK(r.config3 == 0xEC && r.sens[0] == 0xFF && r.sens[1] == 0xFF && r.sens[2] == 0 &&
               r.sens[3] == 0 && r.config4 == 0,
           "bias derivado: CONFIG3 %02x SENS %02x %02x %02x %02x CONFIG4 %02x, esperado ec ff ff 00 00 00",
           r.config3, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4);
     /* Lead-off: the comparators (CONFIG4 bit 1, as ti-ads1299.c) AND the
      * per-channel enables the driver leaves at 0. LOFF at its reset value. */
-    afe_registers(6, 0, 0, 1, 0, &r);
+    afe_registers(6, 6, 0, 0, 1, 0, 0, 0, &r);
     CHECK(r.config3 == 0xE0 && r.sens[0] == 0 && r.sens[1] == 0 && r.sens[2] == 0xFF &&
               r.sens[3] == 0xFF && r.config4 == 0x02 && r.loff == 0x00,
           "lead-off: CONFIG3 %02x SENS %02x %02x %02x %02x CONFIG4 %02x LOFF %02x",
           r.config3, r.sens[0], r.sens[1], r.sens[2], r.sens[3], r.config4, r.loff);
 
     /* Bipolar leaves MISC1 at its reset value, in every combination above. */
-    afe_registers(6, 0, 1, 1, 0, &r);
+    afe_registers(6, 6, 0, 1, 1, 0, 0, 0, &r);
     CHECK(r.misc1 == 0x00 && r.sens[1] == 0xFF && r.sens[3] == 0xFF,
           "bipolar: MISC1 %02x BIAS_SENSN %02x LOFF_SENSN %02x, esperado 00 ff ff", r.misc1,
           r.sens[1], r.sens[3]);
     /* Referential [SBAS499C Figure 64 and 10.2.2]: SRB1 is MISC1 bit 5; one
      * lead-off source on the negative side; BIAS_SENSN = 0 is this project's
      * decision. Nothing else moves: CHnSET's MUX stays 000 and SRB2 stays 0. */
-    afe_registers(6, 0, 1, 1, 1, &r);
+    afe_registers(6, 6, 0, 1, 1, 1, 0, 0, &r);
     CHECK(r.misc1 == 0x20 && r.sens[0] == 0xFF && r.sens[1] == 0x00 && r.sens[2] == 0xFF &&
               r.sens[3] == 0x01,
           "referencial: MISC1 %02x SENS %02x %02x %02x %02x, esperado 20 ff 00 ff 01", r.misc1,
           r.sens[0], r.sens[1], r.sens[2], r.sens[3]);
-    CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xEC && r.chset == 0x60 &&
+    CHECK(r.config1 == 0x96 && r.config2 == 0xC0 && r.config3 == 0xEC && r.chset[0] == 0x60 && r.chset[7] == 0x60 &&
               r.config4 == 0x02 && r.loff == 0x00,
           "referencial mexeu fora do que devia: %02x %02x %02x %02x %02x %02x", r.config1,
-          r.config2, r.config3, r.chset, r.config4, r.loff);
+          r.config2, r.config3, r.chset[0], r.config4, r.loff);
     /* The switch closes with nothing else prescribed, and no source is on. */
-    afe_registers(6, 0, 0, 0, 1, &r);
+    afe_registers(6, 6, 0, 0, 0, 1, 0, 0, &r);
     CHECK(r.misc1 == 0x20 && r.sens[0] == 0 && r.sens[1] == 0 && r.sens[2] == 0 && r.sens[3] == 0,
           "referencial sem bias nem lead-off: MISC1 %02x SENS %02x %02x %02x %02x", r.misc1,
           r.sens[0], r.sens[1], r.sens[2], r.sens[3]);
@@ -784,6 +827,136 @@ static void test_converter_source(void)
               "sintético recusou referencial: %u '%.64s'", ack.rejectedIndex, ack.detail);
     }
 
+    section("fonte conversor: a entrada e o sensor de temperatura");
+    {
+        /* The eight keys, in the sorted order the recipe sends them - as many
+         * as a control message holds. */
+        static const struct option_spec kAll[] = {
+            {"afe.bias_drive", "true"},
+            {"afe.gain", "24"},
+            {"afe.input", "normal"},
+            {"afe.lead_off_detection", "true"},
+            {"afe.montage", "bipolar"},
+            {"afe.reference_uv", "4500000"},
+            {"afe.temperature", "false"},
+            {"afe.test_signal", "off"},
+        };
+        struct option_spec o[8];
+        med_amp_lead_off lo;
+        int completed = 0;
+
+        med_producer_init(&p);
+        med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
+
+        /* The keys absent: the electrodes on all eight, as before they existed. */
+        m = make_control(kShipped, 6);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.input == MED_INPUT_NORMAL && !p.temperature,
+              "sem as chaves: %u '%.64s' entrada %d temperatura %d", ack.rejectedIndex,
+              ack.detail, (int)p.input, p.temperature);
+
+        m = make_control(kAll, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.streaming && p.input == MED_INPUT_NORMAL &&
+                  !p.temperature,
+              "as oito chaves, de fábrica: %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* The sensor on the last channel, during a session with lead-off
+         * detection: accepted, and that channel's two bits are neither
+         * monitored nor reported, whatever the part says in them. */
+        memcpy(o, kAll, sizeof(o));
+        o[6].value = "true";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.streaming && p.temperature,
+              "temperatura recusada pelo conversor: %u '%.64s'", ack.rejectedIndex, ack.detail);
+        for (c = 0; c < 8; ++c) nv[c] = 0;
+        for (i = 0; i < 14; ++i) completed = med_producer_on_values(&p, i, nv, 0x0081u, 0x0080u, frame);
+        memcpy(&lo, frame + sizeof(med_amp_frame_header) +
+                        MED_PRODUCER_CHANNELS * MED_PRODUCER_SAMPLES_PER_FRAME * 4,
+               sizeof(lo));
+        CHECK(completed && lo.monitoredPositive == 0x007F && lo.monitoredNegative == 0x007F &&
+                  lo.offPositive == 0x0001 && lo.offNegative == 0x0000,
+              "temperatura, bloco de lead-off: monitored %04x %04x off %04x %04x, esperado 007f 007f 0001 0000",
+              lo.monitoredPositive, lo.monitoredNegative, lo.offPositive, lo.offNegative);
+
+        /* It does not outlive its prescription. */
+        m = make_control(kAll, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && !p.temperature, "de volta: temperatura %d", p.temperature);
+
+        /* Shorted inputs: a bench measurement, with nothing monitored. */
+        memcpy(o, kAll, sizeof(o));
+        o[2].value = "shorted";
+        o[3].value = "false";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.streaming && p.input == MED_INPUT_SHORTED,
+              "curto recusado pelo conversor: %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* ...and not with lead-off detection: no electrode to monitor, and
+         * the option blamed is the detection. */
+        o[3].value = "true";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 4 && !p.streaming &&
+                  strstr(ack.detail, "afe.lead_off_detection"),
+              "curto com lead-off: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* ...nor with the test signal: two positions of one switch. */
+        o[3].value = "false";
+        o[7].value = "internal";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 3 && !p.streaming && strstr(ack.detail, "afe.input"),
+              "curto com sinal de teste: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* ...nor with the sensor: shorted is every channel. */
+        o[7].value = "off";
+        o[6].value = "true";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 7 && !p.streaming && strstr(ack.detail, "afe.temperature"),
+              "curto com temperatura: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* Values nobody defined, each naming its option. */
+        memcpy(o, kAll, sizeof(o));
+        o[2].value = "temperature";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 3 && strstr(ack.detail, "afe.input"),
+              "entrada desconhecida: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+        memcpy(o, kAll, sizeof(o));
+        o[6].value = "channel8";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 7 && strstr(ack.detail, "afe.temperature"),
+              "temperatura não booleana: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+
+        /* A synthetic producer has neither inputs to switch nor a sensor. */
+        med_producer_init(&p);
+        memcpy(o, kAll, sizeof(o));
+        o[0].value = "false";
+        o[3].value = "false";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.input == MED_INPUT_NORMAL && !p.temperature,
+              "sintético recusou as oito chaves honráveis: %u '%.64s'", ack.rejectedIndex,
+              ack.detail);
+        o[6].value = "true";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 7 && strstr(ack.detail, "synthetic"),
+              "sintético aceitou temperatura: rejectedIndex %u '%.64s'", ack.rejectedIndex,
+              ack.detail);
+        o[6].value = "false";
+        o[2].value = "shorted";
+        m = make_control(o, 8);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 3 && strstr(ack.detail, "synthetic"),
+              "sintético aceitou curto: rejectedIndex %u '%.64s'", ack.rejectedIndex, ack.detail);
+    }
+
     section("fonte conversor: o hardware que não aceita vira recusa");
     med_producer_init(&p);
     med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
@@ -814,6 +987,246 @@ static void test_converter_source(void)
     }
 }
 
+/* ------------------------------------------------------------- the rate */
+
+static void test_rate(void)
+{
+    struct med_producer p;
+    med_amp_control_ack ack;
+    med_amp_control_message m;
+    uint8_t frame[MED_PRODUCER_FRAME_BYTES];
+    med_amp_frame_header h;
+    struct afe_regs r;
+    unsigned i, k;
+    static const struct { uint32_t rate; int field; uint8_t config1; } rates[] = {
+        {250, 6, 0x96}, {500, 5, 0x95}, {1000, 4, 0x94}, {2000, 3, 0x93},
+        {4000, 2, 0x92}, {8000, 1, 0x91}, {16000, 0, 0x90},
+    };
+    static const uint32_t absent[] = {0, 125, 249, 251, 300, 750, 32000, 64000, 4294967295u};
+
+    section("taxa: o campo DR, de Table 13 e não do código");
+
+    /* CONFIG1 = 1001 0 DR. The seven images are written out here by hand from
+     * the table; 0x96 is also the part's reset value, read on the bench. */
+    for (i = 0; i < sizeof(rates) / sizeof(rates[0]); ++i) {
+        CHECK(afe_rate_field(rates[i].rate) == rates[i].field, "%u SPS -> DR %d, esperado %d",
+              rates[i].rate, afe_rate_field(rates[i].rate), rates[i].field);
+        afe_registers(afe_rate_field(rates[i].rate), 6, 0, 0, 0, 0, 0, 0, &r);
+        CHECK(r.config1 == rates[i].config1, "%u SPS: CONFIG1 %02x, esperado %02x",
+              rates[i].rate, r.config1, rates[i].config1);
+        /* The rate changes CONFIG1 and nothing else. */
+        CHECK(r.config2 == 0xC0 && r.config3 == 0xE0 && r.chset[0] == 0x60 && r.misc1 == 0 &&
+                  r.config4 == 0,
+              "%u SPS mexeu fora do CONFIG1", rates[i].rate);
+    }
+    for (i = 0; i < sizeof(absent) / sizeof(absent[0]); ++i) {
+        CHECK(afe_rate_field(absent[i]) == -1, "%u SPS aceita: DR %d", absent[i],
+              afe_rate_field(absent[i]));
+    }
+
+    section("conversão: o caminho inteiro dá o mesmo nanovolt que o de dupla precisão");
+    {
+        /* Every seventh code and the edges, at every gain. The whole 2^24 at
+         * each gain was compared once, outside this suite: 0 differ. */
+        static const uint32_t gains[] = {1, 2, 4, 6, 8, 12, 24};
+        static const int32_t edges[] = {0, 1, -1, 2, -2, 8388607, -8388608, 8388606, -8388607,
+                                        4194304, -4194304, 123456, -654321};
+        unsigned g, differ = 0;
+        long code;
+        for (g = 0; g < sizeof(gains) / sizeof(gains[0]); ++g) {
+            for (k = 0; k < sizeof(edges) / sizeof(edges[0]); ++k) {
+                if (afe_code_to_nv_exact(edges[k], gains[g]) !=
+                    afe_code_to_nv(edges[k], gains[g], AFE_VREF_UV))
+                    ++differ;
+            }
+            for (code = -8388608; code <= 8388607; code += 7) {
+                if (afe_code_to_nv_exact((int32_t)code, gains[g]) !=
+                    afe_code_to_nv((int32_t)code, gains[g], AFE_VREF_UV))
+                    ++differ;
+            }
+        }
+        CHECK(differ == 0, "%u códigos convertidos diferente pelos dois caminhos", differ);
+        /* And against the definition, not against the other function:
+         * gain 24, code 1 is 4.5 V / (24 * 2^23) = 22.35 nV -> 22; gain 1
+         * does not fit the frame and saturates. */
+        CHECK(afe_code_to_nv_exact(1, 24) == 22 && afe_code_to_nv_exact(-8388608, 24) == -187500000 &&
+                  afe_code_to_nv_exact(8388607, 1) == 2147483647 &&
+                  afe_code_to_nv_exact(-8388608, 1) == (int32_t)-2147483647 - 1,
+              "ganho 24: 1 LSB %d nV, fundo de escala %d nV; ganho 1: %d",
+              afe_code_to_nv_exact(1, 24), afe_code_to_nv_exact(-8388608, 24),
+              afe_code_to_nv_exact(8388607, 1));
+    }
+
+    section("taxa: a prescrição, e o que o cabeçalho do quadro declara");
+
+    /* Absent: 250, as before the key existed. */
+    med_producer_init(&p);
+    m = make_control(kHonourable, 6);
+    send_control(&p, &m, &ack);
+    CHECK(ack.rejectedIndex == 0 && p.rate_hz == 250, "sem a chave: rejeitada %u, taxa %u",
+          ack.rejectedIndex, p.rate_hz);
+
+    /* The converter takes all seven, and every frame states the one in force. */
+    for (i = 0; i < sizeof(rates) / sizeof(rates[0]); ++i) {
+        struct option_spec o[7];
+        char text[16];
+        int32_t nv[MED_PRODUCER_CHANNELS] = {0};
+        int done = 0;
+        memcpy(o, kShipped, sizeof(kShipped));
+        snprintf(text, sizeof(text), "%u", rates[i].rate);
+        o[6].key = "acquisition.sample_rate_hz";
+        o[6].value = text;
+        med_producer_init(&p);
+        med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
+        m = make_control(o, 7);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 0 && p.rate_hz == rates[i].rate && p.streaming,
+              "conversor, %u SPS: rejeitada %u '%.64s'", rates[i].rate, ack.rejectedIndex,
+              ack.detail);
+        for (k = 0; k < MED_PRODUCER_SAMPLES_PER_FRAME; ++k) {
+            done = med_producer_on_values(&p, 1000u + k, nv, 0, 0, frame);
+        }
+        memcpy(&h, frame, sizeof(h));
+        CHECK(done == 1 && h.sampleRateMilliHz == rates[i].rate * 1000u,
+              "%u SPS: o cabeçalho declara %u mHz", rates[i].rate, h.sampleRateMilliHz);
+    }
+
+    /* A prescription without the key after one with it goes back to 250: the
+     * rate is not remembered from a session that is over. */
+    m = make_control(kShipped, 6);
+    send_control(&p, &m, &ack);
+    CHECK(ack.rejectedIndex == 0 && p.rate_hz == 250, "a taxa anterior ficou: %u", p.rate_hz);
+
+    /* What is not a rate is refused, naming the key, and nothing streams. */
+    {
+        static const char *bad[] = {"300", "0", "250.5", "32000", "-250", "250 ", "1e3", "",
+                                    "0250x", "99999999999999999999"};
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+            struct option_spec o[2] = {{"afe.gain", "24"}, {"acquisition.sample_rate_hz", NULL}};
+            o[1].value = bad[i];
+            med_producer_init(&p);
+            med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
+            m = make_control(o, 2);
+            send_control(&p, &m, &ack);
+            CHECK(ack.rejectedIndex == 2 && strstr(ack.detail, "acquisition.sample_rate_hz") &&
+                      !p.streaming,
+                  "taxa '%s': rejectedIndex %u '%.64s' streaming %d", bad[i], ack.rejectedIndex,
+                  ack.detail, p.streaming);
+        }
+    }
+    {
+        struct option_spec o[2] = {{"acquisition.sample_rate_hz", "500"},
+                                   {"acquisition.sample_rate_hz", "500"}};
+        med_producer_init(&p);
+        m = make_control(o, 2);
+        send_control(&p, &m, &ack);
+        CHECK(ack.rejectedIndex == 2 && strstr(ack.detail, "twice"), "taxa repetida: %u '%.64s'",
+              ack.rejectedIndex, ack.detail);
+    }
+
+    /* The synthetic source is paced by a 1 kHz tick. */
+    {
+        static const struct { const char *text; int accepted; } synthetic[] = {
+            {"250", 1}, {"500", 1}, {"1000", 1}, {"2000", 0}, {"16000", 0}};
+        for (i = 0; i < sizeof(synthetic) / sizeof(synthetic[0]); ++i) {
+            struct option_spec o[1] = {{"acquisition.sample_rate_hz", NULL}};
+            o[0].value = synthetic[i].text;
+            med_producer_init(&p);
+            m = make_control(o, 1);
+            send_control(&p, &m, &ack);
+            CHECK((ack.rejectedIndex == 0) == synthetic[i].accepted,
+                  "sintético a %s: rejectedIndex %u '%.64s'", synthetic[i].text,
+                  ack.rejectedIndex, ack.detail);
+        }
+    }
+
+    section("taxa: o sinal sintético tem as mesmas frequências em qualquer taxa");
+    {
+        /* Against the specification in seconds, not in samples: 10 Hz and
+         * 50 Hz tones, and a square wave of f_CLK / 2^21. */
+        static const uint32_t each[] = {250, 500, 1000};
+        const double pi = 3.14159265358979323846;
+        for (i = 0; i < sizeof(each) / sizeof(each[0]); ++i) {
+            double worst = 0.0;
+            unsigned long long n;
+            unsigned wrong = 0;
+            med_producer_init(&p);
+            p.rate_hz = each[i];
+            for (n = 0; n < 3ull * each[i]; ++n) {
+                double t = (double)n / (double)each[i];
+                double expected = 20000.0 * sin(2 * pi * 10.0 * t + 2 * pi * 3 / 8.0) +
+                                  5000.0 * sin(2 * pi * 50.0 * t);
+                double e = fabs(med_producer_sample_nv(&p, n, 3) - expected);
+                if (e > worst) worst = e;
+            }
+            CHECK(worst < 3.0, "%u SPS: erro de %g nV contra os tons de 10 e 50 Hz", each[i], worst);
+            p.test_signal = MED_TEST_SIGNAL_INTERNAL;
+            for (n = 0; n < 4ull * each[i]; ++n) {
+                /* Half a period is 2^20 / f_CLK seconds = 128 samples at 250. */
+                unsigned long long half = n / (128ull * each[i] / 250u);
+                int32_t v = med_producer_sample_nv(&p, n, 0);
+                if ((half % 2 == 0) != (v > 0)) ++wrong;
+            }
+            CHECK(wrong == 0, "%u SPS: %u amostras da onda quadrada fora de fase", each[i], wrong);
+        }
+    }
+
+    section("conversão perdida: o quadro é abandonado e a sequência mostra o buraco");
+    {
+        int32_t nv[MED_PRODUCER_CHANNELS] = {0};
+        int done;
+        med_producer_init(&p);
+        med_producer_set_source(&p, MED_SOURCE_CONVERTER, NULL);
+        m = make_control(kShipped, 6);
+        send_control(&p, &m, &ack);
+
+        /* Before the first sample there is nothing to be missing from. */
+        med_producer_on_lost(&p);
+        CHECK(p.sequence == 0 && p.frames_broken == 0, "perda antes da primeira amostra contou");
+
+        /* One whole frame, then a loss five samples into the next. */
+        for (k = 0, done = 0; k < MED_PRODUCER_SAMPLES_PER_FRAME; ++k) {
+            done = med_producer_on_values(&p, 100u + k, nv, 0, 0, frame);
+        }
+        memcpy(&h, frame, sizeof(h));
+        CHECK(done == 1 && h.sequence == 0, "primeiro quadro: sequência %llu",
+              (unsigned long long)h.sequence);
+        for (k = 0; k < 5; ++k) {
+            (void)med_producer_on_values(&p, 200u + k, nv, 0, 0, frame);
+        }
+        med_producer_on_lost(&p);
+        CHECK(p.filled == 0 && p.frames_broken == 1, "o quadro partido não foi abandonado");
+
+        /* The next frame needs fourteen samples of its own, starts at the
+         * first of them, and is numbered 2: the receiver counts one missing. */
+        for (k = 0, done = 0; k < MED_PRODUCER_SAMPLES_PER_FRAME; ++k) {
+            int r2 = med_producer_on_values(&p, 300u + k, nv, 0, 0, frame);
+            if (k + 1 < MED_PRODUCER_SAMPLES_PER_FRAME) {
+                CHECK(r2 == 0, "quadro depois da perda completou na amostra %u", k);
+            }
+            done = r2;
+        }
+        memcpy(&h, frame, sizeof(h));
+        CHECK(done == 1 && h.sequence == 2 && h.timestampMicros == 300,
+              "depois da perda: sequência %llu, carimbo %llu (esperado 2 e 300)",
+              (unsigned long long)h.sequence, (unsigned long long)h.timestampMicros);
+
+        /* A loss between frames is a gap too: something is missing there. */
+        med_producer_on_lost(&p);
+        for (k = 0; k < MED_PRODUCER_SAMPLES_PER_FRAME; ++k) {
+            done = med_producer_on_values(&p, 400u + k, nv, 0, 0, frame);
+        }
+        memcpy(&h, frame, sizeof(h));
+        CHECK(done == 1 && h.sequence == 4, "perda entre quadros: sequência %llu, esperado 4",
+              (unsigned long long)h.sequence);
+
+        /* Not streaming, nothing moves. */
+        p.streaming = 0;
+        med_producer_on_lost(&p);
+        CHECK(p.frames_broken == 2, "perda sem sessão contou");
+    }
+}
+
 int main(void)
 {
     printf("Produtor do M33 - verificações de host\n");
@@ -822,6 +1235,7 @@ int main(void)
     test_signal();
     test_converter_registers();
     test_converter_source();
+    test_rate();
     printf("\n%d verificações, %d falhas\n", checks, failures);
     printf("\nNão coberto por esta suíte:\n"
            "  - main.c: o relógio, a interrupção, o mailbox e o rpmsg (só na placa)\n"

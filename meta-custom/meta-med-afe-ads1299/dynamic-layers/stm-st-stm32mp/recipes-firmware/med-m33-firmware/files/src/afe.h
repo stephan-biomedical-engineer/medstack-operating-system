@@ -29,7 +29,8 @@ uint64_t med_now_us(void);
  * not own. Reports to the trace buffer. */
 int afe_probe(void);
 
-/* Stop converting, write the register image, read it back. */
+/* Stop converting, set the bus speed the image's rate needs, write the
+ * register image, read it back. */
 int afe_apply(const struct afe_regs *regs);
 
 /* Continuous conversion: RDATAC, START, and the DRDY interrupt armed. */
@@ -48,6 +49,7 @@ struct afe_counters {
     uint32_t overruns;      /* conversions lost because the queue was full */
     uint32_t spi_errors;    /* reads that failed */
     uint32_t spi_us_last;   /* duration of the last 27-byte read */
+    uint32_t queue_high;    /* most conversions ever waiting, since afe_start() */
 };
 void afe_counters(struct afe_counters *out);
 

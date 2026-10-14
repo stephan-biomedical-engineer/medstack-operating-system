@@ -38,10 +38,18 @@
  * The 40-byte header, 8 x 14 x 4 bytes of samples and the 8-byte lead-off
  * block are 496 bytes: all of a stock 512-byte rpmsg buffer's payload
  * (med_amp_abi.h says where that number comes from).
+ *
+ * The rate is the exception since it became a prescription: 250 samples per
+ * second when the prescription names none, which is what this producer did
+ * before the key existed, and otherwise the one it names. Every frame header
+ * states the rate its samples were taken at, and the receiver holds it against
+ * the one it asked for.
  */
 #define MED_PRODUCER_CHANNELS          8u
 #define MED_PRODUCER_SAMPLES_PER_FRAME 14u
 #define MED_PRODUCER_RATE_HZ           250u
+/* The synthetic source is paced by a 1 kHz tick, so it has no faster rate. */
+#define MED_PRODUCER_SYNTHETIC_MAX_HZ  1000u
 #define MED_PRODUCER_FRAME_BYTES \
     (sizeof(med_amp_frame_header) + \
      MED_PRODUCER_CHANNELS * MED_PRODUCER_SAMPLES_PER_FRAME * sizeof(int32_t) + \
@@ -52,6 +60,15 @@ enum med_test_signal { MED_TEST_SIGNAL_OFF = 0, MED_TEST_SIGNAL_INTERNAL = 1 };
 /* What each channel's inverting input is: its own electrode, or the one
  * reference electrode all channels share. */
 enum med_montage { MED_MONTAGE_BIPOLAR = 0, MED_MONTAGE_REFERENTIAL = 1 };
+
+/* What every channel's inputs are switched to: the electrodes, which is what a
+ * session measures, or shorted together inside the converter, which reads its
+ * own noise and nothing of a patient. */
+enum med_input { MED_INPUT_NORMAL = 0, MED_INPUT_SHORTED = 1 };
+
+/* The one channel that can be given to the converter's temperature sensor
+ * while the others keep their electrodes: the last. Zero based. */
+#define MED_TEMPERATURE_CHANNEL (MED_PRODUCER_CHANNELS - 1u)
 
 enum med_source { MED_SOURCE_SYNTHETIC = 0, MED_SOURCE_CONVERTER = 1, MED_SOURCE_ABSENT = 2 };
 
@@ -66,6 +83,9 @@ struct med_producer {
     int bias_drive; /* converter only: derived bias amplifier on */
     int lead_off;   /* converter only: every channel's inputs monitored */
     enum med_montage montage;
+    enum med_input input;
+    int temperature; /* converter only: the last channel reads the sensor */
+    uint32_t rate_hz; /* samples per second, per channel */
 
     /* 1 between an accepted prescription and the next control message. */
     int streaming;
@@ -82,6 +102,7 @@ struct med_producer {
     uint32_t controls_accepted;
     uint32_t controls_rejected;
     uint32_t controls_malformed;
+    uint32_t frames_broken; /* frames given up because a conversion was lost */
 };
 
 /* Starts SYNTHETIC; main.c sets the real source before the endpoint exists. */
@@ -134,6 +155,20 @@ int med_producer_on_sample(struct med_producer *p, uint64_t now_us, uint8_t *fra
  * there, and it stands for the reference electrode. */
 int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_t *nv,
                            uint16_t off_positive, uint16_t off_negative, uint8_t *frame);
+
+/*
+ * A conversion did not reach this producer - the interrupt's queue was full,
+ * the bus failed, or what was read was not a conversion. The frame being
+ * filled is given up and its sequence number with it, so the receiver sees a
+ * gap where the stream is short, and counts it. Without this a lost conversion
+ * made a frame whose fourteen samples spanned fifteen instants: a record
+ * declaring a rate it did not contain, with nothing to show for it.
+ *
+ * One lost conversion costs up to a whole frame, deliberately: a frame is
+ * either fourteen consecutive conversions or it is not sent. Does nothing
+ * before a session's first sample, where there is nothing to be missing from.
+ */
+void med_producer_on_lost(struct med_producer *p);
 
 /*
  * The synthetic signal, in nanovolts, as a pure function of the global sample

@@ -61,7 +61,10 @@ static SPI_HandleTypeDef spi6;
 
 /* ------------------------------------------------------------- the queue */
 
-#define QUEUE 32u /* 128 ms at 250 SPS */
+/* 128 conversions: 512 ms at 250 SPS, 8 ms at 16000. The loop wakes on every
+ * interrupt, this one included, so what the queue has to absorb is one pass of
+ * the loop, not a period of time. */
+#define QUEUE 128u
 static struct afe_sample queue[QUEUE];
 static volatile uint32_t q_head;
 static uint32_t q_tail;
@@ -378,14 +381,73 @@ static int check_status_layout(void)
     return AFE_SPI_ERROR;
 }
 
+/*
+ * Two bus speeds, and which one is in use depends on what is being said.
+ *
+ * COMMANDS AND REGISTERS go at the prescaler every measurement on this board
+ * was made with. The converter needs four periods of its own 2.048 MHz clock
+ * to decode a byte - about 2 us - so a byte clocked out faster than that is a
+ * byte it has not finished with when the next one starts [SBAS499?]. Seen on
+ * the board, 2026-10-13, with the whole exchange at prescaler 8: the first
+ * register read back 7f where ff had been written, and the prescription was
+ * refused - which is the read-back doing its job.
+ *
+ * THE CONVERSION ITSELF is not a command: in continuous-read mode the 27 bytes
+ * are simply clocked out, and the part allows that up to 20 MHz. It happens
+ * inside the DRDY interrupt and has to end, with room for the loop, before the
+ * next conversion - 207 to 259 us at prescaler 32, which is the whole period
+ * at 4000 SPS. So the data read, and only it, gets a shorter prescaler at the
+ * rates that need one.
+ */
+#define COMMAND_PRESCALER SPI_BAUDRATEPRESCALER_32
+
+static uint32_t data_prescaler = SPI_BAUDRATEPRESCALER_32;
+
+/*
+ * The data speed is the command speed at every rate but the highest.
+ *
+ * Measured on the board, 2026-10-13, with the data cache on: the read takes
+ * 59 us at prescaler 32, which leaves room for the loop down to the 125 us of
+ * 8000 SPS (no conversion lost, queue never above 4) and none in the 62.5 us
+ * of 16000 - there the interrupt ran back to back, seven conversions in eight
+ * were lost and every frame was given up. At prescaler 16 the read is 33 us,
+ * every status word is valid, and 16000 holds: no conversion lost over
+ * several hundred thousand, queue never above 27 of 128.
+ *
+ * Prescaler 8 is NOT a faster version of the same thing. Tried at 2000 SPS
+ * before the cache was on: every status word came back invalid, with the
+ * first bit of the first byte lost. Whether that is the bus's speed on this
+ * hat's wiring or something in the change of speed was not found out, and the
+ * kernel clock of this bus has still not been read - so 16 is the one shorter
+ * prescaler that has been seen to work, at the one rate that needs it.
+ */
+static uint32_t prescaler_for(uint8_t config1)
+{
+    return (config1 & 0x07u) == 0u ? SPI_BAUDRATEPRESCALER_16 : COMMAND_PRESCALER;
+}
+
+static int set_bus_speed(uint32_t prescaler)
+{
+    if (spi6.Init.BaudRatePrescaler == prescaler) {
+        return AFE_OK;
+    }
+    spi6.Init.BaudRatePrescaler = prescaler;
+    if (HAL_SPI_Init(&spi6) != HAL_OK) {
+        printf("[afe] the bus did not take its new speed\r\n");
+        return AFE_SPI_ERROR;
+    }
+    return AFE_OK;
+}
+
 int afe_apply(const struct afe_regs *regs)
 {
     const uint8_t config[3] = {regs->config1, regs->config2, regs->config3};
     uint8_t chset[AFE_CHANNELS];
     int st;
 
-    afe_stop();
-    memset(chset, regs->chset, sizeof(chset));
+    afe_stop(); /* leaves the bus at the command speed */
+    memcpy(chset, regs->chset, sizeof(chset));
+    data_prescaler = prescaler_for(regs->config1);
 
     /*
      * The per-channel selections before the bits that switch the amplifier and
@@ -432,10 +494,13 @@ int afe_apply(const struct afe_regs *regs)
         return st;
     }
 
-    printf("[afe] configured: CONFIG1 %02x CONFIG2 %02x CONFIG3 %02x CHnSET %02x "
+    /* The first channel's and the last's: they differ when the last one is
+     * on the temperature sensor, and that is worth one more byte of trace. */
+    printf("[afe] configured: CONFIG1 %02x CONFIG2 %02x CONFIG3 %02x CHnSET %02x..%02x "
            "SENS %02x %02x %02x %02x MISC1 %02x CONFIG4 %02x\r\n",
-           config[0], config[1], config[2], regs->chset, regs->sens[0], regs->sens[1],
-           regs->sens[2], regs->sens[3], regs->misc1, regs->config4);
+           config[0], config[1], config[2], regs->chset[0], regs->chset[AFE_CHANNELS - 1u],
+           regs->sens[0], regs->sens[1], regs->sens[2], regs->sens[3], regs->misc1,
+           regs->config4);
     return AFE_OK;
 }
 
@@ -444,6 +509,7 @@ int afe_apply(const struct afe_regs *regs)
 int afe_start(void)
 {
     q_tail = q_head; /* nothing from an earlier run */
+    counters.queue_high = 0u;
 
     if (command(AFE_CMD_RDATAC) != HAL_OK) {
         return AFE_SPI_ERROR;
@@ -454,13 +520,22 @@ int afe_start(void)
     HAL_NVIC_SetPriority(EXTI1_8_IRQn, DRDY_IRQ_PRIORITY, 0);
     HAL_NVIC_EnableIRQ(EXTI1_8_IRQn);
 
-    /* START is pulled down on the board, so conversions start by command. */
-    return command(AFE_CMD_START) == HAL_OK ? AFE_OK : AFE_SPI_ERROR;
+    /* START is pulled down on the board, so conversions start by command.
+     * The interrupt is masked across it and the change of speed after it: the
+     * first conversion must not be read at a speed the bus is still leaving. */
+    HAL_NVIC_DisableIRQ(EXTI1_8_IRQn);
+    if (command(AFE_CMD_START) != HAL_OK || set_bus_speed(data_prescaler) != AFE_OK) {
+        return AFE_SPI_ERROR;
+    }
+    EXTI1->FPR1 = DRDY_LINE;
+    HAL_NVIC_EnableIRQ(EXTI1_8_IRQn);
+    return AFE_OK;
 }
 
 void afe_stop(void)
 {
     HAL_NVIC_DisableIRQ(EXTI1_8_IRQn);
+    (void)set_bus_speed(COMMAND_PRESCALER);
     (void)command(AFE_CMD_STOP);
     (void)command(AFE_CMD_SDATAC);
     EXTI1->FPR1 = DRDY_LINE;
@@ -507,6 +582,9 @@ void EXTI1_8_IRQHandler(void)
     done = med_now_us();
     counters.spi_us_last = (uint32_t)(done - at);
     q_head = head + 1u;
+    if (head + 1u - q_tail > counters.queue_high) {
+        counters.queue_high = head + 1u - q_tail;
+    }
 }
 
 int afe_take(struct afe_sample *out)
@@ -525,4 +603,5 @@ void afe_counters(struct afe_counters *out)
     out->overruns = counters.overruns;
     out->spi_errors = counters.spi_errors;
     out->spi_us_last = counters.spi_us_last;
+    out->queue_high = counters.queue_high;
 }

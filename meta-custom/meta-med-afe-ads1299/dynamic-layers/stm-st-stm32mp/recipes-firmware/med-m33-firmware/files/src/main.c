@@ -48,12 +48,13 @@ void Error_Handler(void);
 /* --------------------------------------------------------------- the clock */
 
 /*
- * The sample clock, derived from SysTick at 1 kHz. Every MS_PER_SAMPLE-th tick
- * is a sample instant. ms_ticks is ours and 64-bit: HAL's uwTick is 32-bit
+ * The sample clock, derived from SysTick at 1 kHz. Every ms_per_sample-th tick
+ * is a sample instant - the synthetic source's only, which is why that source
+ * has no rate above 1000. ms_ticks is ours and 64-bit: HAL's uwTick is 32-bit
  * and wraps after 49.7 days, and a timestamp that wraps is a timestamp that
  * goes backwards.
  */
-#define MS_PER_SAMPLE (1000u / MED_PRODUCER_RATE_HZ) /* 4 */
+static volatile uint32_t ms_per_sample = 1000u / MED_PRODUCER_RATE_HZ; /* 4 */
 
 static volatile uint64_t ms_ticks;
 
@@ -105,7 +106,7 @@ void SysTick_Handler(void)
     ++ms_ticks;
 
 #ifdef MED_M33_SYNTHETIC
-    if (ms_ticks % MS_PER_SAMPLE == 0u) {
+    if (ms_ticks % ms_per_sample == 0u) {
         const uint32_t head = pending_head;
         if (head - pending_tail >= PENDING) {
             ++overruns;
@@ -138,6 +139,11 @@ static uint32_t linux_addr = RPMSG_ADDR_ANY;
 static uint8_t frame[MED_PRODUCER_FRAME_BYTES];
 static uint32_t bad_status;
 static uint32_t conversions_taken; /* since the last afe_start() */
+static uint32_t conversions_lost_seen; /* the interrupt's losses already answered for */
+#define DRAIN_BATCH (2u * MED_PRODUCER_SAMPLES_PER_FRAME)
+static uint32_t work_us_per_conversion; /* over the last full pass of the loop */
+/* The gain in force as the whole number it is, and the sensor channel's own. */
+static uint32_t gain_in_force = 24u, gain_of_sensor = 12u;
 static uint32_t frames_sent;
 static uint32_t frames_dropped;
 
@@ -161,14 +167,21 @@ static int on_message(struct rpmsg_endpoint *ept, void *data, size_t length,
             afe_stop();
             if (producer.streaming) {
                 struct afe_regs regs;
-                afe_registers(afe_pga_field(producer.gain),
+                afe_registers(afe_rate_field(producer.rate_hz), afe_pga_field(producer.gain),
                               producer.test_signal == MED_TEST_SIGNAL_INTERNAL,
                               producer.bias_drive, producer.lead_off,
-                              producer.montage == MED_MONTAGE_REFERENTIAL, &regs);
+                              producer.montage == MED_MONTAGE_REFERENTIAL,
+                              producer.input == MED_INPUT_SHORTED, producer.temperature,
+                              &regs);
                 if (afe_apply(&regs) != AFE_OK) {
                     med_producer_refuse(&producer, &pending_ack,
                                         "the converter did not take the settings");
                 } else {
+                    struct afe_counters ac;
+                    afe_counters(&ac);
+                    conversions_lost_seen = ac.overruns + ac.spi_errors;
+                    gain_in_force = (uint32_t)producer.gain;
+                    gain_of_sensor = (uint32_t)afe_sensor_gain(producer.gain);
                     conversions_taken = 0u;
                     if (afe_start() != AFE_OK) {
                         med_producer_refuse(&producer, &pending_ack,
@@ -181,6 +194,9 @@ static int on_message(struct rpmsg_endpoint *ept, void *data, size_t length,
          * them is what keeps the first frame after the ack starting from the
          * first sample after the ack. */
         pending_tail = pending_head;
+        if (producer.streaming) {
+            ms_per_sample = 1000u / producer.rate_hz;
+        }
     } else {
         printf("[med] ignored a %u-byte message (malformed: %lu so far)\r\n",
                (unsigned)length, (unsigned long)producer.controls_malformed);
@@ -234,17 +250,43 @@ static void send_frame(void)
  * the converter; its samples are not samples, so it is dropped and counted -
  * never converted into a waveform.
  */
-static void drain_converter(void)
+static int drain_converter(void)
 {
     struct afe_sample s;
+    struct afe_counters ac;
     int32_t nv[AFE_CHANNELS];
     uint8_t off_p, off_n;
     unsigned c;
+    unsigned taken = 0;
+    const uint64_t began = med_now_us();
 
-    while (afe_take(&s)) {
+    /*
+     * At most two frames' worth per pass, then back to the loop. On the
+     * board, 2026-10-13, at 1000 SPS: this function was written to run until
+     * the queue was empty, the loop could not empty it, and so it never
+     * returned - no control message was read (a prescription for another rate
+     * went unanswered), no report line was printed, and the losses below were
+     * looked at once and never again. A producer that cannot keep a rate must
+     * still be able to be told to stop keeping it.
+     */
+    while (taken < DRAIN_BATCH && afe_take(&s)) {
+        ++taken;
         ++conversions_taken;
+
+        /* Conversions the interrupt could not keep. They are nowhere in the
+         * queue, so the frame being filled is short of them: the producer
+         * gives it up, and the receiver sees a gap instead of fourteen
+         * samples that are not consecutive. Looked at for every conversion:
+         * a loss noticed late would be charged to the wrong frame. */
+        afe_counters(&ac);
+        if (ac.overruns + ac.spi_errors != conversions_lost_seen) {
+            conversions_lost_seen = ac.overruns + ac.spi_errors;
+            med_producer_on_lost(&producer);
+        }
+
         if (!afe_status_valid(s.raw)) {
             ++bad_status;
+            med_producer_on_lost(&producer);
             /* Say which, and what it held: a desync at conversion 1 is a
              * start-up artefact, one in mid-stream is a timing defect. */
             if (bad_status <= 4u) {
@@ -254,7 +296,11 @@ static void drain_converter(void)
             continue;
         }
         for (c = 0; c < AFE_CHANNELS; ++c) {
-            nv[c] = afe_code_to_nv(afe_code24(&s.raw[3 + 3 * c]), producer.gain, AFE_VREF_UV);
+            /* The sensor's channel has a gain of its own (afe_regs.h). */
+            nv[c] = afe_code_to_nv_exact(afe_code24(&s.raw[3 + 3 * c]),
+                                         (producer.temperature && c == MED_TEMPERATURE_CHANNEL)
+                                             ? gain_of_sensor
+                                             : gain_in_force);
         }
         /* The conversion's own lead-off bits, from its status word; the
          * producer drops them unless detection was prescribed. */
@@ -263,8 +309,90 @@ static void drain_converter(void)
             send_frame();
         }
     }
+
+    /* What one conversion costs this loop, frames and their sending included,
+     * on the wall clock: the interrupts that preempted the pass are inside the
+     * number. Against the sample period, it is whether a rate can be kept. */
+    if (taken == DRAIN_BATCH) {
+        work_us_per_conversion = (uint32_t)((med_now_us() - began) / DRAIN_BATCH);
+    }
+    return taken == DRAIN_BATCH;
 }
 #endif
+
+/* ------------------------------------------------------------------ cache */
+
+/*
+ * The data cache, switched on. This firmware is linked into DDR
+ * (stm32mp2xx_DDR_m33_ns.ld) and until 2026-10-13 ran there uncached: every
+ * instruction and every variable was a DDR access. The bench measured the
+ * result before anyone knew its cause - 222 us for a 27-byte read, 828 us of
+ * loop per conversion, a core that could not keep 1000 conversions a second.
+ * With this cache on the read takes 59 us and the same core keeps 8000, and
+ * 16000 with the read at twice the bus speed (afe.c).
+ *
+ * How it is set up was found on the board, one variant at a time, loaded
+ * through the remoteproc's sysfs (implementation_plan_hmi_desktop.md,
+ * section 12.14). What each one did:
+ *
+ *   ST's example, whole     MPU regions for the instruction cache's alias,
+ *                           the data region as write-back and the shared
+ *                           megabyte uncached, then both caches. The firmware
+ *                           stopped inside the creation of its endpoint, with
+ *                           no fault line. It is that example's
+ *                           ICACHE_DCACHE_USE path, which this firmware had
+ *                           never been built with and nobody here had seen
+ *                           run.
+ *   instruction cache only  ran, and changed nothing: the read stayed at
+ *                           241 us. The code is fetched from where the data
+ *                           is, and it is the data cache that serves it.
+ *   data cache, no MPU      ran four times faster and sent sixteen frames in
+ *                           ten seconds: the rpmsg rings were cached, so the
+ *                           buffers Linux gave back were never seen.
+ *   data cache, and the MPU describing ONLY the shared megabyte, uncached
+ *                           this function. Everything else is the default
+ *                           memory map.
+ *
+ * So the one region is the whole point. The resource table, the trace buffer
+ * Linux reads (both linked into IPC_SHMEM_1) and the rpmsg rings and buffers
+ * (the devicetree's vdev0vring0/1 and vdev0buffer) all live in that megabyte,
+ * and nothing the other processor reads or writes may sit in a cache it
+ * cannot see. Its bounds are the linker script's IPC_SHMEM_1 + VIRTIO_SHMEM.
+ *
+ * Why ST's other two regions stop this firmware is NOT known; they were
+ * removed, not understood. A step that fails here is reported in the trace
+ * and the firmware goes on uncached: slow, and saying why.
+ */
+static DCACHE_HandleTypeDef hdcache;
+static int dcache_on;
+
+static void enable_data_cache(void)
+{
+    MPU_Region_InitTypeDef region = {0};
+    MPU_Attributes_InitTypeDef attributes = {0};
+
+    HAL_MPU_Disable();
+
+    attributes.Attributes = INNER_OUTER(MPU_NOT_CACHEABLE);
+    attributes.Number = MPU_ATTRIBUTES_NUMBER1;
+    HAL_MPU_ConfigMemoryAttributes(&attributes);
+
+    region.Enable = MPU_REGION_ENABLE;
+    region.Number = MPU_REGION_NUMBER2;
+    region.AttributesIndex = MPU_ATTRIBUTES_NUMBER1;
+    region.BaseAddress = 0x81200000;
+    region.LimitAddress = 0x812FFFFF;
+    region.AccessPermission = MPU_REGION_ALL_RW;
+    region.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+    region.IsShareable = MPU_ACCESS_INNER_SHAREABLE;
+    HAL_MPU_ConfigRegion(&region);
+
+    HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+
+    hdcache.Instance = DCACHE;
+    hdcache.Init.ReadBurstType = DCACHE_READ_BURST_WRAP;
+    dcache_on = HAL_DCACHE_Init(&hdcache) == HAL_OK; /* enables it */
+}
 
 /* ------------------------------------------------------------------- main */
 
@@ -309,6 +437,7 @@ int main(void)
     uint64_t next_report_ms = 10000u;
 
     HAL_Init();
+    enable_data_cache(); /* where ST's example does it: straight after HAL_Init() */
     MX_IPCC_Init();
     if (!IS_DEVELOPER_BOOT_MODE()) {
         CoproSync_Init();
@@ -327,9 +456,10 @@ int main(void)
     HAL_InitTick(0);
 
     printf("\r\n[med] MedPlatform M33 producer (%s %s)\r\n", __DATE__, __TIME__);
+    printf("[med] data cache %s\r\n", dcache_on ? "on" : "NOT ON - this core will be slow");
     printf("[med] CPACR 0x%08lx (CP10/CP11 %s)\r\n", (unsigned long)SCB->CPACR,
            ((SCB->CPACR >> 20) & 0xFu) == 0xFu ? "enabled" : "DENIED - floating point will fault");
-    printf("[med] core clock %lu Hz, %u ch x %u samples at %u SPS, frame %u bytes\r\n",
+    printf("[med] core clock %lu Hz, %u ch x %u samples, %u SPS unless prescribed, frame %u bytes\r\n",
            (unsigned long)SystemCoreClock, MED_PRODUCER_CHANNELS,
            MED_PRODUCER_SAMPLES_PER_FRAME, MED_PRODUCER_RATE_HZ,
            (unsigned)MED_PRODUCER_FRAME_BYTES);
@@ -361,10 +491,12 @@ int main(void)
                                        ? "converter" : producer.absent_reason);
 #endif
 
+    printf("[med] link: OpenAMP init\r\n");
     if (MX_OPENAMP_Init(RPMSG_REMOTE, NULL) != 0) {
         printf("[med] OpenAMP init failed\r\n");
         Error_Handler();
     }
+    printf("[med] link: creating the endpoint\r\n");
     if (OPENAMP_create_endpoint(&endpoint, CHANNEL_NAME, RPMSG_ADDR_ANY,
                                 on_message, on_unbind) < 0) {
         printf("[med] endpoint '%s' could not be created\r\n", CHANNEL_NAME);
@@ -373,6 +505,8 @@ int main(void)
     printf("[med] endpoint '%s' announced; waiting for a prescription\r\n", CHANNEL_NAME);
 
     for (;;) {
+        int behind = 0;
+
         OPENAMP_check_for_message();
 
         if (ack_due) {
@@ -388,23 +522,30 @@ int main(void)
             }
         }
 #else
-        drain_converter();
+        behind = drain_converter();
 #endif
 
         if (ms_ticks >= next_report_ms) {
             struct afe_counters ac;
             afe_counters(&ac);
             next_report_ms += 10000u;
-            printf("[med] t=%lus streaming=%d seq=%lu sent=%lu dropped=%lu | drdy=%lu "
-                   "lost=%lu spi_err=%lu bad_status=%lu read=%luus\r\n",
+            printf("[med] t=%lus streaming=%d %luSPS seq=%lu sent=%lu dropped=%lu "
+                   "broken=%lu | drdy=%lu lost=%lu spi_err=%lu bad_status=%lu read=%luus "
+                   "queue=%lu work=%luus\r\n",
                    (unsigned long)(ms_ticks / 1000u), producer.streaming,
+                   (unsigned long)producer.rate_hz,
                    (unsigned long)producer.sequence, (unsigned long)frames_sent,
-                   (unsigned long)frames_dropped, (unsigned long)ac.drdy,
+                   (unsigned long)frames_dropped, (unsigned long)producer.frames_broken,
+                   (unsigned long)ac.drdy,
                    (unsigned long)ac.overruns, (unsigned long)ac.spi_errors,
-                   (unsigned long)bad_status, (unsigned long)ac.spi_us_last);
+                   (unsigned long)bad_status, (unsigned long)ac.spi_us_last,
+                   (unsigned long)ac.queue_high, (unsigned long)work_us_per_conversion);
         }
 
-        __WFI();
+        /* With conversions still waiting there is nothing to sleep for. */
+        if (!behind) {
+            __WFI();
+        }
     }
 }
 

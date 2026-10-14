@@ -4,9 +4,10 @@
 #include "afe_regs.h"
 
 /* CONFIG1 [Table 13]: bit 7 reserved 1, bits 4:3 reserved 2h -> 0x90 | DR.
- * DR = 6 is 250 SPS: ODR = f_CLK >> (7 + DR) = 2.048 MHz / 8192. */
+ * ODR = f_CLK >> (7 + DR): DR = 6 is 2.048 MHz / 8192 = 250 SPS, and each step
+ * down doubles it, to DR = 0 at 16000. DR = 7 is reserved. */
 #define CONFIG1_RESERVED 0x90u
-#define CONFIG1_DR_250   0x06u
+#define CONFIG1_DR_250   6
 
 /* CONFIG2 [Table 14]: bits 7:5 reserved 6h, bit 3 reserved 0 -> 0xC0.
  * INT_CAL (bit 4) routes the internal test source; CAL_AMP (bit 2) = 0 is 1x,
@@ -41,6 +42,8 @@
  * bit 7 and SRB2 bit 3 left 0. */
 #define CHSET_PGA_SHIFT  4
 #define CHSET_MUX_NORMAL 0x00u
+#define CHSET_MUX_SHORT  0x01u /* both inputs to (VREFP + VREFN) / 2, off the pins [9.3.1.1.1] */
+#define CHSET_MUX_TEMP   0x04u /* the on-chip temperature sensor's diodes */
 #define CHSET_MUX_TEST   0x05u
 
 static const double kGains[] = {1, 2, 4, 6, 8, 12, 24};
@@ -56,23 +59,53 @@ int afe_pga_field(double gain)
     return -1;
 }
 
-void afe_registers(int pga_field, int test_signal, int bias_drive, int lead_off,
-                   int referential, struct afe_regs *r)
+int afe_rate_field(uint32_t rate_hz)
 {
-    /* The inverting inputs: eight electrodes, or one node on the SRB1 pin. */
-    const uint8_t negative = referential ? AFE_REFERENCE_BIT : AFE_CHANNEL_MASK;
+    int field;
+    for (field = CONFIG1_DR_250; field >= 0; --field) {
+        if (rate_hz == (250u << (CONFIG1_DR_250 - field))) {
+            return field;
+        }
+    }
+    return -1;
+}
 
-    r->config1 = (uint8_t)(CONFIG1_RESERVED | CONFIG1_DR_250);
+double afe_sensor_gain(double gain)
+{
+    return gain > 12.0 ? 12.0 : gain;
+}
+
+void afe_registers(int rate_field, int pga_field, int test_signal, int bias_drive,
+                   int lead_off, int referential, int shorted, int temperature,
+                   struct afe_regs *r)
+{
+    const uint8_t mux = test_signal ? CHSET_MUX_TEST
+                      : shorted ? CHSET_MUX_SHORT
+                      : CHSET_MUX_NORMAL;
+    /* The channels that have electrodes on their pins. */
+    const uint8_t electrodes = (uint8_t)(
+        AFE_CHANNEL_MASK & ~(temperature ? (1u << AFE_TEMPERATURE_CHANNEL) : 0u));
+    /* The inverting inputs: one per channel, or one node on the SRB1 pin. */
+    const uint8_t negative = referential ? AFE_REFERENCE_BIT : electrodes;
+    unsigned c;
+
+    r->config1 = (uint8_t)(CONFIG1_RESERVED | ((unsigned)rate_field & 0x07u));
     r->config2 = (uint8_t)(CONFIG2_RESERVED | (test_signal ? CONFIG2_INT_CAL : 0u));
     r->config3 = (uint8_t)(CONFIG3_RESERVED | CONFIG3_REFBUF |
                            (bias_drive ? CONFIG3_BIASREF_INT | CONFIG3_PD_BIAS : 0u));
-    r->chset = (uint8_t)(((unsigned)pga_field << CHSET_PGA_SHIFT) |
-                         (test_signal ? CHSET_MUX_TEST : CHSET_MUX_NORMAL));
+    for (c = 0; c < AFE_CHANNELS; ++c) {
+        r->chset[c] = (uint8_t)(((unsigned)pga_field << CHSET_PGA_SHIFT) | mux);
+    }
+    if (temperature) {
+        const int sensor_field = afe_pga_field(afe_sensor_gain(kGains[pga_field]));
+        r->chset[AFE_TEMPERATURE_CHANNEL] =
+            (uint8_t)(((unsigned)sensor_field << CHSET_PGA_SHIFT) | CHSET_MUX_TEMP);
+    }
     r->loff = LOFF_RESET;
-    r->sens[0] = bias_drive ? AFE_CHANNEL_MASK : 0u; /* BIAS_SENSP */
-    r->sens[1] = (bias_drive && !referential) ? AFE_CHANNEL_MASK : 0u; /* BIAS_SENSN */
-    r->sens[2] = lead_off ? AFE_CHANNEL_MASK : 0u;   /* LOFF_SENSP */
-    r->sens[3] = lead_off ? negative : 0u;           /* LOFF_SENSN */
+    r->sens[0] = bias_drive ? electrodes : 0u; /* BIAS_SENSP */
+    r->sens[1] = (bias_drive && !referential) ? electrodes : 0u; /* BIAS_SENSN */
+    r->sens[2] = lead_off ? electrodes : 0u;   /* LOFF_SENSP */
+    r->sens[3] = lead_off ? negative : 0u;     /* LOFF_SENSN */
     r->misc1 = referential ? MISC1_SRB1 : 0u;
     r->config4 = lead_off ? CONFIG4_PD_LOFF_COMP : 0u;
 }
@@ -90,6 +123,24 @@ int32_t afe_code24(const uint8_t *b)
         raw |= 0xFF000000u;
     }
     return (int32_t)raw;
+}
+
+int32_t afe_code_to_nv_exact(int32_t code, uint32_t gain)
+{
+    /* AFE_VREF_UV in nanovolts, and gain * 2^23: at most 24 * 2^23, which
+     * fits 32 bits, under a product of at most 2^23 * 4.5e9, which fits 64. */
+    const uint32_t divisor = gain << 23;
+    const int negative = code < 0;
+    /* |code| is at most 2^31, which an unsigned 32 bits holds even for the
+     * most negative int32. */
+    const uint32_t absolute = negative ? 0u - (uint32_t)code : (uint32_t)code;
+    const uint64_t magnitude = (uint64_t)absolute * UINT64_C(4500000000);
+    const uint64_t rounded = (magnitude + divisor / 2u) / divisor;
+
+    if (rounded > 2147483647ull) {
+        return negative ? (int32_t)-2147483647 - 1 : 2147483647;
+    }
+    return negative ? -(int32_t)rounded : (int32_t)rounded;
 }
 
 int32_t afe_code_to_nv(int32_t code, double gain, double vref_uv)

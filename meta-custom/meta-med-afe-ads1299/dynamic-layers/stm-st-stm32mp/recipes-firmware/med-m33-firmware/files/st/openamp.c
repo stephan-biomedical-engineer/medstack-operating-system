@@ -18,6 +18,7 @@
   */
 
 #include "openamp.h"
+#include <stdio.h> /* MedPlatform: the start-up trace */
 #include "rsc_table.h"
 #include "metal/sys.h"
 #include "metal/device.h"
@@ -175,7 +176,9 @@ int MX_OPENAMP_Init(int RPMsgRole, rpmsg_ns_bind_cb ns_bind_cb)
   }
 
 
+  printf("[med] link: waiting for Linux to be ready\r\n"); /* MedPlatform */
   rproc_virtio_wait_remote_ready(vdev);
+  printf("[med] link: Linux is ready\r\n"); /* MedPlatform */
 
   /* USER CODE BEGIN  POST_VIRTIO_INIT */
 

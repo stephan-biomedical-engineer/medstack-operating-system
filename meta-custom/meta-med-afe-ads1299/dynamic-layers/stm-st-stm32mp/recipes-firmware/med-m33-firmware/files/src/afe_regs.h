@@ -48,7 +48,7 @@ struct afe_regs {
     uint8_t config1;
     uint8_t config2;
     uint8_t config3;
-    uint8_t chset; /* written to all eight channels */
+    uint8_t chset[AFE_CHANNELS]; /* CH1SET..CH8SET */
     uint8_t loff;
     /* BIAS_SENSP, BIAS_SENSN, LOFF_SENSP, LOFF_SENSN: four consecutive
      * registers, one bit per channel each. */
@@ -61,7 +61,14 @@ struct afe_regs {
  * {1, 2, 4, 6, 8, 12, 24}, indexed by the field - not the ADS1298's table. */
 int afe_pga_field(double gain);
 
-/* The register image for 250 SPS, internal reference, the given PGA field, and
+/* The output data rates the part has, in samples per second: 250 doubled up
+ * to 16000 and nothing between [SBAS499C Table 13: f_MOD / 4096 down to
+ * f_MOD / 64]. Returns CONFIG1's DR field for one - 6 for 250, 0 for 16000 -
+ * or -1 for a rate the part does not have. [SBAS499?]: 250 is the only code
+ * the bench has seen on this link; the others are the table's. */
+int afe_rate_field(uint32_t rate_hz);
+
+/* The register image for the given DR and PGA fields, internal reference, and
  * either every channel on its electrode inputs or every channel on the
  * internal test signal (1x amplitude, f_CLK / 2^21).
  *
@@ -90,8 +97,39 @@ int afe_pga_field(double gain);
  *                average would make the bias follow the reference instead of
  *                the electrodes' common mode.
  */
-void afe_registers(int pga_field, int test_signal, int bias_drive, int lead_off,
-                   int referential, struct afe_regs *r);
+void afe_registers(int rate_field, int pga_field, int test_signal, int bias_drive,
+                   int lead_off, int referential, int shorted, int temperature,
+                   struct afe_regs *r);
+
+/*
+ * shorted: every channel's inputs taken off its pins and both set to the
+ * common-mode voltage (VREFP + VREFN) / 2 - MUX 001, "to test inherent device
+ * noise" [SBAS499C 9.3.1.1.1, read 2026-10-12]. The test signal, asked for at
+ * the same time, wins: both are positions of the same switch.
+ *
+ * temperature: the LAST channel's inputs on the temperature sensor - MUX 100 -
+ * whatever the others are on. That channel then has no electrodes, so its bit
+ * leaves all four BIAS_SENS/LOFF_SENS masks: it must neither feed the bias
+ * amplifier's average nor carry a lead-off current into the sensor.
+ *
+ * The sensor's channel does NOT take the prescribed gain when that is 24.
+ * Measured on the board, 2026-10-12, with the sensor on the last channel: at
+ * gains 4, 6, 8 and 12 it read a steady 42 C; at 24 it read about 94 mV,
+ * which the datasheet's line turns into -79 C. The sensor's 145 mV [SBAS499C
+ * 9.3.1.1.3] saturates the amplifier at that gain, and the datasheet says so
+ * only for the supply measurement beside it. So the channel's own gain is the
+ * prescribed one capped at 12 (afe_sensor_gain): a gain the others' divides
+ * by a whole number, which keeps every sample of the channel a whole number
+ * of the record's steps. The frame carries input-referred nanovolts, so
+ * nothing downstream sees the difference.
+ *
+ * The MUX code itself (100) is confirmed by that reading: 42 C on a board
+ * that had been running, and no other position gives about 150 mV.
+ */
+#define AFE_TEMPERATURE_CHANNEL (AFE_CHANNELS - 1)
+
+/* The gain the sensor's channel runs at, for a prescribed gain. */
+double afe_sensor_gain(double gain);
 
 /* In a referential montage, the one negative-side lead-off bit that is
  * monitored - and what it then means is "the reference electrode". */
@@ -117,6 +155,19 @@ int32_t afe_code24(const uint8_t *b);
 /* Input-referred nanovolts for a code: one LSB is VREF / (gain * 2^23),
  * rounded to the nearest nanovolt. */
 int32_t afe_code_to_nv(int32_t code, double gain, double vref_uv);
+
+/* The same number in integers, for the path that converts every sample, at
+ * this board's reference: code * 4.5e9 / (gain * 2^23), rounded half away
+ * from zero, saturated like the other. This core has no double-precision
+ * unit, so afe_code_to_nv() costs it five operations in software per sample;
+ * measured on the board, 2026-10-13, the loop spent 828 us per conversion and
+ * could not keep 1000 a second.
+ *
+ * Not "about the same": compared with afe_code_to_nv() for every one of the
+ * 2^24 codes at each of the seven gains, 0 differ - the record's grid is the
+ * one the clinical file's converter checks, and it does not move.
+ * gain is one of the part's seven, as a whole number. */
+int32_t afe_code_to_nv_exact(int32_t code, uint32_t gain);
 
 /* Whether the full scale at this gain, +-VREF / gain, fits the frame format's
  * int32 nanovolts (+-2.147 V). With the 4.5 V reference, gains 1 and 2 do not:

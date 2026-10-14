@@ -27,6 +27,10 @@
  * reference_uv, so the amplitude follows the prescription the way the
  * converter's would.
  *
+ * The periods below are in samples at 250 SPS. Every rate this producer takes
+ * is 250 times a power of two, so each period scales by that whole factor and
+ * the three frequencies are the same at every rate.
+ *
  * Phases are computed from n modulo the period, in integers, before any float
  * is involved: 2*pi*10*n/250 in single precision would lose its fractional part
  * within hours of acquisition, and a slowly degrading synthetic signal is a
@@ -44,14 +48,18 @@ int32_t med_producer_sample_nv(const struct med_producer *p, uint64_t n, uint32_
 {
     double value;
     double full_scale_nv = p->reference_uv / p->gain * 1000.0;
+    const uint32_t factor = p->rate_hz / MED_PRODUCER_RATE_HZ;
+    const uint32_t square = SQUARE_PERIOD * factor;
+    const uint32_t tone_a = TONE_A_PERIOD * factor;
+    const uint32_t tone_b = TONE_B_PERIOD * factor;
 
     if (p->test_signal == MED_TEST_SIGNAL_INTERNAL) {
         double amplitude_nv = p->reference_uv / 2400.0 * 1000.0;
-        value = ((n % SQUARE_PERIOD) < SQUARE_PERIOD / 2) ? amplitude_nv : -amplitude_nv;
+        value = ((n % square) < square / 2) ? amplitude_nv : -amplitude_nv;
     } else {
-        float a = (float)(n % TONE_A_PERIOD) / (float)TONE_A_PERIOD +
+        float a = (float)(n % tone_a) / (float)tone_a +
                   (float)channel / (float)MED_PRODUCER_CHANNELS;
-        float b = (float)(n % TONE_B_PERIOD) / (float)TONE_B_PERIOD;
+        float b = (float)(n % tone_b) / (float)tone_b;
         value = (double)(TONE_A_NV * sinf(kTwoPi * a) + TONE_B_NV * sinf(kTwoPi * b));
     }
 
@@ -151,6 +159,7 @@ void med_producer_init(struct med_producer *p)
     p->gain = 24.0;
     p->reference_uv = 4500000.0;
     p->test_signal = MED_TEST_SIGNAL_OFF;
+    p->rate_hz = MED_PRODUCER_RATE_HZ;
     p->source = MED_SOURCE_SYNTHETIC;
 }
 
@@ -183,13 +192,18 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
     int bias_drive = 0;
     int lead_off = 0;
     enum med_montage montage = MED_MONTAGE_BIPOLAR;
+    enum med_input input = MED_INPUT_NORMAL;
     uint16_t lead_off_index = 0;
+    int temperature = 0;
+    uint16_t input_index = 0;
+    uint16_t temperature_index = 0;
+    double rate = MED_PRODUCER_RATE_HZ;
     unsigned seen = 0;
     uint16_t i;
 
     enum {
         SEEN_GAIN = 1, SEEN_REF = 2, SEEN_TEST = 4, SEEN_LEADOFF = 8, SEEN_BIAS = 16,
-        SEEN_MONTAGE = 32
+        SEEN_MONTAGE = 32, SEEN_INPUT = 64, SEEN_TEMPERATURE = 128, SEEN_RATE = 256
     };
 
     if (length != sizeof(message)) {
@@ -249,6 +263,23 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
             if (p->source == MED_SOURCE_CONVERTER && !afe_gain_fits_frame(gain, AFE_VREF_UV)) {
                 return reject(p, ack, i, key, ": full scale exceeds int32 nanovolts");
             }
+        } else if (strcmp(key, "acquisition.sample_rate_hz") == 0) {
+            /*
+             * Absent, 250 - what this producer did before the key existed.
+             * The converter has seven rates and nothing between them, and a
+             * rate it does not have is refused, never rounded: the frame
+             * header would state a rate, and it has to be the one the samples
+             * were taken at. A synthetic producer is paced by a 1 kHz tick
+             * and takes the three rates that divide it.
+             */
+            bit = SEEN_RATE;
+            if (!parse_positive(value, &rate) || rate > 16000.0 ||
+                rate != (double)(uint32_t)rate || afe_rate_field((uint32_t)rate) < 0) {
+                return reject(p, ack, i, key, ": not 250 doubled up to 16000");
+            }
+            if (p->source != MED_SOURCE_CONVERTER && rate > MED_PRODUCER_SYNTHETIC_MAX_HZ) {
+                return reject(p, ack, i, key, ": synthetic producer, 1000 at most");
+            }
         } else if (strcmp(key, "afe.reference_uv") == 0) {
             bit = SEEN_REF;
             if (!parse_positive(value, &reference_uv)) {
@@ -286,6 +317,42 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
                 montage = MED_MONTAGE_REFERENTIAL;
             } else {
                 return reject(p, ack, i, key, ": not bipolar or referential");
+            }
+        } else if (strcmp(key, "afe.input") == 0) {
+            /*
+             * Absent, the inputs are the electrodes - what this producer did
+             * before the key existed. Shorted takes the electrodes out of the
+             * measurement, so a synthetic producer, which has no inputs to
+             * switch, accepts only the first: a record that says "inputs
+             * shorted" has to come from inputs that were.
+             */
+            bit = SEEN_INPUT;
+            input_index = i;
+            if (strcmp(value, "normal") == 0) {
+                input = MED_INPUT_NORMAL;
+            } else if (strcmp(value, "shorted") == 0) {
+                input = MED_INPUT_SHORTED;
+            } else {
+                return reject(p, ack, i, key, ": not normal or shorted");
+            }
+            if (input != MED_INPUT_NORMAL && p->source != MED_SOURCE_CONVERTER) {
+                return reject(p, ack, i, key, ": synthetic producer, no inputs to switch");
+            }
+        } else if (strcmp(key, "afe.temperature") == 0) {
+            /*
+             * The last channel given to the converter's temperature sensor,
+             * the others left on their electrodes: a session goes on with one
+             * channel fewer. Absent, false. A synthetic producer has no
+             * sensor, and a record with a temperature in it has to have come
+             * from one.
+             */
+            bit = SEEN_TEMPERATURE;
+            temperature_index = i;
+            if (!parse_boolean(value, &temperature)) {
+                return reject(p, ack, i, key, ": not true or false");
+            }
+            if (temperature && p->source != MED_SOURCE_CONVERTER) {
+                return reject(p, ack, i, key, ": synthetic producer, no sensor");
             }
         } else if (strcmp(key, "afe.lead_off_detection") == 0 ||
                    strcmp(key, "afe.bias_drive") == 0) {
@@ -332,12 +399,37 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
                       ": on the test signal, no electrodes");
     }
 
+    /*
+     * The same two statements about an input that is not the electrodes. The
+     * test signal is itself a position of the input switch, so asking for it
+     * and for another one is asking for two positions at once; and there is
+     * no electrode whose contact could be monitored.
+     */
+    if (input != MED_INPUT_NORMAL && test_signal == MED_TEST_SIGNAL_INTERNAL) {
+        return reject(p, ack, input_index, "afe.input",
+                      ": the test signal is an input of its own");
+    }
+    if (input != MED_INPUT_NORMAL && lead_off) {
+        return reject(p, ack, lead_off_index, "afe.lead_off_detection",
+                      ": not on the electrodes, nothing to monitor");
+    }
+
+    /* Shorted is every channel, the last included: it cannot also be the
+     * sensor's. */
+    if (input == MED_INPUT_SHORTED && temperature) {
+        return reject(p, ack, temperature_index, "afe.temperature",
+                      ": the inputs are shorted, the last channel with them");
+    }
+
     p->gain = gain;
+    p->input = input;
+    p->temperature = temperature;
     p->reference_uv = reference_uv;
     p->test_signal = test_signal;
     p->bias_drive = bias_drive;
     p->lead_off = lead_off;
     p->montage = montage;
+    p->rate_hz = (uint32_t)rate;
     p->sequence = 0;
     p->filled = 0;
     p->streaming = 1;
@@ -355,6 +447,50 @@ int med_producer_on_control(struct med_producer *p, const void *data, size_t len
 }
 
 /* ------------------------------------------------------------------ frames */
+
+/*
+ * The frame's CRC, a byte at a time. med_amp_crc32() is the definition and
+ * works a bit at a time, which on this core is eight times the work for 456
+ * bytes of every frame; this is the same polynomial through a table built
+ * from that definition, so the two cannot be different functions. The host
+ * suite closes every frame it receives with med_amp_crc32().
+ */
+static uint32_t crc_table[256];
+static int crc_table_built;
+
+static uint32_t frame_crc32(const uint8_t *data, size_t length)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    size_t i;
+
+    if (!crc_table_built) {
+        unsigned value;
+        for (value = 0; value < 256u; ++value) {
+            const uint8_t byte = (uint8_t)value;
+            /* The CRC of the single byte b is ~(T[~b] ^ 0x00FFFFFF), with the
+             * register starting at all ones; solved here for T[~b], so every
+             * entry comes from the definition and none from a second copy of
+             * the polynomial. */
+            crc_table[(0xFFu ^ byte) & 0xFFu] =
+                (med_amp_crc32(&byte, 1) ^ 0xFFFFFFFFu) ^ 0x00FFFFFFu;
+        }
+        crc_table_built = 1;
+    }
+    for (i = 0; i < length; ++i) {
+        crc = crc_table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+void med_producer_on_lost(struct med_producer *p)
+{
+    if (!p->streaming || (p->sequence == 0 && p->filled == 0)) {
+        return;
+    }
+    p->filled = 0;
+    ++p->sequence;
+    ++p->frames_broken;
+}
 
 int med_producer_on_sample(struct med_producer *p, uint64_t now_us, uint8_t *frame)
 {
@@ -374,7 +510,12 @@ int med_producer_on_sample(struct med_producer *p, uint64_t now_us, uint8_t *fra
 int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_t *nv,
                            uint16_t off_positive, uint16_t off_negative, uint8_t *frame)
 {
-    const uint16_t monitored = p->lead_off ? (uint16_t)((1u << MED_PRODUCER_CHANNELS) - 1u) : 0u;
+    /* A channel on the temperature sensor has no electrodes: its two bits
+     * are not monitored, and what the part says in them is not reported. */
+    const uint16_t on_electrodes = (uint16_t)(
+        ((1u << MED_PRODUCER_CHANNELS) - 1u) &
+        ~(p->temperature ? (1u << MED_TEMPERATURE_CHANNEL) : 0u));
+    const uint16_t monitored = p->lead_off ? on_electrodes : 0u;
     /* Referential: the inverting inputs are one node, watched by one current
      * source (afe_regs.h). The other seven bits are not measurements. */
     const uint16_t monitored_negative =
@@ -405,7 +546,7 @@ int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_
     header.version = MED_AMP_FRAME_VERSION;
     header.channelCount = MED_PRODUCER_CHANNELS;
     header.samplesPerChannel = MED_PRODUCER_SAMPLES_PER_FRAME;
-    header.sampleRateMilliHz = MED_PRODUCER_RATE_HZ * 1000u;
+    header.sampleRateMilliHz = p->rate_hz * 1000u;
     header.sequence = p->sequence;
     header.timestampMicros = p->first_us;
     header.scaleNanoUnitsPerLsb = 1; /* the samples ARE nanovolts */
@@ -420,7 +561,7 @@ int med_producer_on_values(struct med_producer *p, uint64_t now_us, const int32_
     memcpy(frame + sizeof(header), p->samples, sizeof(p->samples));
     memcpy(frame + sizeof(header) + sizeof(p->samples), &contact, sizeof(contact));
     /* The CRC covers the samples and the lead-off block, as laid out. */
-    header.crc32 = med_amp_crc32(frame + sizeof(header), sizeof(p->samples) + sizeof(contact));
+    header.crc32 = frame_crc32(frame + sizeof(header), sizeof(p->samples) + sizeof(contact));
     memcpy(frame, &header, sizeof(header));
 
     ++p->sequence;

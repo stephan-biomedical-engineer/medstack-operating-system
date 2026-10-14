@@ -64,6 +64,8 @@ add_executable(med_m33_producer.elf
     # HAL, CMSIS start-up and the M33 non-secure system file.
     ${HAL}/Src/stm32mp2xx_hal.c
     ${HAL}/Src/stm32mp2xx_hal_cortex.c
+    # The data cache (main.c, enable_data_cache): this firmware runs from DDR.
+    ${HAL}/Src/stm32mp2xx_hal_dcache.c
     ${HAL}/Src/stm32mp2xx_hal_ipcc.c
     ${HAL}/Src/stm32mp2xx_hal_gpio.c
     ${HAL}/Src/stm32mp2xx_hal_spi.c
