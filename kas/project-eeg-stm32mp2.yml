@@ -156,6 +156,13 @@ local_conf_header:
     # to prevent.
     DISTRO_FEATURES:append = " tpm2"
 
+    # TRIAL - docs/implementation_plan_desktop.md, phase D2, and
+    # implementation_plan_desktop_gpu_clients.md. The station desktop in place
+    # of the single-screen compositor. Not committed until phase 3 of the
+    # second plan closes; remove this line to get the compositor the board was
+    # validated with.
+    MED_GUI_COMPOSITOR = "med-desktop-session"
+
     # The co-processor firmware, pulled in by packagegroup-med-amp without
     # meta-med-app ever naming a machine. It installs the signed image in
     # /lib/firmware, and the unit and udev rule that start it when the M33
