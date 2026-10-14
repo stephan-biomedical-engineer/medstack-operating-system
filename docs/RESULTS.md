@@ -659,6 +659,39 @@ processa no máximo dois quadros por passada.
   e o simulado lista até 4000 por uma medida de host, com só 1000 medido no QEMU.
 - Por que a configuração de cache do exemplo da ST trava este firmware não foi descoberto.
 
+### Resultado — 30 minutos a 16000 SPS, pelo link `amp` (2026-10-14, placa)
+
+**Método.** Imagem `make stm32 KEY=development KERNEL=med DATA=12288`, gravada do zero; HMI na
+tela, ambiente de trabalho. Um roteiro destacado na placa (`/run/long.sh`, registro em
+`/run/longtest.log`) escolheu 16000 por `medctl`, gravou 1800 s e anotou a cada minuto a carga,
+o espaço livre, a CPU da HMI e do serviço, os reinícios e a linha de relatório do M33; ao fim,
+esperou o exportador e voltou a 250.
+
+| Medida | Valor |
+|---|---|
+| quadros no registro (`closed.json`) | 2.066.339 em 1810,18 s = **15.981 amostras/s** por canal (−0,12 %, abrir e fechar incluídos) |
+| `dropped` / faltantes / CRC errado | **0 / 0 / 0** |
+| BDF+ | convertido, 2.066.339 registros, 899 MB; o exportador levou 228 s e 1 min 41 s de CPU |
+| registro bruto | 1.025 MB |
+| no M33, do começo ao fim | `lost=0 broken=0 dropped=0`, 28,95 milhões de conversões desde a partida; `read=` 33-37 µs; `work=` 51 µs, picos de 87 |
+| fila da interrupção (máximo) | 55 → 59 aos 12 min → **63 de 128** perto do fim |
+| CPU do serviço de aquisição | 8,1 s por minuto: ~13,5 % de um núcleo |
+| **CPU da HMI** | **51 s por minuto: ~85 % de um núcleo** |
+| carga média (dois A35) | 4,4-4,7 |
+| a tela | `viewer_missed = 22`: a HMI perdeu 22 quadros em 2 milhões; o registro, nenhum |
+| reinícios | 0 |
+
+**O que isto não significa.**
+- A fila do M33 não estabilizou: ficou em 59 por mais de 15 minutos e subiu a 63 no fim. Metade
+  da fila em meia hora com a placa nesta carga; numa sessão de horas, ou com os A35 mais
+  carregados, não se sabe.
+- A carga foi a da própria estação (HMI desenhando 16000 amostras/s em 8 canais), não uma
+  carga sintética. A injeção da §3 (`dd`+`md5sum`) não foi repetida nesta taxa.
+- Contagem, de novo, não sinal.
+- **Espaço**: meia hora a 16000 ocupa ~1,9 GB, porque o BDF+ derivado (899 MB) fica ao lado do
+  bruto (1.025 MB). Nos 11,3 GB do volume de 12 GiB cabem **cerca de 3 horas** nesta taxa, e não
+  as 5,5 que a conta só com o bruto dava.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
@@ -1475,10 +1508,11 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   bancada (2026-10-08, §3), e **um cartão gravado do zero adquirindo sozinho**, igual em 4 boots
   seguidos (Fase 4, `BRINGUP_STM32MP2.md` §9.16). **Ainda não medido**: o nome `/dev/med-amp0`
   contra uma troca de enumeração, e a injeção de falha da Fase 4 (sem firmware na imagem).
-- **Taxas acima de 250 no link `amp`** — as sete se sustentam em sessões de 12 s com a placa ociosa
-  (§3, 2026-10-13). **Não medidos**: o sinal em qualquer taxa acima de 250, uma sessão longa, a
-  perda com os A35 carregados (a 16000 a folga do M33 é de ~11 µs em 62,5), e o que a tela faz a
-  1143 quadros por segundo.
+- **Taxas acima de 250 no link `amp`** — as sete se sustentam em sessões de 12 s (§3, 2026-10-13),
+  e 16000 por 30 min com a HMI na tela, sem perda (§3, 2026-10-14). **Não medidos**: o sinal em
+  qualquer taxa acima de 250, uma sessão de horas (a fila do M33 ainda subia aos 30 min), a perda
+  com carga sintética nos A35 nesta taxa, e se o traço desenhado pela HMI está certo a 1143 quadros
+  por segundo (ela gasta ~85 % de um núcleo e perdeu 22 quadros).
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo. Na placa, pelo link
   `amp`: o jitter do carimbo entre quadros, ocioso e com o A35 carregado (§3). **Ainda não medidos**:
   a latência de entrada da interrupção isolada, o custo de CPU e a carga real (HMI).

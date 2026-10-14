@@ -2012,6 +2012,13 @@ Uma sessão de 15 s na prescrição de fábrica (250 SPS), pedida por `medctl`: 
 registros e publicado ao grupo `medreview`, `NRestarts=0`. O volume grande **ainda não foi visto
 encher**, nem a reserva fechar uma sessão nele.
 
+#### 30 minutos a 16000 SPS (2026-10-14)
+
+Com a imagem de 12 GiB e a HMI na tela: 2.066.339 quadros em 1810 s (15.981 amostras/s),
+`dropped`, faltantes e CRC em 0, BDF+ de 899 MB convertido em 228 s; no M33 `lost=0 broken=0`
+em 28,95 milhões de conversões, a fila em 59 por quinze minutos e 63 de 128 no fim; a HMI a ~85 %
+de um núcleo, perdendo 22 quadros. `RESULTS.md` §3 traz a tabela e o que ela não significa.
+
 #### O que fica aberto
 
 - **Por que as regiões de MPU do exemplo da ST param este firmware.** Foram retiradas, não
