@@ -27,6 +27,31 @@ PrescriptionTable::PrescriptionTable(const QString& path, QObject* parent) : QOb
                                 "choice." + std::to_string(index) + "." + key.toStdString(), "")));
         }
         rows_.append(row);
+
+        const std::string record = "choice." + std::to_string(index) + ".record.";
+        QVariantMap physical;
+        physical.insert(QStringLiteral("input"),
+                        QString::fromStdString(table.getString(record + "input", "normal")));
+        const double perUnit = table.getDouble(record + "auxiliary_uv_per_unit", 1.0);
+        const long long channel = table.getInt(record + "auxiliary_channel", 0);
+        // A conversion that cannot be applied is not applied: the channel is
+        // then shown as the voltage it is, which is at least true.
+        const bool usable = channel > 0 && perUnit > 0.0;
+        physical.insert(QStringLiteral("channel"), usable ? static_cast<int>(channel) : 0);
+        physical.insert(QStringLiteral("label"),
+                        usable ? QString::fromStdString(
+                                     table.getString(record + "auxiliary_label", ""))
+                               : QString());
+        physical.insert(QStringLiteral("unit"),
+                        usable ? QString::fromStdString(
+                                     table.getString(record + "auxiliary_unit", "uV"))
+                               : QStringLiteral("uV"));
+        physical.insert(QStringLiteral("uvPerUnit"), usable ? perUnit : 1.0);
+        physical.insert(QStringLiteral("uvAtReference"),
+                        usable ? table.getDouble(record + "auxiliary_uv_at_reference", 0.0) : 0.0);
+        physical.insert(QStringLiteral("reference"),
+                        usable ? table.getDouble(record + "auxiliary_reference", 0.0) : 0.0);
+        physical_.append(physical);
     }
     for (const QString& key : keys_) {
         const QString name =
@@ -79,4 +104,17 @@ int PrescriptionTable::indexOf(const QVariantMap& settings) const {
 
 QString PrescriptionTable::affirmation(const QString& key) const {
     return affirmations_.value(key);
+}
+
+QVariantMap PrescriptionTable::physical(int index) const {
+    if (index < 0 || index >= physical_.size()) {
+        return QVariantMap{{QStringLiteral("input"), QStringLiteral("normal")},
+                           {QStringLiteral("channel"), 0},
+                           {QStringLiteral("label"), QString()},
+                           {QStringLiteral("unit"), QStringLiteral("uV")},
+                           {QStringLiteral("uvPerUnit"), 1.0},
+                           {QStringLiteral("uvAtReference"), 0.0},
+                           {QStringLiteral("reference"), 0.0}};
+    }
+    return physical_.at(index);
 }

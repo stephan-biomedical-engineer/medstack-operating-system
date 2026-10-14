@@ -491,6 +491,56 @@ EEG_CHECKS = [
      'test $ED = 0 && test "$N" = 0 && test "$Q" = "choice $F0" && echo RECORD_OK',
      rx(r"RECORD_OK")),
 
+    # O canal que não é eletrodo (implementation_plan_hmi_desktop.md, Fase D).
+    # Uma sessão com o sensor de temperatura no último canal: o registro
+    # declara o canal, o arquivo clínico sai com sete sinais EEG e o oitavo
+    # rotulado "Temp", em degC. Depois o sensor é desligado. No link simulado
+    # o nível é o que a tabela diz que o sensor lê a 27 graus; isto mede a
+    # declaração e a conversão, não um sensor.
+    ("configure-temperature", "com o sensor no canal 8 a sessão segue EEG nos outros sete",
+     'medctl session.configure afe.temperature=true >/dev/null; EA=$?; '
+     'medctl session.start >/dev/null; sleep 3; medctl session.stop >/dev/null; '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'for i in $(seq 1 30); do test -e $S/record.bdf.sha256 && break; sleep 1; done; '
+     'C=$(grep -c "\\"auxiliary_channel\\": 8" $S/metadata.json); '
+     'L1=$(dd if=$S/record.bdf bs=1 skip=256 count=5 2>/dev/null); '
+     'L8=$(dd if=$S/record.bdf bs=1 skip=368 count=6 2>/dev/null); '
+     'D1=$(dd if=$S/record.bdf bs=1 skip=1120 count=2 2>/dev/null); '
+     'D8=$(dd if=$S/record.bdf bs=1 skip=1176 count=4 2>/dev/null); '
+     'medctl session.configure afe.temperature=false >/dev/null; EB=$?; '
+     'echo "ped=$EA canal=$C rot=[$L1][$L8] dim=[$D1][$D8] volta=$EB"; '
+     'test $EA = 0 && test "$C" = 1 && test "$L1" = "EEG 1" && test "$L8" = "Temp 8" && '
+     'test "$D1" = uV && test "$D8" = degC && test $EB = 0 && echo TEMPERATURA_OK',
+     rx(r"TEMPERATURA_OK")),
+
+    # A taxa de amostragem escolhida (implementation_plan_hmi_desktop.md,
+    # §12.10). Quatro pernas: uma taxa que o conversor não tem é recusada; uma
+    # que a tabela deste link lista é aceita; a sessão gravada sob ela a
+    # DECLARA e a CONTÉM - contada no registro, como na acq-sample-rate, e não
+    # lida do cabeçalho, porque um registro que declara 1000 e contém 250 é o
+    # defeito que esta asserção existe para ver; e a de fábrica volta. Os
+    # limites são dos dois lados: abaixo de 90% é perda, acima de 110% é uma
+    # taxa que não é a pedida. Só tem o que medir num link cuja tabela lista
+    # mais de uma taxa. Reprovou no QEMU em 2026-10-13 com entregue=858:
+    # cada quadro era sincronizado no volume de registros antes de o seguinte
+    # ser lido, ~61 quadros por segundo. É o que o RecordStream do framework
+    # resolve, e esta asserção é a que diz se resolveu.
+    ("configure-rate", "a taxa escolhida é a que o registro declara e a que ele contém",
+     'K=acquisition.sample_rate_hz; R0=$(grep "^$K" /etc/medplatform/eeg.conf | tr -dc 0-9); '
+     'medctl session.configure $K=300 >/dev/null 2>&1; EX=$?; '
+     'medctl session.configure $K=1000 >/dev/null; EA=$?; '
+     'medctl session.start exam=rate >/dev/null; sleep 2; '
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); '
+     'A=$(stat -c %s $S/raw.bin); sleep 10; B=$(stat -c %s $S/raw.bin); '
+     'medctl session.stop >/dev/null; '
+     'D=$(grep -c "\\"sample_rate_hz\\": 1000\\." $S/metadata.json); '
+     'ACH=$(( (B - A) / 496 * 14 / 10 )); '
+     'medctl session.configure $K=$R0 >/dev/null; EB=$?; '
+     'echo "fora=$EX ped=$EA declarada=$D entregue=$ACH volta=$EB para=$R0"; '
+     'test $EX = 1 && test $EA = 0 && test "$D" = 1 && test $ACH -ge 900 && '
+     'test $ACH -le 1100 && test $EB = 0 && echo TAXA_OK',
+     rx(r"TAXA_OK")),
+
     # A reserva do volume de registros, com o volume quase cheio de verdade:
     # um arquivo de enchimento que deixa 16 MiB livres, metade da reserva. Não
     # até o último octeto - a reserva existe para que o serviço feche a sessão

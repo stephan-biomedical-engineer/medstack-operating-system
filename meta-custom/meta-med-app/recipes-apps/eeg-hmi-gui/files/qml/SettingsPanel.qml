@@ -27,14 +27,18 @@ Rectangle {
 
     readonly property var names: ({
         "afe.gain": "Gain",
+        "acquisition.sample_rate_hz": "Sample rate",
         "afe.lead_off_detection": "Electrode contact (lead-off) detection",
         "afe.montage": "Montage",
-        "afe.test_signal": "Internal test signal"
+        "afe.test_signal": "Internal test signal",
+        "afe.temperature": "Temperature sensor on the last channel (one EEG channel fewer)",
+        "afe.input": "Inputs shorted (bench: the converter's own noise, no EEG)"
     })
     readonly property var words: ({
         "true": "on", "false": "off",
         "off": "off", "internal": "on",
-        "bipolar": "bipolar", "referential": "referential"
+        "bipolar": "bipolar", "referential": "referential",
+        "normal": "off", "shorted": "on"
     })
 
     function picked(key) {
@@ -56,6 +60,8 @@ Rectangle {
     function label(key, value) {
         if (key === "afe.gain")
             return "×" + value
+        if (key === "acquisition.sample_rate_hz")
+            return value + " Hz"
         return words[value] !== undefined ? words[value] : value
     }
     // The word the table says must be stated with this change, if any.

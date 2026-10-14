@@ -597,6 +597,14 @@ int main(int argc, char** argv) {
         /// clinically, and the only reason to count it at all is that the
         /// alternative - waiting for the viewer - costs samples.
         std::uint64_t viewerMissed = 0;
+        /// The raw record. Written by the framework's own writer, so that
+        /// reading the front-end never waits for the record volume: frames
+        /// are handed over and this loop goes back for the next one. Every
+        /// frame is still accounted for - `dropped` is the ones the volume
+        /// could not follow or refused, and close() is where the last of
+        /// them are known.
+        std::unique_ptr<med::RecordStream> record;
+        std::uint64_t reportedFailed = 0;
     };
     Session session;
     med::LeadOff lastContact;
@@ -681,8 +689,29 @@ int main(int argc, char** argv) {
         // not a gap in it.
         metadata += "  \"montage\": " + inForceJson("record.montage") + ",\n";
         metadata += "  \"prefiltering\": " + inForceJson("record.prefiltering") + ",\n";
+
+        // What the inputs were switched to, and the one channel - if any -
+        // that is not a voltage of interest: which it is, what to call it and
+        // what its samples mean. All as the link's table declared them for
+        // the prescription in force, so that whoever derives a clinical file
+        // from this record can tell a bench measurement from a session, and a
+        // temperature from an electrode.
+        metadata += "  \"input\": " + inForceJson("record.input") + ",\n";
+        for (const char* key : {"auxiliary_channel", "auxiliary_label", "auxiliary_unit",
+                                "auxiliary_uv_per_unit", "auxiliary_uv_at_reference",
+                                "auxiliary_reference"}) {
+            metadata += std::string("  \"") + key + "\": " +
+                        inForceJson(std::string("record.") + key) + ",\n";
+        }
+
+        // The electrode names belong to a measurement of electrodes. With the
+        // inputs switched elsewhere they describe nothing in this record, and
+        // carrying them would label a converter's noise with a scalp position.
+        const med::Result<std::string> inputInForce = inForce("record.input");
+        const bool onElectrodes = !inputInForce || inputInForce.value() == "normal";
         {
-            const std::string declared = config.getString("montage.electrodes", "");
+            const std::string declared =
+                onElectrodes ? config.getString("montage.electrodes", "") : std::string();
             std::string list;
             std::size_t begin = declared.find_first_not_of(' ');
             while (begin != std::string::npos) {
@@ -694,7 +723,9 @@ int main(int argc, char** argv) {
             metadata += "  \"electrodes\": " + (list.empty() ? std::string("null") : "[" + list + "]") +
                         ",\n";
         }
-        metadata += "  \"reference\": " + jsonValue(config, "montage.reference") + ",\n";
+        metadata += "  \"reference\": " +
+                    (onElectrodes ? jsonValue(config, "montage.reference") : std::string("null")) +
+                    ",\n";
 
         // The prescription the front-end was given, in the application's own
         // words. The config digest identifies it only for whoever still has
@@ -746,6 +777,16 @@ int main(int argc, char** argv) {
                          {{"session", session.id}, {"status", med::toString(written)}});
             return std::string("the record volume refused the session");
         }
+        med::Result<std::unique_ptr<med::RecordStream>> record =
+            storage.openStream(session.dir + "/raw.bin");
+        if (!record) {
+            runtime.remove("session");
+            logger.audit(med::AuditEvent::DeviceFault, "session record could not be opened",
+                         {{"session", session.id}, {"detail", record.message()}});
+            return std::string("the record volume refused the session");
+        }
+        session.record = record.take();
+        session.reportedFailed = 0;
 
         session.open = true;
         // So that the first recorded frame states the electrodes' contact:
@@ -771,6 +812,21 @@ int main(int argc, char** argv) {
         // never unclosed and unclaimed at the same time. A session without it,
         // and not named as live, was interrupted - power loss, a killed
         // process - and the clinical file derived from it will say so.
+        //
+        // First the record itself: whatever is still waiting is written and
+        // synchronised here, and only then is it known how many frames the
+        // volume did not take. The marker must not say "closed" over a record
+        // that is still being written.
+        if (session.record) {
+            const med::RecordStreamStats written = session.record->close();
+            session.dropped += written.failed;
+            if (written.failed != 0) {
+                logger.error("sample frames could not be persisted",
+                             {{"status", med::toString(written.lastError)},
+                              {"frames", std::to_string(written.failed)}});
+            }
+            session.record.reset();
+        }
         std::string closed;
         closed += "{\n";
         closed += "  \"session\": " + jsonString(session.id) + ",\n";
@@ -974,6 +1030,21 @@ int main(int argc, char** argv) {
                         choices->getString(key, "");
                 }
             }
+            // The rate is the one setting of a choice that is not a driver
+            // option: every driver takes it from the device's configuration,
+            // so it is taken from the row to there. The frames, the record's
+            // metadata and the stream's header all read it back from the
+            // device that was opened with it.
+            const std::map<std::string, std::string>::const_iterator rate =
+                wanted.find("acquisition.sample_rate_hz");
+            if (rate != wanted.end()) {
+                char* end = nullptr;
+                const double hz = std::strtod(rate->second.c_str(), &end);
+                if (end == rate->second.c_str() || *end != '\0' || !(hz > 0.0)) {
+                    return refuse(rate->first, "not a sample rate: " + rate->second);
+                }
+                candidate.sampleRateHz = hz;
+            }
 
             device->stop();
             std::string failure;
@@ -1129,6 +1200,17 @@ int main(int argc, char** argv) {
 
         // Looked at every few seconds, not every frame: the reserve is tens of
         // megabytes and a session writes a few kilobytes a second.
+        if (session.open && session.frames % 64 == 63) {
+            // And the writer's own failures, which no append() can return:
+            // said when they happen, counted when the session closes.
+            const med::RecordStreamStats written = session.record->stats();
+            if (written.failed > session.reportedFailed) {
+                session.reportedFailed = written.failed;
+                logger.error("sample frames could not be persisted",
+                             {{"status", med::toString(written.lastError)},
+                              {"frames so far", std::to_string(written.failed)}});
+            }
+        }
         if (session.open && session.frames % 64 == 63 && freeBytes() < reserveBytes) {
             logger.audit(med::AuditEvent::DeviceFault,
                          "record volume reached its reserve; the session was closed",
@@ -1167,8 +1249,7 @@ int main(int argc, char** argv) {
             // The record is written before it is published: what a clinician
             // later reviews is authoritative, what the screen shows is a
             // convenience.
-            const med::Status stored =
-                storage.append(session.dir + "/raw.bin", encoded.data(), encoded.size());
+            const med::Status stored = session.record->append(encoded.data(), encoded.size());
             if (stored != med::Status::Ok) {
                 ++session.dropped;
                 if (session.dropped == 1 || session.dropped % 100 == 0) {

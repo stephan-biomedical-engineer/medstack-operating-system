@@ -367,6 +367,145 @@ int main() {
         CHECK(!contains(g, "detached 1-"));
     }
 
+    medtest::section("entradas em curto, e o canal que não é eletrodo");
+    {
+        // Per-signal header fields, 8 signals and the annotation one: labels
+        // at 256, then 9 transducers of 80, then the dimensions, the physical
+        // minima and the physical maxima, 8 characters each.
+        const std::size_t kDimension = 256 + 9 * 16 + 9 * 80;
+        const std::size_t kPhysicalMin = kDimension + 9 * 8;
+        const std::size_t kPhysicalMax = kPhysicalMin + 9 * 8;
+        const std::string none = "  \"auxiliary_channel\": 0,\n"
+                                 "  \"auxiliary_label\": \"none\",\n"
+                                 "  \"auxiliary_unit\": \"uV\",\n"
+                                 "  \"auxiliary_uv_per_unit\": 1,\n"
+                                 "  \"auxiliary_uv_at_reference\": 0,\n"
+                                 "  \"auxiliary_reference\": 0,\n";
+        const std::string sensor = "  \"auxiliary_channel\": 8,\n"
+                                   "  \"auxiliary_label\": \"Temp\",\n"
+                                   "  \"auxiliary_unit\": \"degC\",\n"
+                                   "  \"auxiliary_uv_per_unit\": 490,\n"
+                                   "  \"auxiliary_uv_at_reference\": 145300,\n"
+                                   "  \"auxiliary_reference\": 25,\n";
+        const std::vector<std::uint64_t> frames = range(0, 12);
+        auto replaced = [](std::string text, const std::string& from, const std::string& to) {
+            const std::size_t at = text.find(from);
+            if (at != std::string::npos) {
+                text.replace(at, from.size(), to);
+            }
+            return text;
+        };
+
+        // Shorted inputs: the same codes, in the same unit, under a label
+        // that is not EEG, and an annotation that says so.
+        writeSession(*storage, "session-short",
+                     metadata(true, "  \"input\": \"shorted\",\n" + none), frames);
+        Result<eeg::ExportSummary> done = eeg::exportSession(*storage, "session-short", false);
+        CHECK_MSG(done.isOk(), done.message());
+        const std::vector<unsigned char> f = slurp(dir.file("eeg/session-short/record.bdf"));
+        CHECK_EQ(field(f, 256, 16), std::string("Short 1"));
+        CHECK_EQ(field(f, 256 + 7 * 16, 16), std::string("Short 8"));
+        CHECK_EQ(field(f, kDimension, 8), std::string("uV"));
+        CHECK_EQ(field(f, kPhysicalMin, 8), std::string("-187500"));
+        CHECK(contains(f, "input shorted, not EEG"));
+        CHECK_MSG(!contains(f, "EEG "), "uma sessão de entradas em curto saiu rotulada EEG");
+        CHECK_MSG(codesMatch(f, frames), "um código do BDF de curto difere do quadro");
+
+        // The temperature sensor on the last channel of a session: seven EEG
+        // signals exactly as before, and an eighth that says what it is, in
+        // its own unit. The codes are still the converter's on all eight.
+        writeSession(*storage, "session-temp",
+                     metadata(true, "  \"input\": \"normal\",\n" + sensor), frames);
+        done = eeg::exportSession(*storage, "session-temp", false);
+        CHECK_MSG(done.isOk(), done.message());
+        const std::vector<unsigned char> t = slurp(dir.file("eeg/session-temp/record.bdf"));
+        CHECK_EQ(field(t, 256, 16), std::string("EEG 1+-1-"));
+        CHECK_EQ(field(t, 256 + 6 * 16, 16), std::string("EEG 7+-7-"));
+        CHECK_EQ(field(t, 256 + 7 * 16, 16), std::string("Temp 8"));
+        CHECK_EQ(field(t, kDimension, 8), std::string("uV"));
+        CHECK_EQ(field(t, kDimension + 6 * 8, 8), std::string("uV"));
+        CHECK_EQ(field(t, kDimension + 7 * 8, 8), std::string("degC"));
+        CHECK_EQ(field(t, kPhysicalMin, 8), std::string("-187500"));
+        const double low = std::atof(field(t, kPhysicalMin + 7 * 8, 8).c_str());
+        const double high = std::atof(field(t, kPhysicalMax + 7 * 8, 8).c_str());
+        // (-187500 - 145300) / 490 + 25 and (187499.9776 - 145300) / 490 + 25
+        CHECK_MSG(std::fabs(low - (-654.1837)) < 2e-3,
+                  "mínimo físico do canal 8: " + field(t, kPhysicalMin + 7 * 8, 8));
+        CHECK_MSG(std::fabs(high - 111.1224) < 2e-3,
+                  "máximo físico do canal 8: " + field(t, kPhysicalMax + 7 * 8, 8));
+        CHECK(contains(t, "channel 8 is Temp in degC, not EEG"));
+        CHECK(!contains(t, "input shorted"));
+        CHECK_MSG(codesMatch(t, frames), "um código do BDF com temperatura difere do quadro");
+
+        // With the electrodes named for all eight channels, the eighth name
+        // is not what is on that channel any more: the label stays Temp.
+        const std::string named = replaced(
+            metadata(true, "  \"input\": \"normal\",\n" + sensor), "\"electrodes\": null",
+            "\"electrodes\": [\"Fp1-F3\", \"Fp2-F4\", \"C3-P3\", \"C4-P4\", \"P3-O1\", \"P4-O2\", "
+            "\"T3-T5\", \"T4-T6\"]");
+        writeSession(*storage, "session-tempnamed", named, frames);
+        done = eeg::exportSession(*storage, "session-tempnamed", false);
+        CHECK_MSG(done.isOk(), done.message());
+        const std::vector<unsigned char> n = slurp(dir.file("eeg/session-tempnamed/record.bdf"));
+        CHECK_EQ(field(n, 256 + 6 * 16, 16), std::string("EEG T3-T5"));
+        CHECK_EQ(field(n, 256 + 7 * 16, 16), std::string("Temp 8"));
+        CHECK_MSG(!contains(n, "T4-T6"), "o nome de eletrodo do canal 8 foi parar no arquivo");
+
+        // Fault injection: the same record with the auxiliary channel's label
+        // forced to an EEG one. Refused, whole.
+        writeSession(*storage, "session-forced",
+                     metadata(true, "  \"input\": \"normal\",\n" +
+                                        replaced(sensor, "\"Temp\"", "\"EEG O2\"")),
+                     frames);
+        done = eeg::exportSession(*storage, "session-forced", false);
+        CHECK_MSG(!done.isOk() && done.status() == Status::InvalidArgument &&
+                      done.message().find("not an EEG channel") != std::string::npos,
+                  "rótulo de EEG forçado no canal de temperatura: " + done.message());
+        CHECK(!storage->exists("session-forced/record.bdf"));
+
+        // The other ways the declaration can be wrong, each refused.
+        const struct {
+            const char* what;
+            std::string extra;
+        } broken[] = {
+            {"canal fora dos canais", replaced(sensor, "\"auxiliary_channel\": 8", "\"auxiliary_channel\": 9")},
+            {"canal fracionário", replaced(sensor, "\"auxiliary_channel\": 8", "\"auxiliary_channel\": 7.5")},
+            {"conversão com divisor zero", replaced(sensor, "\"auxiliary_uv_per_unit\": 490", "\"auxiliary_uv_per_unit\": 0")},
+            {"rótulo vazio", replaced(sensor, "\"Temp\"", "\"\"")},
+            {"canal não numérico", replaced(sensor, "\"auxiliary_channel\": 8", "\"auxiliary_channel\": \"8\"")},
+        };
+        int index = 0;
+        for (const auto& item : broken) {
+            const std::string name = "session-broken" + std::to_string(index++);
+            writeSession(*storage, name, metadata(true, "  \"input\": \"normal\",\n" + item.extra),
+                         frames);
+            done = eeg::exportSession(*storage, name, false);
+            CHECK_MSG(!done.isOk() && done.status() == Status::InvalidArgument,
+                      std::string(item.what) + ": " + done.message());
+        }
+
+        // Shorted inputs and an auxiliary channel: that channel cannot be both.
+        writeSession(*storage, "session-both",
+                     metadata(true, "  \"input\": \"shorted\",\n" + sensor), frames);
+        done = eeg::exportSession(*storage, "session-both", false);
+        CHECK_MSG(!done.isOk() && done.status() == Status::InvalidArgument,
+                  "curto com canal auxiliar: " + done.message());
+
+        // Shorted inputs with electrode names, and an input nobody defined.
+        writeSession(*storage, "session-shortnamed",
+                     replaced(metadata(true, "  \"input\": \"shorted\",\n" + none),
+                              "\"reference\": null", "\"reference\": \"A1\""),
+                     frames);
+        done = eeg::exportSession(*storage, "session-shortnamed", false);
+        CHECK_MSG(!done.isOk() && done.message().find("electrodes") != std::string::npos,
+                  "curto com eletrodos nomeados: " + done.message());
+        writeSession(*storage, "session-what",
+                     metadata(true, "  \"input\": \"temperature\",\n" + none), frames);
+        done = eeg::exportSession(*storage, "session-what", false);
+        CHECK_MSG(!done.isOk() && done.message().find("unknown input") != std::string::npos,
+                  "entrada desconhecida: " + done.message());
+    }
+
     medtest::section("injeção: escala diferente da declarada (D7)");
     {
         // The samples were taken at gain 24; the metadata says gain 12.

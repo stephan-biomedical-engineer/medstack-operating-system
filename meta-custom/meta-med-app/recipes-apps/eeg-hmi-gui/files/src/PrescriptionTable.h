@@ -45,10 +45,19 @@ public:
     Q_INVOKABLE int indexOf(const QVariantMap& settings) const;
     /// The word that has to be stated to change this setting, or empty.
     Q_INVOKABLE QString affirmation(const QString& key) const;
+    /// What one row measures, as that row's record declares it: "input" (what
+    /// every channel's inputs are switched to), and the one channel that is
+    /// not a voltage of interest - "channel" (from 1; 0 for none), its
+    /// "label", its "unit", and the three numbers of
+    /// value = (uV - uvAtReference) / uvPerUnit + reference. The display
+    /// converts by this and knows no sensor. "No such channel" for a row that
+    /// declares nothing, or an index outside the table.
+    Q_INVOKABLE QVariantMap physical(int index) const;
 
 private:
     QStringList keys_;
     QList<QMap<QString, QString>> rows_;
     QMap<QString, QString> affirmations_;
+    QList<QVariantMap> physical_;
     int factory_ = -1;
 };

@@ -183,7 +183,70 @@ python do_derive_device_options() {
         if gain <= 0 or reference_uv <= 0:
             refuse("eeg.conf: afe.gain and afe.reference_uv must be positive")
 
+        # The rates a converter of this class offers, each with the -3 dB band
+        # of its sinc3 decimation filter at that rate (SBAS499C Tables 1-4, the
+        # same at every gain - checked in implementation_plan_bdf.md phase 0).
+        # A set and not a range, here as in the service's safety envelope.
+        # Which of them a link delivers is that link's business, below.
+        bandwidth = {250: 65, 500: 131, 1000: 262, 2000: 524, 4000: 1048,
+                     8000: 2096, 16000: 4193}
+        rate = number('acquisition.sample_rate_hz')
+        if rate not in bandwidth:
+            refuse("eeg.conf: acquisition.sample_rate_hz = %s is not a rate the "
+                   "converter offers" % values['acquisition.sample_rate_hz'])
+
+        # Two settings that take inputs off the electrodes, and they are not
+        # alike.
+        #
+        # afe.input = shorted ties both inputs of EVERY channel together inside
+        # the converter. What is recorded is the converter's own noise and
+        # nothing of a patient: a bench measurement, and the record and the
+        # clinical file say so.
+        #
+        # afe.temperature gives ONE channel - the last - to the converter's
+        # temperature sensor and leaves the others on their electrodes. A
+        # session goes on, one channel short, with the temperature recorded
+        # beside it.
+        #
+        # The converter's switch has one more position, its supply rails. It
+        # is not here: it reads 2.5 V, which only the lowest gain can
+        # represent, and the "amp" link's frame cannot carry that gain's full
+        # scale - so it could be offered on the simulation alone.
+        source = required('afe.input')
+        if source not in ('normal', 'shorted'):
+            refuse("eeg.conf: afe.input must be 'normal' or 'shorted', not '%s'" % source)
+        temperature = boolean('afe.temperature')
+        try:
+            channels = int(required('acquisition.channels'))
+        except ValueError:
+            refuse("eeg.conf: acquisition.channels = '%s' is not an integer"
+                   % values['acquisition.channels'])
+        # The test signal is a position of the same switch as the short.
+        if source == 'shorted' and test_signal == 'internal':
+            refuse("afe.input = shorted with afe.test_signal = internal asks the "
+                   "input switch for two positions")
+        # And shorted is every channel, the sensor's included.
+        if source == 'shorted' and temperature:
+            refuse("afe.input = shorted with afe.temperature = true: the last "
+                   "channel cannot be both")
+
         if link == 'simulated':
+            # The generator makes any rate; what carries it is the service, one
+            # frame at a time, and a frame is 14 samples whatever the rate. The
+            # record used to be the ceiling - every frame was synchronised
+            # before the next was read, and on the QEMU image the suite asked
+            # for 1000 samples a second and counted 858 (2026-10-13). It is now
+            # written by the framework's record stream, off the acquisition
+            # path, and on a host build every rate came out within 0.2 % up to
+            # 8000 and within 0.8 % at 16000, where what runs short is this
+            # generator's own pacing: its period is under a millisecond there,
+            # and it resynchronises instead of bursting, so the shortfall is
+            # not counted anywhere. The two rates at which it was seen are not
+            # offered; the suite's configure-rate assertion measures 1000.
+            if rate > 4000:
+                refuse("acquisition.sample_rate_hz = %s is not kept on link 'simulated': "
+                       "measured short of the declared rate"
+                       % values['acquisition.sample_rate_hz'])
             # Lead-off and bias need no translation: a simulation has no electrodes,
             # so either value is trivially what it does.
             options = [
@@ -191,9 +254,20 @@ python do_derive_device_options() {
                 ('full_scale', compact(reference_uv / gain)),
                 ('resolution_bits', str(resolution_bits)),
                 ('noise_rms', '0.14'),
-                # amplitude uV @ frequency Hz @ phase step per channel, rad
-                ('tones', '20@10@0.4, 5@50@0, 2@0.3@0.4'),
             ]
+            if source == 'normal':
+                # amplitude uV @ frequency Hz @ phase step per channel, rad
+                options.append(('tones', '20@10@0.4, 5@50@0, 2@0.3@0.4'))
+            # Shorted inputs: the noise floor above and nothing else.
+            if temperature:
+                # What the sensor reads at 27 degC, by the record's own
+                # declaration below, on the last channel: nothing on the
+                # simulation is warm, and the number only has to be one the
+                # conversion turns into a plausible temperature. The tones
+                # stay under it - the generator has no way to silence one
+                # channel - and that is a property of the simulation.
+                options.append(('offset', '%s@%d' % (compact(145300.0 + (27.0 - 25.0) * 490.0),
+                                                      channels)))
             if test_signal == 'internal':
                 options.append(('square', '%s@%s' % (compact(reference_uv / 2400.0),
                                                      compact(2048000.0 / 2 ** 21))))
@@ -202,8 +276,46 @@ python do_derive_device_options() {
             # The firmware on the real-time core is this application's own producer,
             # so it speaks the prescription's words and answers each one in its
             # control acknowledgement.
+            #
+            # Two of the words are left unsaid when they say "as before":
+            # afe.input = normal and afe.temperature = false. The control
+            # message holds eight options and the prescription, with the rate,
+            # is nine keys; the producer defines both absences as exactly those
+            # values (and its host suite checks that it does), and the two can
+            # never both be said, because shorted inputs exclude the sensor. So
+            # eight always fit - and there is no room for a ninth: the next
+            # setting this link gains needs a larger message, which is a new
+            # version of the wire format.
             options = sorted((key, value) for key, value in values.items()
-                             if key.startswith('afe.'))
+                             if key.startswith('afe.')
+                             and not (key == 'afe.input' and source == 'normal')
+                             and not (key == 'afe.temperature' and not temperature))
+            # The rate, in the same words. The producer programs the converter
+            # with it and states it in every frame header; the framework's
+            # driver holds each header against the rate it was opened with.
+            #
+            # All seven are rows on this link, and NONE above 250 has been
+            # measured on it (2026-10-13). That departs from the rule the
+            # other links keep, on purpose: a rate cannot be measured on a
+            # bench whose screen does not offer it. What stands in for the
+            # measurement until then is that a loss here is not silent - a
+            # conversion the real-time core cannot keep breaks the frame and
+            # leaves a gap in the sequence, which the record's reader counts.
+            # A rate the bench shows does not hold comes out of this table
+            # with its number, like the two gains below.
+            #
+            # Measured since, on the board (2026-10-13), and all seven hold:
+            # twelve-second sessions at each rate, the frames counted in the
+            # record within 0.3 % of the declared rate, none missing from the
+            # sequence, none failing its CRC, each converted to its clinical
+            # file. They did not at first - 1000 delivered 436 - and what it
+            # took is in the firmware: its data cache (it runs from DDR and
+            # had none), its conversion in integers, and at 16000 a faster
+            # read. implementation_plan_hmi_desktop.md, section 12.14.
+            options.append(('acquisition.sample_rate_hz', compact(rate)))
+            if len(options) > 8:
+                refuse("the prescription for link 'amp' is %d options and its control "
+                       "message holds 8" % len(options))
             # One combination the producer is known to refuse, said here so
             # that it is never offered: with the internal test signal there is
             # no electrode in the measurement, and the firmware will not
@@ -211,12 +323,45 @@ python do_derive_device_options() {
             if test_signal == 'internal' and lead_off:
                 refuse("afe.test_signal = internal with afe.lead_off_detection = true "
                        "is refused by the producer on link 'amp'")
+            # A gain the converter has and this link cannot carry: its frame
+            # is 32-bit nanovolts, and the full scale of the two lowest gains
+            # does not fit. The producer refuses them; saying so here keeps
+            # them off the table an operator chooses from. Seen on the board,
+            # 2026-10-12: "x2" offered on the screen and refused when picked.
+            if reference_uv * 1000.0 / gain > 2147483647.0:
+                refuse("afe.gain = %s has a full scale of %s uV, which the frame of "
+                       "link 'amp' cannot carry" % (values['afe.gain'],
+                                                    compact(reference_uv / gain)))
+            # And its sibling: off the electrodes there is no contact to monitor.
+            if source == 'shorted' and lead_off:
+                refuse("afe.input = shorted with afe.lead_off_detection = true is "
+                       "refused by the producer on link 'amp'")
 
         elif link in ('spi', 'usb'):
             # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
             # input_mux, test_signal, bias_drive and montage are the driver's own.
             # One prescription has no attribute at all, and is checked against what
             # the driver does at probe instead of being passed and ignored.
+            # A value enters a link's table when it has been measured on that
+            # link. The kernel driver has the attribute for this one; nobody
+            # has yet read a shorted input or the sensor through it.
+            if source != 'normal':
+                refuse("afe.input = %s has not been measured on link '%s'" % (source, link))
+            if temperature:
+                refuse("afe.temperature = true has not been measured on link '%s'" % link)
+            # The rate reaches the kernel driver as sampling_frequency, written
+            # by the framework from the device's sample rate, so there is no
+            # option line for it. On "usb" 250 is both the converter's lowest
+            # rate and the bridge's ceiling (BRINGUP_AFE.md, section 6): two HID
+            # exchanges per conversion leave no faster one. On "spi" nothing
+            # stands in the way and nothing has been measured.
+            if rate != 250:
+                if link == 'usb':
+                    refuse("acquisition.sample_rate_hz = %s: the bridge of link 'usb' "
+                           "delivers 250 samples per second and no more"
+                           % values['acquisition.sample_rate_hz'])
+                refuse("acquisition.sample_rate_hz = %s has not been measured on link "
+                       "'%s'" % (values['acquisition.sample_rate_hz'], link))
             if not lead_off:
                 refuse("afe.lead_off_detection = false cannot be honoured on link '%s': "
                          "the kernel driver enables the lead-off comparators at probe and "
@@ -322,21 +467,38 @@ python do_derive_device_options() {
             ('full_scale_uv', compact(reference_uv / gain)),
             ('resolution_bits', str(resolution_bits)),
             ('montage', montage),
+            ('input', source),
         ]
 
+        # The one channel that is not a voltage of interest, when there is
+        # one: which it is, what to call it, and what its samples mean -
+        #
+        #     value = (microvolts - auxiliary_uv_at_reference) / auxiliary_uv_per_unit
+        #             + auxiliary_reference
+        #
+        # Declared in every case, "none" included (channel 0), so that a
+        # choice never inherits another choice's channel. The display and the
+        # clinical file apply it as written; neither knows a sensor.
+        #
+        # The line is the converter's own [SBAS499C, "Temperature (degC) =
+        # (reading - 145300 uV) / 490 uV/degC + 25"]. It is input-referred, so
+        # it does not depend on the gain. Unverified until a bench session
+        # warms the part and watches the number.
+        if temperature:
+            record += [('auxiliary_channel', str(channels)), ('auxiliary_label', 'Temp'),
+                       ('auxiliary_unit', 'degC'), ('auxiliary_uv_per_unit', '490'),
+                       ('auxiliary_uv_at_reference', '145300'), ('auxiliary_reference', '25')]
+        else:
+            record += [('auxiliary_channel', '0'), ('auxiliary_label', 'none'),
+                       ('auxiliary_unit', 'uV'), ('auxiliary_uv_per_unit', '1'),
+                       ('auxiliary_uv_at_reference', '0'), ('auxiliary_reference', '0')]
+
         # The converter's own filtering, for the clinical file's "prefiltering"
-        # field: DC-coupled, and the -3 dB band of its sinc3 decimation filter at
-        # the configured rate (SBAS499C Tables 1-4, the same at every gain - checked
-        # in implementation_plan_bdf.md phase 0). Only the converter's: whatever
+        # field: DC-coupled, and the band of its decimation filter at the rate
+        # in force (the table above). Only the converter's: whatever
         # anti-aliasing the front-end board adds is not known and is not claimed.
         # The simulated link filters nothing and declares nothing.
         if link != 'simulated':
-            bandwidth = {250: 65, 500: 131, 1000: 262, 2000: 524, 4000: 1048,
-                         8000: 2096, 16000: 4193}
-            rate = number('acquisition.sample_rate_hz')
-            if rate not in bandwidth:
-                refuse("eeg.conf: acquisition.sample_rate_hz = %s is not a rate the "
-                         "converter offers" % values['acquisition.sample_rate_hz'])
             record.append(('prefiltering', 'HP:DC LP:%dHz' % bandwidth[rate]))
 
         # The same cross-check the service makes before it will start: the
@@ -364,21 +526,26 @@ python do_derive_device_options() {
     # display shows what this file lists and nothing else - which is how a link
     # that cannot do something comes to not offer it.
     #
-    # The rate is not here. A rate enters this table for a link when it has
-    # been measured on that link, and so far only the shipped one has.
+    # The rate is one of them, and the rule for it is the rule for the rest: a
+    # rate is a row for a link when that link has been measured delivering it.
+    # Every link refuses the others, above, so what an operator sees on a link
+    # with a converter is, for now, the one rate it is known to keep.
     import itertools
 
     domain = [
         ('afe.gain', ['1', '2', '4', '6', '8', '12', '24']),
+        ('acquisition.sample_rate_hz', ['250', '500', '1000', '2000', '4000', '8000', '16000']),
         ('afe.lead_off_detection', ['true', 'false']),
         ('afe.montage', ['bipolar', 'referential']),
         ('afe.test_signal', ['off', 'internal']),
+        ('afe.temperature', ['false', 'true']),
+        ('afe.input', ['normal', 'shorted']),
     ]
 
     def normalised(key, value):
-        if key == 'afe.gain':
+        if key in ('afe.gain', 'acquisition.sample_rate_hz'):
             return compact(float(value))
-        if key == 'afe.lead_off_detection':
+        if key in ('afe.lead_off_detection', 'afe.temperature'):
             return 'true' if value.lower() in ('true', '1', 'yes', 'on') else 'false'
         return value
 

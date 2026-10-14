@@ -45,6 +45,20 @@ struct SessionMetadata {
     std::string reference;        ///< empty: none declared
     std::string prefiltering;     ///< empty: unknown
     std::string testSignal;       ///< the prescription's afe.test_signal, if any
+    /// What every channel's inputs were switched to: "normal" (the
+    /// electrodes) or "shorted", a bench measurement of the converter's own
+    /// noise. A record written before the key existed measured electrodes.
+    std::string input = "normal";
+    /// The one channel that is not a voltage of interest, counted from 1, or
+    /// 0 for none: its label, and what its samples mean -
+    /// value = (uV - uvAtReference) / uvPerUnit + auxiliaryReference, in
+    /// auxiliaryUnit. The other channels are what `input` says.
+    unsigned auxiliaryChannel = 0;
+    std::string auxiliaryLabel;
+    std::string auxiliaryUnit = "uV";
+    double uvPerUnit = 1.0;
+    double uvAtReference = 0.0;
+    double auxiliaryReference = 0.0;
     bool clockSynchronized = false;
     std::string utcOffset;        ///< "+HH:MM"
 };

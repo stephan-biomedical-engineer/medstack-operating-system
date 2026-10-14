@@ -54,6 +54,11 @@ Window {
     // Per channel; 0 or absent means the default.
     property var laneScales: []
 
+    // What the prescription in force measures, from the device's sealed
+    // table: whether the inputs are on the electrodes at all, and which
+    // channel, if any, is something else - with its label and conversion.
+    readonly property var physical: prescriptions.physical(sessions.choice)
+
     function scaleOf(channel) {
         return laneScales[channel] > 0 ? laneScales[channel] : defaultScale
     }
@@ -240,6 +245,26 @@ Window {
                 font.letterSpacing: 1.0
             }
             Rectangle {
+                // Inputs switched off the electrodes: what is on the screen is
+                // a measurement of the converter, and nobody should have to
+                // open a panel to find that out.
+                visible: root.physical.input !== "normal"
+                anchors.verticalCenter: parent.verticalCenter
+                radius: 4
+                color: theme.warn
+                width: benchText.implicitWidth + 16
+                height: 24
+                Text {
+                    id: benchText
+                    anchors.centerIn: parent
+                    text: root.physical.input === "shorted" ? "BENCH: INPUTS SHORTED"
+                                                            : "BENCH: " + root.physical.input
+                    color: "#0b0f14"
+                    font.pixelSize: 12
+                    font.weight: Font.Bold
+                }
+            }
+            Rectangle {
                 visible: eeg.electrodeOff
                 anchors.verticalCenter: parent.verticalCenter
                 radius: 4
@@ -319,6 +344,11 @@ Window {
                     rmsUv: index < eeg.rms.length ? eeg.rms[index] : 0
                     levelUv: index < eeg.level.length ? eeg.level[index] : 0
                     flat: index < eeg.flat.length ? eeg.flat[index] : false
+                    quantity: root.physical.channel === index + 1 ? root.physical.label : ""
+                    unit: root.physical.unit
+                    uvPerUnit: root.physical.uvPerUnit
+                    uvAtReference: root.physical.uvAtReference
+                    unitReference: root.physical.reference
                     contactPositive: root.contact(eeg.monitoredPositive, eeg.detachedPositive, index)
                     contactNegative: root.contact(eeg.monitoredNegative, eeg.detachedNegative, index)
                     onScaleStep: (direction) => root.stepChannel(index, direction)

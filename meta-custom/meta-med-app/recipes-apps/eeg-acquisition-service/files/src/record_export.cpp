@@ -485,6 +485,16 @@ std::string contactNames(std::uint16_t positive, std::uint16_t negative,
 std::string signalLabel(unsigned channel, const SessionMetadata& meta) {
     const bool declared = channel < meta.electrodes.size();
     const std::string number = std::to_string(channel + 1);
+    // The one channel that is not an electrode says what it is, and never
+    // "EEG": a reader sorts signals by that word. Checked before anything
+    // that would give it an electrode's name.
+    if (meta.auxiliaryChannel != 0 && channel + 1 == meta.auxiliaryChannel) {
+        return meta.auxiliaryLabel + " " + number;
+    }
+    // With every input shorted the record is the converter's own noise.
+    if (meta.input == "shorted") {
+        return "Short " + number;
+    }
     if (meta.montage == "referential") {
         return "EEG " + (declared ? meta.electrodes[channel] : number) + "-" +
                (meta.reference.empty() ? "REF" : meta.reference);
@@ -569,6 +579,25 @@ med::Result<SessionMetadata> parseMetadata(const std::string& text) {
     str("utc_offset", meta.utcOffset, true);
     str("reference", meta.reference, false);
     str("prefiltering", meta.prefiltering, false);
+    // Absent in a record written before these existed: electrodes on every
+    // channel, in microvolts, which is what every such record was.
+    str("input", meta.input, false);
+    str("auxiliary_label", meta.auxiliaryLabel, false);
+    str("auxiliary_unit", meta.auxiliaryUnit, false);
+    double auxiliaryChannel = 0.0;
+    for (const auto& field : {std::make_pair("auxiliary_channel", &auxiliaryChannel),
+                              std::make_pair("auxiliary_uv_per_unit", &meta.uvPerUnit),
+                              std::make_pair("auxiliary_uv_at_reference", &meta.uvAtReference),
+                              std::make_pair("auxiliary_reference", &meta.auxiliaryReference)}) {
+        const Json* v = root.get(field.first);
+        if (v != nullptr && v->kind == Json::Kind::Number) {
+            *field.second = v->number;
+        } else if (v != nullptr && v->kind != Json::Kind::Null) {
+            return MetaResult::fail(med::Status::InvalidArgument,
+                                    std::string("metadata.json: ") + field.first +
+                                        " is not a number");
+        }
+    }
     double channels = 0.0, bits = 0.0;
     num("channels", channels);
     num("sample_rate_hz", meta.sampleRateHz);
@@ -628,6 +657,47 @@ med::Result<SessionMetadata> parseMetadata(const std::string& text) {
     if (!meta.electrodes.empty() && meta.electrodes.size() != meta.channels) {
         return MetaResult::fail(med::Status::InvalidArgument,
                                 "metadata.json: electrodes do not match the channels");
+    }
+    if (meta.input != "normal" && meta.input != "shorted") {
+        return MetaResult::fail(med::Status::InvalidArgument,
+                                "metadata.json: unknown input '" + meta.input + "'");
+    }
+    // A record cannot be both: electrode names are the labels of an EEG, and
+    // shorted inputs did not record one. Whichever of the two statements is
+    // wrong, the file that would come out of them carries a scalp position
+    // over a converter's noise.
+    if (meta.input != "normal" && (!meta.electrodes.empty() || !meta.reference.empty())) {
+        return MetaResult::fail(med::Status::InvalidArgument,
+                                "metadata.json names electrodes, and the input was '" +
+                                    meta.input + "': the record is not of electrodes");
+    }
+
+    if (auxiliaryChannel != std::floor(auxiliaryChannel) || auxiliaryChannel < 0 ||
+        auxiliaryChannel > meta.channels) {
+        return MetaResult::fail(med::Status::InvalidArgument,
+                                "metadata.json: the auxiliary channel is not one of the channels");
+    }
+    meta.auxiliaryChannel = static_cast<unsigned>(auxiliaryChannel);
+    if (meta.auxiliaryChannel != 0) {
+        if (!(meta.uvPerUnit > 0.0) || !std::isfinite(meta.uvAtReference) ||
+            !std::isfinite(meta.auxiliaryReference) || meta.auxiliaryUnit.empty()) {
+            return MetaResult::fail(med::Status::InvalidArgument,
+                                    "metadata.json: the auxiliary channel's conversion is not "
+                                    "usable");
+        }
+        // Its label is the one thing that keeps a reader from taking it for
+        // an electrode. Empty, or the very word it must not be, is refused.
+        if (meta.auxiliaryLabel.empty() || meta.auxiliaryLabel.rfind("EEG", 0) == 0) {
+            return MetaResult::fail(med::Status::InvalidArgument,
+                                    "metadata.json: the auxiliary channel is labelled '" +
+                                        meta.auxiliaryLabel +
+                                        "', and it is not an EEG channel");
+        }
+        if (meta.input != "normal") {
+            return MetaResult::fail(med::Status::InvalidArgument,
+                                    "metadata.json: an auxiliary channel and shorted inputs: "
+                                    "that channel cannot be both");
+        }
     }
     return MetaResult::ok(std::move(meta));
 }
@@ -791,6 +861,16 @@ med::Result<ExportSummary> exportSession(med::MedicalStorage& storage,
                                          (meta.reference.empty() ? std::string("REF")
                                                                  : meta.reference)
                                    : std::string("montage bipolar")});
+        if (meta.input != "normal") {
+            // Nor a measurement of the converter itself. The labels already
+            // say so; this says it to a reader that shows annotations first.
+            s.starts.push_back({0, "input " + meta.input + ", not EEG"});
+        }
+        if (meta.auxiliaryChannel != 0) {
+            s.starts.push_back({0, "channel " + std::to_string(meta.auxiliaryChannel) + " is " +
+                                       meta.auxiliaryLabel + " in " + meta.auxiliaryUnit +
+                                       ", not EEG"});
+        }
         if (meta.testSignal == "internal") {
             // A generator trace must never be read as EEG.
             s.starts.push_back({0, "test signal internal"});
@@ -893,9 +973,22 @@ med::Result<ExportSummary> exportSession(med::MedicalStorage& storage,
         for (unsigned c = 0; c < meta.channels; ++c) {
             med::BiosignalSignal signal;
             signal.label = signalLabel(c, meta);
-            signal.physicalDimension = meta.unit;
-            signal.physicalMinimum = -static_cast<double>(codeLimit) * lsbUv;
-            signal.physicalMaximum = static_cast<double>(codeLimit - 1) * lsbUv;
+            // The samples stay the converter's codes; what the header says
+            // they mean is the record's own declaration. For every channel
+            // but the auxiliary one that is microvolts, as it always was.
+            const double lowUv = -static_cast<double>(codeLimit) * lsbUv;
+            const double highUv = static_cast<double>(codeLimit - 1) * lsbUv;
+            if (meta.auxiliaryChannel != 0 && c + 1 == meta.auxiliaryChannel) {
+                signal.physicalDimension = meta.auxiliaryUnit;
+                signal.physicalMinimum =
+                    (lowUv - meta.uvAtReference) / meta.uvPerUnit + meta.auxiliaryReference;
+                signal.physicalMaximum =
+                    (highUv - meta.uvAtReference) / meta.uvPerUnit + meta.auxiliaryReference;
+            } else {
+                signal.physicalDimension = meta.unit;
+                signal.physicalMinimum = lowUv;
+                signal.physicalMaximum = highUv;
+            }
             signal.digitalMinimum = static_cast<std::int32_t>(-codeLimit);
             signal.digitalMaximum = static_cast<std::int32_t>(codeLimit - 1);
             signal.prefiltering = meta.prefiltering;

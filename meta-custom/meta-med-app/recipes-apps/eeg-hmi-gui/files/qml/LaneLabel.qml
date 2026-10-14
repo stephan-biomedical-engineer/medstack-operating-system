@@ -22,6 +22,15 @@ Item {
     // what keep that from reading as a good electrode.
     property real levelUv: 0
     property bool flat: false
+    // For the one channel that is not on electrodes: what it is, and what its
+    // level means - the unit and the conversion the device's table declares
+    // for the prescription in force. Empty, this is a channel like the others.
+    property string quantity: ""
+    property string unit: "uV"
+    property real uvPerUnit: 1
+    property real uvAtReference: 0
+    property real unitReference: 0
+    readonly property bool auxiliary: quantity.length > 0
 
     signal scaleStep(int direction)
     signal scaleReset()
@@ -42,6 +51,10 @@ Item {
         if (size >= 1000)
             return sign + (size / 1000).toFixed(size >= 100000 ? 1 : 2) + " mV"
         return sign + size.toFixed(0) + " µV"
+    }
+    function reading(uv) {
+        var value = (uv - lane.uvAtReference) / lane.uvPerUnit + lane.unitReference
+        return value.toFixed(2) + " " + (lane.unit === "degC" ? "°C" : lane.unit)
     }
     function pillColor(state) {
         return state === 2 ? "#f85149" : (state === 1 ? "#2ea043" : "#2a3442")
@@ -102,17 +115,24 @@ Item {
         }
         Text {
             visible: lane.height >= 62
-            text: lane.detached ? "ELECTRODE OFF"
+            // A channel on a sensor has no electrode to be off, and its
+            // filtered rms is not a signal size anyone asked for.
+            text: lane.auxiliary ? "not an electrode"
+                : lane.detached ? "ELECTRODE OFF"
                 : lane.flat ? "NOT VARYING" : lane.measured(lane.rmsUv) + " rms"
             color: lane.detached ? "#f85149" : (lane.flat ? "#e0af68" : "#6f7d8f")
             font.pixelSize: 11
             font.weight: (lane.detached || lane.flat) ? Font.Bold : Font.Normal
         }
         Text {
-            visible: lane.height >= 80
-            text: "input at " + lane.signedLevel(lane.levelUv)
-            color: lane.flat ? "#e0af68" : "#6f7d8f"
-            font.pixelSize: 11
+            // A converted reading is the point of the lane it is on, and is
+            // shown however little room there is.
+            visible: lane.height >= 80 || lane.auxiliary
+            text: lane.auxiliary ? lane.quantity + " " + lane.reading(lane.levelUv)
+                                 : "input at " + lane.signedLevel(lane.levelUv)
+            color: lane.auxiliary ? "#e6edf3" : (lane.flat ? "#e0af68" : "#6f7d8f")
+            font.pixelSize: lane.auxiliary ? 13 : 11
+            font.weight: lane.auxiliary ? Font.DemiBold : Font.Normal
         }
     }
 
