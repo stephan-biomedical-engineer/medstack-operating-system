@@ -128,7 +128,7 @@ não é o disco da plataforma, é o disco das máquinas que bootam por GRUB/EFI.
 | 1 | `esp` | vfat | 64 MiB | ESP com GRUB; também o depósito da chave de desenvolvimento no QEMU |
 | 2 | `med-root-a` | ext4 | 1 GiB fixo | Slot A |
 | 3 | `med-root-b` | ext4 | 1 GiB fixo | Slot B |
-| 4 | `med-data` | ext4 | 512 MiB | Volume de dados; convertido em LUKS no primeiro boot |
+| 4 | `med-data` | ext4 | 512 MiB | Volume de dados; convertido em LUKS no primeiro boot. Fixo no QEMU; na STM32MP2 é `MED_DATA_SIZE` (desde 2026-10-14, `make stm32 DATA=<MiB>`, padrão 512 - ver `conf/layer.conf`) |
 
 `--fixed-size` nos dois slots, e não `--size`: o wic trata `--size` como **mínimo** e aplica um
 fator de sobrecarga de 1,3 apenas à partição que tem `--source`. Com `--size` os dois slots saíram

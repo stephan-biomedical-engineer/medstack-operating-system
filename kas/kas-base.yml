@@ -184,6 +184,12 @@ env:
   # letting that happen.
   MED_EEG_LINK:
 
+  # The size of the record volume, in MiB, for the board image only:
+  # "make stm32 DATA=12288". Null default, same mechanism again; the default
+  # value lives in meta-med-bsp/conf/layer.conf with "?=", which a value
+  # passed through here overrides.
+  MED_DATA_SIZE:
+
   # Bench-only kernel symbols, same null-default mechanism. MED_BENCH=1 adds
   # med-kernel-bench.cfg, which today means CONFIG_SPI_SPIDEV - a userspace path
   # to the converter's SPI bus, which phase 2 of the bench plan needs and which

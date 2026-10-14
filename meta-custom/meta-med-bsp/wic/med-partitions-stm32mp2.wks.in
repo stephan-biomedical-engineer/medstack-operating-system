@@ -190,6 +190,11 @@ part --part-name med-root-b --label med-root-b --ondisk mmcblk --fstype=ext4 --a
 # boot by med-data-provision.service - on this machine with
 # MED_DATA_KEY_SOURCE = "tpm2", which refuses to provision rather than falling
 # back to a key that is not one.
-part --part-name med-data --label med-data --ondisk mmcblk --fstype=ext4 --align 1024 --size 512
+#
+# Its size is MED_DATA_SIZE (MiB), declared in layer.conf and settable from the
+# build. --size and not --fixed-size is safe here: wic adds its 1.3 factor only
+# to a partition with a --source, and this one has none (512 came out as
+# exactly 1048576 sectors, RESULTS.md section 8).
+part --part-name med-data --label med-data --ondisk mmcblk --fstype=ext4 --align 1024 --size ${MED_DATA_SIZE}
 
 bootloader --ptable gpt

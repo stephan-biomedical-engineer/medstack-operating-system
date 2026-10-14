@@ -143,6 +143,22 @@ ifneq ($(LINK),)
   endif
 endif
 
+# The size of the record volume, in MiB: "make stm32 DATA=12288" for a 16 GB
+# card. The board image only - the QEMU layout is a fixed .wks, which would
+# drop the value silently - and a whole number no smaller than the default,
+# because below it the LUKS header, the session reserve and the updater's
+# state stop fitting with room to record. The card is not checked here and
+# cannot be: bmaptool refuses an image larger than the device.
+DATA ?=
+ifneq ($(DATA),)
+  ifneq ($(shell echo '$(DATA)' | grep -Eq '^[0-9]+$$' && [ $(DATA) -ge 512 ] && echo ok),ok)
+    $(error DATA is the record volume in MiB, a whole number of at least 512, not "$(DATA)")
+  endif
+  ifneq ($(filter-out stm32,$(MAKECMDGOALS)),)
+    $(error DATA applies to the board image only: make stm32 DATA=$(DATA))
+  endif
+endif
+
 BOARD_CFG     := $(if $(filter stm32,$(BOARD)),$(STM32_CFG),$(QEMU_CFG))
 BOARD_MACHINE := $(shell awk '/^machine:/{print $$2}' $(BOARD_CFG))
 
@@ -165,6 +181,8 @@ ifeq ($(NATIVE),1)
   KEY_ARGS     :=
   LINK_ENV     := $(if $(LINK),MED_EEG_LINK=$(LINK),)
   LINK_ARGS    :=
+  DATA_ENV     := $(if $(DATA),MED_DATA_SIZE=$(DATA),)
+  DATA_ARGS    :=
   KERNEL_ARGS  :=
   export MED_KERNEL_GIT MED_KERNEL_SRCREV
   # native: kas reads MED_BENCH from the environment directly
@@ -181,6 +199,9 @@ else
   # Same gap as the key's, for the link.
   LINK_ENV  :=
   LINK_ARGS := $(if $(LINK),--runtime-args "-e MED_EEG_LINK=$(LINK)",)
+  # And for the size of the record volume.
+  DATA_ENV  :=
+  DATA_ARGS := $(if $(DATA),--runtime-args "-e MED_DATA_SIZE=$(DATA)",)
   # Same gap as KEY_ARGS closes, for the pair that says where the kernel comes
   # from, and it had been left open. kas-base.yml lists MED_KERNEL_GIT and
   # MED_KERNEL_SRCREV under "env:", which makes kas forward them into bitbake -
@@ -226,6 +247,7 @@ help:
 	@echo "  stm32       build $(IMAGE) for the STM32MP257F-DK"
 	@echo "              add KERNEL=med to build the kernel fork in ./linux-med at its HEAD"
 	@echo "              add LINK=usb (or spi) for the front-end's other links; default amp"
+	@echo "              add DATA=<MiB> for the record volume; default 512 (DATA=12288 on a 16 GB card)"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY=/KERNEL=/LINK= as the image"
@@ -300,7 +322,7 @@ qemu: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(QEMU_CFG)
 
 stm32: $(TOOL)
-	$(KEY_ENV) $(LINK_ENV) $(KAS) $(KEY_ARGS) $(LINK_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)
+	$(KEY_ENV) $(LINK_ENV) $(DATA_ENV) $(KAS) $(KEY_ARGS) $(LINK_ARGS) $(DATA_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)
 
 tomograph: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(TOMO_CFG)
