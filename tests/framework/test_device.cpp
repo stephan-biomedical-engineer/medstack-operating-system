@@ -248,6 +248,13 @@ void testDevice() {
 
             {"square", "1@2@3", Status::InvalidArgument, "onda quadrada não tem fase"},
             {"square", "1", Status::InvalidArgument, "onda quadrada sem frequência"},
+
+            {"offset", "abc", Status::InvalidArgument, "nível não numérico"},
+            {"offset", "", Status::InvalidArgument, "nível vazio"},
+            {"offset", "1@", Status::InvalidArgument, "canal vazio"},
+            {"offset", "1@2@3", Status::InvalidArgument, "campos demais"},
+            {"offset", "1@1.5", Status::InvalidArgument, "canal não inteiro"},
+            {"offset", "1@0", Status::OutOfRange, "canal zero: contam de 1"},
         };
 
         for (const Rejection& rejection : rejections) {
@@ -585,6 +592,106 @@ void testDevice() {
         }
         CHECK(any);
         CHECK_MSG(!offLevel, "a onda quadrada saiu de +-amplitude (ou os tons vazaram)");
+        device->stop();
+    }
+
+    {
+        // A constant level, with nothing else configured: every sample of
+        // every channel is that level. It is what an input switched to a
+        // steady quantity reads, and it must survive beside the tones.
+        const double level = 145300.0;
+
+        DeviceConfig config = baseConfig("simulated");
+        config.driverOptions["full_scale"] = "187500";
+        config.driverOptions["offset"] = "145300";
+
+        Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(config);
+        CHECK(created.isOk());
+        if (!created.isOk()) {
+            return;
+        }
+        std::unique_ptr<MedicalDevice> device = created.take();
+        CHECK_STATUS(device->selfTest(), Status::Ok);
+        CHECK_STATUS(device->start(), Status::Ok);
+
+        bool any = false;
+        bool offLevel = false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(500));
+            if (!frame.isOk()) {
+                continue;
+            }
+            for (const double sample : frame.value().samples) {
+                any = true;
+                offLevel = offLevel || std::fabs(sample - level) > 1e-3;
+            }
+        }
+        CHECK(any);
+        CHECK_MSG(!offLevel, "o nível constante não é o que foi configurado");
+        device->stop();
+    }
+
+    {
+        // And under the square wave, which replaces the tones and not the level.
+        DeviceConfig config = baseConfig("simulated");
+        config.driverOptions["full_scale"] = "187500";
+        config.driverOptions["offset"] = "1000";
+        config.driverOptions["square"] = "100@0.9765625";
+
+        Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(config);
+        CHECK(created.isOk());
+        if (!created.isOk()) {
+            return;
+        }
+        std::unique_ptr<MedicalDevice> device = created.take();
+        CHECK_STATUS(device->start(), Status::Ok);
+        bool any = false;
+        bool offLevel = false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(500));
+            if (!frame.isOk()) {
+                continue;
+            }
+            for (const double sample : frame.value().samples) {
+                any = true;
+                offLevel = offLevel || std::fabs(std::fabs(sample - 1000.0) - 100.0) > 1e-3;
+            }
+        }
+        CHECK(any);
+        CHECK_MSG(!offLevel, "a onda quadrada não está em torno do nível constante");
+        device->stop();
+    }
+
+    {
+        // The level on ONE channel: the last carries it and no other does.
+        DeviceConfig config = baseConfig("simulated");
+        config.driverOptions["full_scale"] = "187500";
+        config.driverOptions["offset"] =
+            "146280@" + std::to_string(static_cast<unsigned>(config.channelCount));
+
+        Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(config);
+        CHECK(created.isOk());
+        if (!created.isOk()) {
+            return;
+        }
+        std::unique_ptr<MedicalDevice> device = created.take();
+        CHECK_STATUS(device->start(), Status::Ok);
+        bool any = false;
+        bool wrong = false;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(500));
+            if (!frame.isOk()) {
+                continue;
+            }
+            const SampleFrame& f = frame.value();
+            for (std::size_t i = 0; i < f.samples.size(); ++i) {
+                any = true;
+                const bool last = (i % f.channelCount) + 1U == f.channelCount;
+                wrong = wrong || std::fabs(f.samples[i] - (last ? 146280.0 : 0.0)) > 1e-3;
+            }
+        }
+        CHECK(any);
+        CHECK_MSG(!wrong, "o nível de um canal só vazou para outro, ou não chegou ao dele");
         device->stop();
     }
 

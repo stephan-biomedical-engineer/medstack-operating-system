@@ -50,6 +50,58 @@ struct StorageInfo {
     std::uint64_t availableBytes = 0;
 };
 
+/// What a record stream did, counted in records (one append() is one record).
+struct RecordStreamStats {
+    std::uint64_t written = 0;  ///< on the volume and synchronised
+    std::uint64_t refused = 0;  ///< not accepted: the queue was full
+    std::uint64_t failed = 0;   ///< accepted, and the volume refused them
+    std::uint64_t syncs = 0;    ///< synchronisations that carried them
+    Status lastError = Status::Ok;
+};
+
+/// A record that grows while something else must not wait for the volume.
+///
+/// append() copies the record into a bounded queue and returns. One writer
+/// thread takes everything queued, writes it and synchronises it once, then
+/// takes whatever was queued meanwhile. So the number of records a
+/// synchronisation carries is not configured: a slow producer gets one each,
+/// exactly as MedicalStorage::append() gives, and a fast one gets as many as
+/// arrived while the previous synchronisation was running.
+///
+/// What a power failure can take is what was queued and what was being
+/// written - about one synchronisation's worth of time - and never part of a
+/// record: a batch the volume did not take whole is cut back to where it
+/// began, so the file is always a whole number of records.
+///
+/// A producer the volume cannot follow fills the queue, and then append()
+/// refuses with WouldBlock and counts the record. It never blocks and never
+/// drops in silence: every record handed in is, at close, one of written,
+/// refused or failed.
+class RecordStream {
+public:
+    ~RecordStream();
+
+    /// Ok: queued. WouldBlock: the queue is full and the record was refused.
+    /// Unavailable: the stream is closed.
+    Status append(const void* data, std::size_t length);
+
+    /// Writes and synchronises everything queued, stops the writer and says
+    /// what happened to every record. Until it returns, the file is not the
+    /// whole record. Safe to call twice.
+    RecordStreamStats close();
+
+    RecordStreamStats stats() const;
+
+    RecordStream(const RecordStream&) = delete;
+    RecordStream& operator=(const RecordStream&) = delete;
+
+private:
+    friend class MedicalStorage;
+    struct Impl;
+    explicit RecordStream(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+};
+
 class MedicalStorage {
 public:
     ~MedicalStorage();
@@ -67,6 +119,12 @@ public:
     /// Each append is fsync'd: the cost buys a bounded loss window on power
     /// failure.
     Status append(const std::string& relativePath, const void* data, std::size_t length);
+
+    /// The same record, appended to by a caller that must not wait for the
+    /// volume - see RecordStream. queueBytes bounds what may be waiting to be
+    /// written; a record larger than it can never be accepted.
+    Result<std::unique_ptr<RecordStream>> openStream(const std::string& relativePath,
+                                                     std::size_t queueBytes = 4U * 1024U * 1024U);
 
     Result<std::vector<std::uint8_t>> read(const std::string& relativePath) const;
     Result<std::string> readString(const std::string& relativePath) const;

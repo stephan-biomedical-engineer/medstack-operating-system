@@ -203,6 +203,18 @@ As outras duas propriedades: **atomicidade** (temp + `fsync` + `rename` + `fsync
 queda de energia deixa o registro velho ou o novo, nunca metade) e **contenção** (`..`, caminho
 absoluto e escape por symlink rejeitados *antes* de qualquer syscall tocar o filesystem).
 
+**`RecordStream`** (desde 2026-10-13) é o registro que cresce sem que o produtor espere o volume.
+`append()` sincronizava a cada chamada, e o serviço de aquisição só lia o quadro seguinte depois:
+no QEMU, 1000 amostras por segundo pedidas viraram 858 no registro. `openStream()` devolve um
+objeto cujo `append` copia o registro para uma fila limitada e volta; uma thread gravadora pega
+tudo o que está na fila, escreve e sincroniza **uma vez**, e repete. O agrupamento não se
+configura: um produtor lento recebe uma sincronização por registro, como antes, e um rápido
+recebe quantos chegaram enquanto a anterior rodava. Três garantias: o arquivo é sempre um número
+inteiro de registros (um lote que o volume não aceitou é cortado de volta ao ponto onde começou);
+fila cheia é `WouldBlock`, contado, e nunca espera; e no `close()` todo registro entregue é
+escrito, recusado ou falho. O que uma queda de energia leva é o que estava na fila e no lote em
+escrita. `std::thread` é da biblioteca C: as dependências continuam duas.
+
 ### 5.6 `MedicalConfiguration` — integridade e o padrão DERS
 
 `load()` exige um sidecar `<path>.sha256` que confira; sidecar ausente também é `IntegrityError`,
@@ -268,7 +280,12 @@ byte igual.
 
 ## 8. O que esta camada ainda não tem evidência de
 
-- **O driver `rpmsg` nunca rodou em alvo nenhum.** O caminho medido é o `simulated`; o
+- **O corte de um lote recusado pelo volume** (`RecordStream`, o `ftruncate`) não é alcançado por
+  nenhum teste de host, e uma queda de energia de verdade nunca foi feita.
+- **A conferência de taxa do driver `rpmsg`** - ele compara a taxa do cabeçalho de cada quadro com
+  a pedida e falha a leitura se diferem - não tem teste: nada no host faz o papel do produtor.
+- **O driver `rpmsg` nunca rodou em alvo nenhum.** *(Escrito antes de 2026-10-07; desde então ele
+  adquire na placa - `BRINGUP_STM32MP2.md` §9.14 em diante. Fica a frase para datar a seção.)* O caminho medido é o `simulated`; o
   `FrameHeader` continua sendo um contrato com um lado só implementado.
 - **O `MedicalUpdate` foi exercitado apenas até onde o RAUC do QEMU chega** — que o serviço de
   atualização esteja *ativo* na suíte prova que o wrapper alcançou o daemon por D-Bus, mas

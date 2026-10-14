@@ -348,6 +348,9 @@ std::vector<std::string> splitOn(const std::string& text, char separator) {
 ///                    an optional phase step per channel in radians
 ///   square           "A@F": a +-A square wave on every channel instead of the
 ///                    tones - the shape of a built-in test generator
+///   offset           "L" or "L@C": a constant level in `unit`, added to every
+///                    channel or to channel C alone (counted from 1) - what an
+///                    input that measures a steady quantity reads
 ///
 /// Any other key is refused, as on every driver.
 class SimulatedDevice : public MedicalDevice {
@@ -503,6 +506,8 @@ private:
         std::vector<Tone> tones;
         bool square = false;
         Tone squareWave;
+        double offset = 0.0;
+        unsigned int offsetChannel = 0;  // 0: every channel; else that one, from 1
     };
 
     /// "A@F" or "A@F@P" - amplitude, non-negative frequency, optional phase.
@@ -569,6 +574,22 @@ private:
                 return Status::InvalidArgument;
             }
             options.square = true;
+        } else if (key == "offset") {
+            const std::vector<std::string> fields = splitOn(value, '@');
+            if (fields.empty() || fields.size() > 2 || !parseNumber(fields[0], number)) {
+                return Status::InvalidArgument;
+            }
+            double channel = 0.0;
+            if (fields.size() == 2) {
+                if (!parseNumber(fields[1], channel) || channel != std::floor(channel)) {
+                    return Status::InvalidArgument;
+                }
+                if (channel < 1.0 || channel > 65535.0) {
+                    return Status::OutOfRange;
+                }
+            }
+            options.offset = number;
+            options.offsetChannel = static_cast<unsigned int>(channel);
         } else {
             return Status::NotSupported;
         }
@@ -586,15 +607,19 @@ private:
 
     /// The configured signal at time t on one channel, without noise.
     double signalAt(double t, std::uint16_t channel) const {
+        const double level =
+            (options_.offsetChannel == 0 || options_.offsetChannel == channel + 1U)
+                ? options_.offset
+                : 0.0;
         if (options_.square) {
             // Every channel sees the generator: a built-in test generator is
             // routed to the inputs as a whole, not to one of them.
             const double phase = std::fmod(t * options_.squareWave.frequencyHz, 1.0);
-            return (phase < 0.5) ? options_.squareWave.amplitude
-                                 : -options_.squareWave.amplitude;
+            return level + ((phase < 0.5) ? options_.squareWave.amplitude
+                                          : -options_.squareWave.amplitude);
         }
 
-        double value = 0.0;
+        double value = level;
         for (const Tone& tone : options_.tones) {
             value += tone.amplitude * std::sin(2.0 * kPi * tone.frequencyHz * t +
                                                tone.phaseStepPerChannel * channel);
@@ -757,9 +782,23 @@ public:
             return Result<SampleFrame>::fail(received.status(), received.message());
         }
 
-        Result<SampleFrame> frame = amp::decodeFrame(buffer, received.value());
+        double producedHz = 0.0;
+        Result<SampleFrame> frame = amp::decodeFrame(buffer, received.value(), &producedHz);
         if (!frame) {
             return frame;
+        }
+
+        // The rate is the producer's to state and this side's to hold it to.
+        // info() declares the configured rate, and that declaration ends up
+        // in a record's metadata: a producer converting at another rate - one
+        // that has no setting for it, or did not understand the one it was
+        // sent - would otherwise yield a record that is wrong about its own
+        // time axis with every frame of it valid. A fault, not a warning.
+        if (std::fabs(producedHz - config_.sampleRateHz) > 0.5) {
+            lastError_ = "the producer converts at " + std::to_string(producedHz) +
+                         " samples per second and " + std::to_string(config_.sampleRateHz) +
+                         " was asked for";
+            return Result<SampleFrame>::fail(Status::OutOfRange, lastError_);
         }
 
         const std::uint64_t sequence = frame.value().sequence;

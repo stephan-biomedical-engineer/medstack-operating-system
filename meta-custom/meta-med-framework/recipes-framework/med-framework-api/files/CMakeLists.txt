@@ -64,10 +64,16 @@ target_include_directories(medframework
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Not a third dependency: threads are the C library's, and on a C library
+# that still keeps them apart this is what names it.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 target_link_libraries(medframework
     PRIVATE
         PkgConfig::SYSTEMD
         OpenSSL::Crypto
+        Threads::Threads
 )
 
 # SOVERSION is part of the regulatory story, not only of packaging: an

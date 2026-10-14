@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "MedicalStorage.h"
+#include <cstring>
+
 #include "check.h"
 #include "temp_dir.h"
 
@@ -237,6 +239,129 @@ void testStorage() {
         // ban on directories.
         CHECK_STATUS(store->writeString("a/b/c/record.json", "{}"), Status::Ok);
         CHECK(store->exists("a/b/c/record.json"));
+    }
+
+    medtest::section("MedicalStorage - um registro que cresce sem que o produtor espere o volume");
+    {
+        TempDir dir;
+        std::unique_ptr<MedicalStorage> store = openScratch(dir.path(), "s").take();
+        CHECK(store != nullptr);
+        if (store) {
+            // Every record handed in is in the file, whole and in order, once
+            // the stream is closed - and not necessarily before.
+            const std::size_t recordBytes = 496;
+            const std::uint32_t count = 20000;
+            Result<std::unique_ptr<RecordStream>> opened = store->openStream("a/raw.bin");
+            CHECK(opened.isOk());
+            if (opened.isOk()) {
+                std::unique_ptr<RecordStream> stream = opened.take();
+                std::vector<std::uint8_t> record(recordBytes);
+                std::uint64_t accepted = 0;
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    for (std::size_t b = 0; b < recordBytes; ++b) {
+                        record[b] = static_cast<std::uint8_t>(i + b);
+                    }
+                    std::memcpy(record.data(), &i, sizeof(i));
+                    if (stream->append(record.data(), record.size()) == Status::Ok) {
+                        ++accepted;
+                    }
+                }
+                const RecordStreamStats stats = stream->close();
+                // Nothing vanishes: accepted is written or failed, the rest
+                // was refused, and the three add up to what was handed in.
+                CHECK_EQ(static_cast<long long>(stats.written + stats.failed),
+                         static_cast<long long>(accepted));
+                CHECK_EQ(static_cast<long long>(stats.written + stats.failed + stats.refused),
+                         static_cast<long long>(count));
+                CHECK_EQ(static_cast<long long>(stats.failed), 0LL);
+                // The point of the thing: a producer faster than the volume
+                // gets many records per synchronisation, with nobody having
+                // said how many.
+                CHECK(stats.syncs >= 1);
+                CHECK(stats.syncs < stats.written);
+
+                Result<std::uint64_t> size = store->size("a/raw.bin");
+                CHECK(size.isOk());
+                CHECK_EQ(static_cast<long long>(size.isOk() ? size.value() : 0),
+                         static_cast<long long>(stats.written * recordBytes));
+                // In order and unbroken. Refused records leave gaps in the
+                // numbering and nothing else, so each record is checked
+                // against its own number.
+                bool whole = true;
+                std::uint32_t previous = 0;
+                for (std::uint64_t r = 0; r < stats.written && whole; ++r) {
+                    Result<std::vector<std::uint8_t>> piece =
+                        store->read("a/raw.bin", r * recordBytes, recordBytes);
+                    if (!piece.isOk() || piece.value().size() != recordBytes) {
+                        whole = false;
+                        break;
+                    }
+                    std::uint32_t number = 0;
+                    std::memcpy(&number, piece.value().data(), sizeof(number));
+                    if (r > 0 && number <= previous) {
+                        whole = false;
+                    }
+                    previous = number;
+                    for (std::size_t b = sizeof(number); b < recordBytes; ++b) {
+                        if (piece.value()[b] != static_cast<std::uint8_t>(number + b)) {
+                            whole = false;
+                        }
+                    }
+                }
+                CHECK(whole);
+
+                // Closed is closed, and closing twice says the same thing.
+                CHECK_STATUS(stream->append(record.data(), record.size()), Status::Unavailable);
+                CHECK_EQ(static_cast<long long>(stream->close().written),
+                         static_cast<long long>(stats.written));
+            }
+
+            // A queue that holds two records refuses the third while the
+            // first two wait, says so, and counts it. The record that does
+            // not fit at all is refused for ever.
+            Result<std::unique_ptr<RecordStream>> small = store->openStream("b/raw.bin", 8);
+            CHECK(small.isOk());
+            if (small.isOk()) {
+                std::unique_ptr<RecordStream> stream = small.take();
+                CHECK_STATUS(stream->append("123456789", 9), Status::WouldBlock);
+                std::uint64_t refused = 1;
+                std::uint64_t taken = 0;
+                for (int i = 0; i < 2000; ++i) {
+                    const Status status = stream->append("abcd", 4);
+                    if (status == Status::Ok) {
+                        ++taken;
+                    } else if (status == Status::WouldBlock) {
+                        ++refused;
+                    }
+                }
+                CHECK_EQ(static_cast<long long>(taken + refused), 2001LL);
+                const RecordStreamStats stats = stream->close();
+                CHECK_EQ(static_cast<long long>(stats.refused), static_cast<long long>(refused));
+                CHECK_EQ(static_cast<long long>(stats.written), static_cast<long long>(taken));
+                Result<std::uint64_t> size = store->size("b/raw.bin");
+                CHECK_EQ(static_cast<long long>(size.isOk() ? size.value() : 0),
+                         static_cast<long long>(taken * 4));
+            }
+
+            // A stream continues a record that is already there.
+            CHECK_STATUS(store->append("c/raw.bin", "head", 4), Status::Ok);
+            Result<std::unique_ptr<RecordStream>> more = store->openStream("c/raw.bin");
+            CHECK(more.isOk());
+            if (more.isOk()) {
+                std::unique_ptr<RecordStream> stream = more.take();
+                CHECK_STATUS(stream->append("tail", 4), Status::Ok);
+                CHECK_STATUS(stream->append("", 0), Status::Ok);
+                CHECK_STATUS(stream->append(nullptr, 4), Status::InvalidArgument);
+                stream->close();
+                Result<std::string> content = store->readString("c/raw.bin");
+                CHECK(content.isOk() && content.value() == "headtail");
+            }
+
+            // The same containment as every other path into the store.
+            CHECK(!store->openStream("../escape.bin").isOk());
+            CHECK(!store->openStream("/etc/passwd").isOk());
+            CHECK(!store->openStream("ok.bin", 0).isOk());
+        }
     }
 
     medtest::section("MedicalStorage - leitura por faixa");

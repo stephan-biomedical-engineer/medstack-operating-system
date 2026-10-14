@@ -16,6 +16,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <condition_variable>
+#include <exception>
+#include <mutex>
+#include <thread>
 
 namespace med {
 namespace {
@@ -317,6 +321,164 @@ Status MedicalStorage::append(const std::string& relativePath, const void* data,
     }
     ::close(fd);
     return status;
+}
+
+// ---------------------------------------------------------------------------
+// RecordStream
+
+struct RecordStream::Impl {
+    int fd = -1;
+    std::size_t capacity = 0;
+
+    mutable std::mutex mutex;
+    std::condition_variable wake;
+    std::vector<std::uint8_t> queued;  // whole records, in order
+    std::uint64_t queuedRecords = 0;
+    bool closing = false;
+    bool closed = false;
+    RecordStreamStats stats;
+
+    off_t end = 0;  // where the next batch begins; the writer's alone
+    std::thread writer;
+
+    void run() {
+        std::vector<std::uint8_t> batch;
+        std::unique_lock<std::mutex> lock(mutex);
+        for (;;) {
+            wake.wait(lock, [this] { return closing || !queued.empty(); });
+            if (queued.empty()) {
+                return;  // closing, and nothing left to write
+            }
+            batch.clear();
+            batch.swap(queued);
+            const std::uint64_t records = queuedRecords;
+            queuedRecords = 0;
+            lock.unlock();
+
+            Status status = writeAll(fd, batch.data(), batch.size());
+            if (status == Status::Ok && ::fdatasync(fd) != 0) {
+                status = statusFromErrno(errno);
+            }
+            if (status == Status::Ok) {
+                end += static_cast<off_t>(batch.size());
+            } else {
+                // Whatever part of the batch reached the file goes: a record
+                // must not be left half written in front of the next one.
+                // If even this fails there is nothing further to do here, and
+                // the count below is what says so.
+                if (::ftruncate(fd, end) == 0) {
+                    ::fdatasync(fd);
+                }
+            }
+
+            lock.lock();
+            if (status == Status::Ok) {
+                stats.written += records;
+                ++stats.syncs;
+            } else {
+                stats.failed += records;
+                stats.lastError = status;
+            }
+        }
+    }
+};
+
+RecordStream::RecordStream(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+
+RecordStream::~RecordStream() {
+    close();
+}
+
+Status RecordStream::append(const void* data, std::size_t length) {
+    if (length == 0) {
+        return Status::Ok;
+    }
+    if (data == nullptr) {
+        return Status::InvalidArgument;
+    }
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        if (impl_->closing) {
+            return Status::Unavailable;
+        }
+        if (impl_->queued.size() + length > impl_->capacity) {
+            ++impl_->stats.refused;
+            return Status::WouldBlock;
+        }
+        const std::uint8_t* bytes = static_cast<const std::uint8_t*>(data);
+        impl_->queued.insert(impl_->queued.end(), bytes, bytes + length);
+        ++impl_->queuedRecords;
+    }
+    impl_->wake.notify_one();
+    return Status::Ok;
+}
+
+RecordStreamStats RecordStream::close() {
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        if (impl_->closed) {
+            return impl_->stats;
+        }
+        impl_->closing = true;
+    }
+    impl_->wake.notify_one();
+    if (impl_->writer.joinable()) {
+        impl_->writer.join();
+    }
+    ::close(impl_->fd);
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->closed = true;
+    return impl_->stats;
+}
+
+RecordStreamStats RecordStream::stats() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->stats;
+}
+
+Result<std::unique_ptr<RecordStream>> MedicalStorage::openStream(const std::string& relativePath,
+                                                                 std::size_t queueBytes) {
+    using StreamResult = Result<std::unique_ptr<RecordStream>>;
+
+    if (!isSafeRelativePath(relativePath)) {
+        return StreamResult::fail(Status::InvalidArgument, "unsafe path: " + relativePath);
+    }
+    if (queueBytes == 0) {
+        return StreamResult::fail(Status::InvalidArgument, "a record stream needs a queue");
+    }
+
+    const std::string target = basePath_ + "/" + relativePath;
+    const std::string::size_type slash = target.find_last_of('/');
+    if (slash != std::string::npos && !makeDirectories(target.substr(0, slash), 0700)) {
+        return StreamResult::fail(statusFromErrno(errno), "cannot create " + relativePath);
+    }
+
+    const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        return StreamResult::fail(statusFromErrno(errno), "cannot open " + relativePath);
+    }
+    const off_t end = ::lseek(fd, 0, SEEK_END);
+    if (end < 0) {
+        const int saved = errno;
+        ::close(fd);
+        return StreamResult::fail(statusFromErrno(saved), "cannot measure " + relativePath);
+    }
+    // The file's name, made durable once, here: the writer synchronises data
+    // only.
+    syncParentDirectory(target);
+
+    std::unique_ptr<RecordStream::Impl> impl(new RecordStream::Impl);
+    impl->fd = fd;
+    impl->capacity = queueBytes;
+    impl->end = end;
+    RecordStream::Impl* raw = impl.get();
+    try {
+        impl->writer = std::thread([raw] { raw->run(); });
+    } catch (const std::exception&) {
+        ::close(fd);
+        return StreamResult::fail(Status::Unavailable, "cannot start the record writer");
+    }
+    return StreamResult::ok(std::unique_ptr<RecordStream>(new RecordStream(std::move(impl))));
 }
 
 Result<std::vector<std::uint8_t>> MedicalStorage::read(const std::string& relativePath) const {
