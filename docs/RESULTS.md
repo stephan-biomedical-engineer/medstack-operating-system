@@ -692,6 +692,38 @@ esperou o exportador e voltou a 250.
   bruto (1.025 MB). Nos 11,3 GB do volume de 12 GiB cabem **cerca de 3 horas** nesta taxa, e não
   as 5,5 que a conta só com o bruto dava.
 
+**Os 22 `viewer_missed` são da tela, e não do registro** - verificado de três modos independentes.
+`viewer_missed` conta os quadros que o serviço não conseguiu entregar à HMI porque o socket dela
+estava cheio (`WouldBlock`); o registro é escrito antes e por outro caminho. Primeiro, a trilha
+de auditoria da sessão diz `MED_FRAMES=2066339 MED_DROPPED=0 MED_VIEWER_MISSED=22`. Segundo, os
+cabeçalhos do primeiro e do último quadro do `raw.bin` têm sequência 3481 e 2069819: um intervalo
+de exatamente 2.066.339, o número de quadros do arquivo, e o arquivo é um múltiplo exato de 496
+octetos - nenhum quadro do M33 falta no registro. Terceiro, e mais forte, porque a sequência não
+veria uma conversão que o M33 nunca recebeu:
+
+**O sinal de teste interno, meio período a meio período.** O gerador do conversor deriva do mesmo
+relógio que as conversões (f_CLK/2²¹), então cada meio período tem um número **exato** de
+amostras: 8192 a 16000, 2048 a 4000. Uma conversão perdida em qualquer ponto - um DRDY que a
+interrupção não viu, inclusive - encurta um meio período em uma amostra. Um minuto de cada, com
+`afe.test_signal = internal`, decodificado no host:
+
+| Taxa | Quadros | Sequência | Meios períodos medidos | Amostras faltando |
+|---|---|---|---|---|
+| 4000 | 17.140 | 871..18010, contínua | **117 de 2048** | **0** em 239.960 |
+| 16000 | 68.553 | 3475..72027, contínua | **117 de 8192** | **0** em 959.742 |
+
+Amplitude −1.893 a +1.859 µV (especificação: ±1.875 µV ± 20 %).
+
+**E o que a mesma medida achou.** Pelo relógio do M33 as duas taxas saem ~1.280 ppm abaixo da
+nominal - 15.979,66 e 3.994,87 amostras/s -, o mesmo desvio nas duas. Como nenhuma conversão
+falta, o desvio é do **relógio do conversor** contra o do M33, e não perda: o conversor converte
+a 16000 do relógio dele. A consequência é de metrologia, não de integridade: o BDF+ declara 16000
+e põe as amostras nesse eixo, então em meia hora o eixo do arquivo se afasta ~2,3 s do tempo real;
+o carimbo de cada quadro no registro bruto é o do M33 e não tem esse erro. Em 2026-10-08, a 250,
+o mesmo desvio medido foi de **+125 ppm** (§3, acima). Dois sinais opostos, em dias diferentes, não
+foram explicados - temperatura, oscilador interno contra cristal externo, ou outra coisa -, e
+qual dos dois relógios está certo continua sem resposta.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
