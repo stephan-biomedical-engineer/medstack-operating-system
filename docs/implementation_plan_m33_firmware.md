@@ -523,3 +523,32 @@ escrito e não resultado.)*
 | 3 | 250 ± 1 SPS/canal, zero lacunas em 120 s | **sintético**: 249,975 SPS/canal pelo relógio do Linux, 0 lacunas e 0 CRC em 2.143 quadros; serviço real adquiriu por `amp` (142 × 488 B). Injeções: prescrição recusada ✓; quadros velhos antes do ack → defeito do framework, corrigido. CRC errado e sequência pulada **não injetados** no firmware (`BRINGUP_STM32MP2.md` §9.14). **Conversor real** (08/10): 250,031 conversões/s pelo relógio do M33, 0 lacunas, 0 CRC e 0 perdas em 2.143 quadros, gerador de teste dentro da especificação nos 8 canais (§9.16) | 2026-10-07, 2026-10-08 |
 | 4 | cartão novo adquire sem intervenção | **critérios 1–3 atendidos**: cartão gravado do zero, M33 carregado pelo udev (7,7 s), prescrição de fábrica aceita, `READY=1` e slot confirmado depois da aquisição, `NRestarts=0`, iguais em 4 boots; `MED_EEG_ADDRESS = /dev/med-amp0`. A enumeração não variou, então o nome não foi testado contra uma troca. **Injeção não feita**: depende de `StartLimit*` (`BRINGUP_STM32MP2.md` §9.16) | 2026-10-08 |
 | 5 | jitter imóvel sob carga no A35 | **antecipada, só a injeção**: com o conversor real, σ do intervalo entre quadros 1,95 → 2,16 µs e faixa 14 → 22 µs sob `dd`+`md5sum` nos dois A35, 0 perdas. A leitura SPI no M33 fica 18% mais lenta (215 → 254 µs): código do M33 na DDR. Custo de CPU e carga da HMI não medidos (`BRINGUP_STM32MP2.md` §9.16) | 2026-10-08 |
+
+### 11.1 Depois das fases: a taxa prescrita e o cache de dados (2026-10-13)
+
+O firmware mudou de forma numa sessão que não era dele - o pedido era uma opção de taxa na tela
+(`implementation_plan_hmi_desktop.md` §12.10–§12.14, `BRINGUP_STM32MP2.md` §9.18). O que a §6
+dizia e deixou de valer:
+
+| Antes | Agora |
+|---|---|
+| 250 SPS, fato do produtor (`MED_PRODUCER_RATE_HZ`) | 250 quando a prescrição não nomeia taxa; a chave `acquisition.sample_rate_hz` aceita as sete do conversor, e o cabeçalho de cada quadro declara a que está em vigor. O sintético aceita até 1000 (é marcado pelo SysTick) |
+| sem cache: código e dados na DDR, cada acesso um acesso à DDR | **cache de dados ligado** logo depois do `HAL_Init()`, com a MPU descrevendo só o megabyte compartilhado (`0x81200000`–`0x812FFFFF`) como não cacheável. Leitura SPI: 222 → 59 µs |
+| conversão para nanovolts em dupla precisão (por software neste núcleo) | em inteiros, `afe_code_to_nv_exact`: 0 códigos diferentes em 2²⁴ × 7 ganhos |
+| CRC do quadro bit a bit | por tabela, montada a partir da definição |
+| `drain_converter` roda até a fila esvaziar | no máximo dois quadros por passada; o laço só dorme se a fila esvaziou |
+| conversão perdida: contada no traço, quadro montado com as que sobram | o quadro em curso é abandonado e a sequência pula (`med_producer_on_lost`) |
+| uma velocidade de barramento | comandos e registradores em prescaler 32; a leitura da conversão em 16, só a 16000 |
+| fila da interrupção de 32 conversões | 128 |
+| oito opções na mensagem de controle, todas usadas pelas `afe.*` | a receita deixa de enviar `afe.input = normal` e `afe.temperature = false`, que o produtor define como o valor da ausência. Cabem oito com a taxa; **não cabe uma nona** sem uma versão nova do formato |
+
+O traço ganhou `NSPS`, `broken`, `queue` e `work`, e uma linha a cada passo de subir o link.
+
+| Critério | Resultado | Data |
+|---|---|---|
+| cada uma das sete taxas no registro, sem lacuna | 12 s por taxa, pelo serviço: quadros a menos de 0,3 % do esperado, 0 faltantes, 0 CRC, BDF+ convertido; a 16000 `lost=0`, `read=34us`, fila ≤ 31 de 128 | 2026-10-13 |
+| lógica do produtor no host | `tests/m33-producer`: 322 verificações, 0 falhas; sete injeções reprovam só o que devem | 2026-10-13 |
+| sessão longa, carga nos A35, sinal acima de 250 | **não medidos** | |
+
+A observação da Fase 5 - a leitura SPI 18 % mais lenta com os A35 carregados, "código do M33 na
+DDR" - foi feita sem cache. Com ele o acoplamento pela DDR deve ser outro, e não foi medido de novo.

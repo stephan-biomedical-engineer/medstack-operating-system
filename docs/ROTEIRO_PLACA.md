@@ -607,6 +607,34 @@ ainda derivando 1,4 µV/s.
 
 ---
 
+### 7.10 As taxas de amostragem (imagem de 2026-10-13 em diante, link `amp`)
+
+A taxa é uma escolha do operador, no painel `Settings` ou por `medctl`. No `amp` a tabela lista as
+sete; no `usb`, só 250. A taxa não muda a montagem: **a chave SRB1 fica onde está** (GNDA para
+bipolar, eletrodo de referência para referencial).
+
+Para medir uma taxa, e não só selecioná-la - a tela mostra o que chegou à tela, o registro é que
+conta:
+
+```bash
+ssh $B 'medctl session.configure acquisition.sample_rate_hz=1000; sleep 2; medctl session.start exam=taxa1000; sleep 12; medctl session.stop'
+```
+```bash
+ssh $B 'S=$(ls -d /data/eeg/session-* | tail -n 1); sleep 8; cat $S/closed.json $S/export.json; grep sample_rate_hz $S/metadata.json'
+```
+```bash
+ssh $B 'cat /sys/kernel/debug/remoteproc/remoteproc*/trace0 | tr -d "\0" | grep "\[med\] t=" | tail -n 2'
+```
+
+O que tem de dar: `frames × 14 / duração` a menos de 1 % da taxa (a duração do `closed.json`
+inclui abrir e fechar); `dropped`, `missing` e `failed_crc` em 0; `status: converted`. No traço,
+com a taxa **ainda selecionada**: `NSPS` igual à pedida e `lost`, `broken` e `dropped` parados
+entre duas linhas (são acumulados desde que o firmware subiu). `read=` mais `work=` tem de ficar
+abaixo do período: 4000, 2000, 1000, 500, 250, 125 e 62,5 µs. `work=` só é atualizado quando o
+laço fica para trás; em taxa baixa fica em 0.
+
+Voltar à de fábrica: `medctl session.configure acquisition.sample_rate_hz=250`.
+
 ## 8. Quando uma fase falha
 
 | Fase | Sintoma | Causa provável | O que fazer |
@@ -624,6 +652,10 @@ ainda derivando 1,4 µV/s.
 | 3 | `Booted from: rootfs.1 (B)` sem ninguém ter instalado nada | fallback: três boots sem aquisição esgotaram o slot A | esperado, com front-end ausente. Corrigida a causa, a placa volta sozinha |
 | 4 | `ack: rejectedIndex N, "...lead_off...on the test signal"` | no `amp`, lead-off ligado junto com o sinal de teste | o `sed` do §7.1 não casou: conferir o `grep` |
 | 4 | amplitude ~0 ou fundo de escala (~187.500 µV) | o sinal de teste não chegou: a config de teste não foi a usada | conferir o `ExecStart` (§7.2) e o `metadata.json` (`"afe.test_signal": "internal"`) |
+| 3, `amp` | traço termina em `source: converter` ou num `[med] link: ...`, sem `endpoint announced`; sem `/dev/med-amp0` | o firmware parou ao subir o link. Em 13/10 foi a configuração de cache | §10 para carregar outro sem regravar. O último `[med] link:` diz o passo |
+| 7.10 | tela ou registro abaixo da taxa pedida, `lost`/`broken` crescendo no traço | o M33 não sustenta a taxa: `read=` + `work=` acima do período | anotar a linha `[med] t=`; `[med] data cache NOT ON` na partida é a primeira coisa a procurar |
+| 7.10 | `dropped` crescendo no traço, `lost` parado | o rpmsg sem buffer: o M33 não vê os que o Linux devolve | memória compartilhada em cache (`BRINGUP_STM32MP2.md` §9.18) |
+| 7.10 | `refused: ... did not acknowledge its settings` e nenhum `[med] message from` no traço | o laço do M33 não está lendo mensagens | firmware anterior a 13/10, saturado: reiniciar e não passar de 500 |
 | 4 | `bad status 00 00 00` na conversão 1 | padrão conhecido depois de certas configurações, descartado e contado | anotar; não é falha da fase se o veredito passar (`BRINGUP_STM32MP2.md` §9.16) |
 
 ---
@@ -655,3 +687,35 @@ O que isto NÃO significa   :
 ```
 
 O diretório `build/med-bench/` não vai para o git. O registro em texto é o que fica.
+
+---
+
+## 10. Carregar um firmware do M33 sem regravar o cartão
+
+Para experimentar uma mudança no firmware. Custa um minuto por tentativa e **desfazer é
+reiniciar**: nada é escrito no rootfs. Foi o que achou a configuração de cache em 2026-10-13,
+depois de uma imagem por hipótese ter deixado a placa sem aquisição
+(`BRINGUP_STM32MP2.md` §9.18).
+
+O firmware a carregar é um `_sign.bin`: o do `deploy` de um `bitbake med-m33-firmware`
+(`build/tmp-glibc/deploy/images/stm32mp25-disco/med-m33-firmware/`), ou um compilado e assinado no
+host com o `CMakeLists.txt` da receita e o `st_copro_firmware_signature.sh` da árvore de build.
+
+O M33 é achado **pelo nome**, nunca pelo número: `remoteproc0` e `remoteproc1` trocaram de papel
+entre dois boots da mesma placa.
+
+```bash
+ssh $B 'mkdir -p /run/fw && cat > /run/fw/teste_sign.bin' < build/tmp-glibc/deploy/images/stm32mp25-disco/med-m33-firmware/med-m33-producer_sign.bin
+```
+```bash
+ssh $B 'systemctl stop eeg-acquisition; for r in /sys/class/remoteproc/remoteproc*; do [ "$(cat $r/name)" = m33 ] && R=$r; done; echo -n /run/fw > /sys/module/firmware_class/parameters/path; [ "$(cat $R/state)" = running ] && echo stop > $R/state; echo teste_sign.bin > $R/firmware; echo start > $R/state; sleep 4; cat $R/state; tr -d "\0" < /sys/kernel/debug/remoteproc/$(basename $R)/trace0 | tail -n 14; ls -l /dev/med-amp0'
+```
+```bash
+ssh $B 'systemctl reset-failed eeg-acquisition; systemctl start eeg-acquisition; sleep 6; systemctl is-active eeg-acquisition'
+```
+
+O traço tem de terminar em `endpoint 'rpmsg-raw' announced`, e `/dev/med-amp0` tem de existir. Um
+firmware que para antes disso diz onde: a partida imprime uma linha `[med] link: ...` a cada passo.
+
+Antes de rodar qualquer coisa que apareça na tela - sessões, trocas de configuração -, avisar
+quem está diante da placa.

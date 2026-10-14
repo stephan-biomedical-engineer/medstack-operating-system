@@ -596,6 +596,69 @@ Três rodadas anteriores com as entradas abertas não viram nada, e não podiam:
 N de cada canal e nenhum caminho DC, então um canal aberto mede a carga desse capacitor em
 qualquer montagem.
 
+### Resultado — as sete taxas do conversor, pelo link `amp` (2026-10-13, placa)
+
+A taxa de amostragem passou a ser uma escolha do operador (`acquisition.sample_rate_hz`, na tabela
+selada de escolhas), e o link `amp` passou a entregar as sete que o conversor tem. O registro
+completo, com cada tentativa que falhou, é `implementation_plan_hmi_desktop.md` §12.10–§12.14 e
+`BRINGUP_STM32MP2.md` §9.18.
+
+**Método.** Na placa, pelo serviço instalado, com a HMI ligada e o firmware que
+`bitbake med-m33-firmware` produziu. Para cada taxa: escolher, gravar 12 s, fechar, esperar o
+exportador.
+
+```sh
+for r in 250 500 1000 2000 4000 8000 16000; do
+  medctl session.configure acquisition.sample_rate_hz=$r
+  sleep 2; medctl session.start exam=taxa$r; sleep 12; medctl session.stop
+  S=$(ls -d /data/eeg/session-* | tail -n 1)
+  cat $S/closed.json $S/export.json; grep sample_rate_hz $S/metadata.json
+done
+```
+
+| Taxa declarada | Quadros em 12 s | Amostras/s no registro | `dropped` | quadros faltantes | CRC errado | BDF+ |
+|---|---|---|---|---|---|---|
+| 250 | 216 | 249,5 | 0 | 0 | 0 | convertido |
+| 500 | 431 | 498,8 | 0 | 0 | 0 | convertido |
+| 1000 | 862 | 997,9 | 0 | 0 | 0 | convertido |
+| 2000 | 1724 | 1994,7 | 0 | 0 | 0 | convertido |
+| 4000 | 3447 | 3989 | 0 | 0 | 0 | convertido |
+| 8000 | 6886 | 7978 | 0 | 0 | 0 | convertido |
+| 16000 | 13770 | 15964 | 0 | 0 | 0 | convertido |
+
+Os quadros são os da varredura com o binário da receita; as amostras por segundo são
+`quadros × 14 / duração` da primeira varredura (binário compilado no host, mesma fonte), em que a
+duração é a do `closed.json` e inclui abrir e fechar a sessão - daí os 0,2 % a menos. `NRestarts=0`
+do começo ao fim. No M33, a 16000: `lost=0 broken=0 dropped=0 read=34us queue=31 work=51us`.
+
+**O que foi preciso**, na ordem em que cada defeito apareceu:
+
+| O que impedia | Medida antes | O que mudou | Medida depois |
+|---|---|---|---|
+| um `fdatasync` por quadro, no laço de aquisição | QEMU: 1000 pedidos, **858** no registro; host: 16000 pedidos, 8450 | `RecordStream` no framework: fila limitada e thread gravadora, uma sincronização por lote | QEMU `make check` 37/37 com 1000; host 15 978 a 16000 |
+| taxa fixa no firmware do M33 | só 250 | chave na mensagem de controle, campo DR do `CONFIG1`, taxa no cabeçalho do quadro | sete taxas programadas e lidas de volta |
+| conversão para nanovolts em dupla precisão por software, CRC bit a bit | placa: 1000 pedidos, **436** no registro; `work=828us` | conversão em inteiros (0 códigos diferentes em 2²⁴ × 7 ganhos), CRC por tabela | 1000 sem perda, ainda sem cache |
+| firmware rodando da DDR sem cache de dados | leitura SPI de 27 octetos: **222 µs** | cache de dados ligado, com só a memória compartilhada fora dele | **59 µs**; 8000 sem perda |
+| a 16000, a leitura ocupa o período de 62,5 µs | 7 conversões em 8 perdidas | leitura da conversão em prescaler 16, só nessa taxa | 33 µs; 16000 sem perda |
+
+Dois defeitos que a mesma sessão achou e que valem para qualquer taxa: uma conversão perdida no
+M33 encurtava o quadro **sem buraco na sequência** (o registro de 436 não tinha lacuna nenhuma), e
+a função que esvazia a fila do M33 não voltava quando saturada, de modo que o firmware deixava de
+ler mensagens de controle. O quadro em curso agora é abandonado e a sequência pula; a função
+processa no máximo dois quadros por passada.
+
+**O que isto não significa.**
+- É contagem, não sinal: nem o gerador interno nem eletrodos foram olhados acima de 250. A banda
+  que o registro declara em cada taxa (`prefiltering`) vem da tabela do datasheet.
+- Doze segundos, placa ociosa. A 16000 a fila da interrupção chegou a 31 de 128 e a passada do
+  laço a 51 µs de 62,5: a folga é pequena, e a leitura SPI já foi vista 18 % mais lenta com os A35
+  carregados (acima, 2026-10-08). Sessão longa e carga não foram medidas em taxa nenhuma além de 250.
+- O firmware foi carregado à mão pelo sysfs do remoteproc. Depois, a imagem com ele foi gravada e
+  **o operador relatou que funciona**; nenhuma medida minha sobre a imagem gravada.
+- Nada sobre os outros links: `usb` continua em 250 (teto da ponte), `spi` em 250 (nunca medido),
+  e o simulado lista até 4000 por uma medida de host, com só 1000 medido no QEMU.
+- Por que a configuração de cache do exemplo da ST trava este firmware não foi descoberto.
+
 ## 4. Particionamento de software (IEC 62304 §5.3)
 
 ### Método
@@ -1412,6 +1475,10 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   bancada (2026-10-08, §3), e **um cartão gravado do zero adquirindo sozinho**, igual em 4 boots
   seguidos (Fase 4, `BRINGUP_STM32MP2.md` §9.16). **Ainda não medido**: o nome `/dev/med-amp0`
   contra uma troca de enumeração, e a injeção de falha da Fase 4 (sem firmware na imagem).
+- **Taxas acima de 250 no link `amp`** — as sete se sustentam em sessões de 12 s com a placa ociosa
+  (§3, 2026-10-13). **Não medidos**: o sinal em qualquer taxa acima de 250, uma sessão longa, a
+  perda com os A35 carregados (a 16000 a folga do M33 é de ~11 µs em 62,5), e o que a tela faz a
+  1143 quadros por segundo.
 - **Latência e jitter de tempo real** — o timing do QEMU não é significativo. Na placa, pelo link
   `amp`: o jitter do carimbo entre quadros, ocioso e com o A35 carregado (§3). **Ainda não medidos**:
   a latência de entrada da interrupção isolada, o custo de CPU e a carga real (HMI).

@@ -1954,6 +1954,80 @@ capacitor estivesse carregado com 2,5 V.
 - **`BOOT_B_LEFT=0` num cartão recém-gravado**, com `BOOT_ORDER=A B`. Não se sabe se é o estado de
   fábrica que a imagem de ambiente escreve ou resto de outra coisa. Não afetou a sessão.
 
+### 9.18 Décima segunda sessão (2026-10-13): as sete taxas, e o M33 que rodava sem cache
+
+O pedido era uma opção de taxa de amostragem na tela. Virou a sessão que achou por que o M33 era
+lento. O registro passo a passo, com as medidas de host e de QEMU, está em
+`implementation_plan_hmi_desktop.md` §12.10–§12.14; os números que entram na tese, em
+`RESULTS.md` §3. Aqui fica o que é da placa.
+
+#### O que a placa mostrou, na ordem
+
+| Imagem ou firmware | Medida | Leitura |
+|---|---|---|
+| taxa prescrita, firmware como estava | 1000 pedidos: tela ~510, registro **436 amostras/s**, `dropped 0`, nenhuma lacuna; nenhuma linha periódica no traço; pedido de 16000 sem resposta | o laço do M33 não dá conta, e `drain_converter` não voltava: sem relatório, sem controle, e a perda nunca conferida |
+| laço limitado a dois quadros por passada, perda conferida a cada conversão | 250 e 500 limpos; a 1000, `lost=5919 broken=1636`, `read=220us work=828us` | a perda passou a aparecer. 828 + 220 µs não cabem em 1000 |
+| os dois caches ligados como no exemplo OpenAMP da ST | traço para em `source: converter`; sem `/dev/med-amp0`; serviço em laço de reinício | não se sabe por quê |
+| conversão em inteiros e CRC por tabela, sem cache | 1000: `lost=0`, fila ≤ 6 | bastou para 1000 |
+| leitura em prescaler 8 | registrador lê `7f` onde se escreveu `ff`; com só a leitura da conversão em 8, toda palavra de status inválida e `read=222us` igual | o tempo da leitura era do núcleo, não do barramento |
+| só cache de instrução | sobe; `read=241us` | não serve o código, que é buscado de onde estão os dados |
+| cache de dados, sem MPU | `read=59us`; 16 quadros enviados em 10 s, `dropped` aos milhares | os anéis do rpmsg ficaram em cache |
+| cache de dados, MPU descrevendo só `0x81200000`–`0x812FFFFF`, não cacheável | 4000 e 8000 limpos | é o que ficou |
+| idem, 16000 com a leitura em prescaler 32 | `lost` de 7 em cada 8, `broken` em todo quadro; o firmware seguiu relatando | 59 µs de leitura num período de 62,5 |
+| idem, leitura em prescaler 16 só a 16000 | `read=33us`, status válido, `lost=0`, fila ≤ 31 | 16000 se sustenta |
+
+#### Como foi feito sem cartão nem cache de build
+
+O HD de `downloads/` e `sstate-cache/` estava desconectado. O firmware foi compilado no host com
+o `CMakeLists.txt` da receita (árvore Cube extraída do espelho git, `arm-none-eabi-gcc` 13.2),
+assinado com `st_copro_firmware_signature.sh` e a chave padrão do OP-TEE que já estavam em
+`build/tmp-glibc/sysroots-components`, copiado para `/run/fw` e carregado pelo sysfs do remoteproc
+com `firmware_class.path` apontado para lá. O OP-TEE aceitou. Cerca de um minuto por variante, e
+desfazer é reiniciar. O procedimento está em `ROTEIRO_PLACA.md` §10.
+
+Depois, com o HD: `make stm32 KEY=development KERNEL=med` verde, o `_sign.bin` do `deploy`
+carregado do mesmo jeito e a varredura repetida, com os mesmos zeros. A imagem foi gravada pelo
+operador, que relatou que funciona.
+
+#### O volume de registros de 12 GiB (2026-10-14)
+
+A 16000 SPS uma sessão escreve ~570 kB/s, e os 512 MiB de `/data` guardavam uns onze minutos
+dela. O tamanho passou a ser `MED_DATA_SIZE` (`meta-med-bsp/conf/layer.conf`, padrão 512),
+definível no build: `make stm32 KEY=development KERNEL=med DATA=12288`.
+
+| O quê | Resultado |
+|---|---|
+| `.wic` produzido | 15.109.997.568 bytes (14,07 GiB) num cartão de 14,8 GiB; esparso, `bmaptool` escreve 133.179 blocos de 4 KiB (520 MiB) |
+| `sfdisk -l` do `.wic` | dez partições como antes; `med-data` com 25.165.824 setores, 12 GiB exatos |
+| primeiro boot | `med-data-provision` de 6,89 s a 25,00 s de monotônico: **18,1 s**, contra 13 s com 512 MiB (§9.3) |
+| `/data` | LUKS2, `aes-xts-plain64`, 512 bits; `df -m`: 11.975 MiB, 11.344 disponíveis |
+| o resto | serviço, HMI e M33 de pé (`data cache on`, endpoint anunciado), `NRestarts=0`, `Activated: rootfs.0 (A)`, `BOOT_A_LEFT=3`; a tabela de escolhas lista as sete taxas |
+
+Os 631 MiB entre o tamanho e o disponível são os 5 % que o `mkfs.ext4` reserva para o root por
+padrão. O provisionamento não passa `-m`, e o serviço de aquisição mede o espaço pelo que um
+usuário comum pode usar. Não mudado.
+
+Uma sessão de 15 s na prescrição de fábrica (250 SPS), pedida por `medctl`: 269 quadros em
+15,08 s (249,8 amostras/s), `dropped 0`, `missing 0`, `failed_crc 0`, BDF+ convertido com 269
+registros e publicado ao grupo `medreview`, `NRestarts=0`. O volume grande **ainda não foi visto
+encher**, nem a reserva fechar uma sessão nele.
+
+#### O que fica aberto
+
+- **Por que as regiões de MPU do exemplo da ST param este firmware.** Foram retiradas, não
+  entendidas. O exemplo é compilado com `ICACHE_DCACHE_USE` no `.cproject`; se a compilação que o
+  `meta-st` faz dele define isso, e portanto se alguém já o viu rodar assim nesta placa, não foi
+  conferido.
+- **O prescaler 8** perde o primeiro bit do primeiro octeto. Não se sabe se é a velocidade do
+  barramento na fiação do hat ou a troca de velocidade. O relógio do SPI6 continua sem ter sido
+  lido.
+- **A folga a 16000**: ~11 µs de 62,5, com a placa ociosa.
+- **Um reinício que não foi explicado.** Na segunda entrada por SSH um roteiro meu tinha
+  `remoteproc1` escrito; naquele boot o M33 era o `remoteproc0` e o `remoteproc1` era o M0. A
+  carga foi dirigida ao núcleo errado, o comando travou e a placa reiniciou nesse intervalo.
+- `[afe] BIAS/LOFF_SENS+0 read back 7f, wrote ff` apareceu **uma vez em prescaler 32**, antes de
+  qualquer mudança de velocidade, e a prescrição foi recusada como devia. Não investigado.
+
 ## 10. Estado ao fim deste registro
 
 **Construído e verificado por inspeção**: `med-image-eeg` para `stm32mp25-disco`, `.wic` de
@@ -2100,4 +2174,25 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
     com o texto do código-fonte e não com o valor de uma variável, o que transformou um
     não-achado em achado por alguns minutos. Ancorar em `^VARIAVEL=` é a diferença entre ler o
     datastore e ler o recipe.
-
+21. **Um firmware ligado na DDR sem cache é um núcleo de dezenas de megahertz.** O M33 a 400 MHz
+    levava 222 µs para ler 27 octetos e ninguém estranhou, porque a 250 SPS havia 4 ms de prazo.
+    O número foi registrado em duas sessões como "a leitura SPI", com um prescaler como
+    explicação. Uma margem larga esconde a medida que diria que algo está errado: quando um
+    número parece grande para o que faz, ele é a pista, e não a folga.
+22. **Copiar as definições de um exemplo não é copiar o exemplo.** O firmware tomou as definições
+    de compilação do exemplo OpenAMP da ST e deixou `ICACHE_DCACHE_USE` de fora; "o exemplo da ST
+    carrega" passou a ser evidência sobre um firmware que não era aquele. E o caminho inverso
+    também falhou: portar o `MPU_Config()` do exemplo, sem tê-lo visto rodar, quebrou a placa.
+    É a regra 1 com outro rosto.
+23. **Memória que o outro processador lê ou escreve não pode estar num cache que ele não vê.**
+    Sem a região compartilhada fora do cache, o M33 ficou quatro vezes mais rápido e enviou
+    dezesseis quadros em dez segundos. Rápido e mudo.
+24. **Uma perda tem de deixar marca onde o leitor do registro olha.** O M33 contava as conversões
+    perdidas no traço e montava o quadro com as que sobravam: 436 amostras por segundo num
+    registro que declarava 1000, sem nenhuma lacuna na sequência. Um contador que só o
+    desenvolvedor lê não protege o registro.
+25. **O que experimenta uma placa tem de poder ser desfeito com um reinício.** Uma imagem por
+    hipótese custou um cartão e uma hora por tentativa, e deixou a placa sem aquisição. O mesmo
+    firmware carregado de `/run` pelo sysfs do remoteproc custa um minuto, e desligar desfaz.
+26. **Avisar antes de mexer no que alguém está olhando.** A varredura de taxas rodou por SSH com a
+    tela gravando e trocando parâmetros sozinha; o operador, com razão, desligou a placa.
