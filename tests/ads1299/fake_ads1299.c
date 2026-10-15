@@ -96,12 +96,15 @@ s32 fake_code(unsigned int channel)
 
 static void latch_lead_off(void)
 {
-	/* A status bit is only produced where sensing is on, with the
-	 * comparators powered. */
+	/* With the comparators powered every status bit follows its input,
+	 * sensed or not. The datasheet only says a bit is valid where its input
+	 * is sensed; what the others read is not specified, and the hostile
+	 * answer - the same as a sensed one - is the one that tests whether the
+	 * driver throws them away. */
 	const bool powered = fake.reg[R_CONFIG4] & 0x02;
 
-	fake.reg[R_LOFF_STATP] = powered ? (fake.detached_p & fake.reg[R_LOFF_SENSP]) : 0;
-	fake.reg[R_LOFF_STATN] = powered ? (fake.detached_n & fake.reg[R_LOFF_SENSN]) : 0;
+	fake.reg[R_LOFF_STATP] = powered ? fake.detached_p : 0;
+	fake.reg[R_LOFF_STATN] = powered ? fake.detached_n : 0;
 }
 
 void fake_convert(void)

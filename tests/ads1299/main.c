@@ -131,7 +131,7 @@ static void test_probe(void)
 	if (!shim_iio || ret)
 		return;
 	CHECK(!strcmp(shim_iio->name, "ads1299-8"));
-	CHECK_EQ(shim_iio->num_channels, 9);	/* eight voltages and a timestamp */
+	CHECK_EQ(shim_iio->num_channels, 10);	/* eight voltages, lead-off, timestamp */
 	/* Out of RDATAC before any register: a part in continuous mode ignores
 	 * register commands, and the ID read would see zeros. */
 	CHECK(!fake.rdatac);
@@ -143,15 +143,18 @@ static void test_probe(void)
 	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0x00);
 	for (int c = 0; c < 8; c++)
 		CHECK_EQ(fake.reg[R_CH1SET + c] & 0x77, 0x60);	/* gain 24, electrodes */
-	CHECK(fake.reg[R_CONFIG4] & 0x02);	/* lead-off comparators powered */
 	/* The self test ran: two phases of 12 single-shot reads. */
 	CHECK(fake.rdata_reads >= 24);
 	CHECK(!strcmp(show("timestamp_source"), "host_timer\n"));
 
-	DEFECT(fake.reg[R_LOFF_SENSP] == 0 && fake.reg[R_LOFF_SENSN] == 0,
-	       "comparadores de lead-off ligados e nenhum canal habilitado: um registro "
-	       "que diz 'monitorado' sem nada monitorado",
-	       "usb_parity, fase 2");
+	/* Lead-off detection off at probe, and OFF: comparators down, no
+	 * channel sensing. Until phase 2 the comparators were powered with no
+	 * channel enabled - a record saying "monitored" about nothing. */
+	CHECK(!(fake.reg[R_CONFIG4] & 0x02));
+	CHECK_EQ(fake.reg[R_LOFF_SENSP], 0);
+	CHECK_EQ(fake.reg[R_LOFF_SENSN], 0);
+	CHECK(!strcmp(show("lead_off"), "off\n"));
+	CHECK(!strcmp(show("lead_off_monitored"), "00 00\n"));
 	CHECK(!strcmp(show("lead_off_status"), "disabled\n"));
 }
 
@@ -318,7 +321,7 @@ static void test_buffer_host_timer(void)
 	}
 	CHECK_EQ(shim_scan_count, 20);
 	for (unsigned int s = 0; s < shim_scan_count; s++) {
-		exact = exact && shim_scans[s].count == 8;
+		exact = exact && shim_scans[s].count == 9;
 		for (int c = 0; c < 8; c++)
 			exact = exact && code24(shim_scans[s].value[c]) == fake_code((unsigned int)c);
 	}
@@ -359,25 +362,109 @@ static void test_buffer_host_timer(void)
 		       "usb_parity, fase 5");
 	}
 
-	/* An electrode off, with sensing enabled behind the driver's back
-	 * (the debug register access): the part reports it in every status
-	 * word, and the scan carries no status. */
-	(void)shim_iio->info->debugfs_reg_access(shim_iio, R_LOFF_SENSP, 0xff, NULL);
+	/* Detection off: an electrode the part would report says nothing. */
 	fake.detached_p = 0x04;
 	fake_convert();
 	shim_scan_count = 0;
 	tick();
 	shim_spi_complete_one();
 	CHECK_EQ(shim_scan_count, 1);
-	DEFECT(shim_iio->num_channels == 9,
-	       "a palavra de status, com o estado de lead-off de cada amostra, é lida e "
-	       "descartada: nenhum canal do buffer a leva",
-	       "usb_parity, fase 2");
-	(void)shim_iio->info->debugfs_reg_access(shim_iio, R_LOFF_SENSP, 0x00, NULL);
+	CHECK_EQ(shim_scans[0].value[8], 0);
+	fake.detached_p = 0;
+
+	/* And it does not change while the buffer runs. */
+	CHECK_EQ(store("lead_off", "dc"), -EBUSY);
 
 	buffer_off();
 	CHECK(!fake.started);
 	CHECK(!priv()->timer.active);
+}
+
+static void test_lead_off(void)
+{
+	struct afe_regs r;
+
+	section("lead-off: os mesmos registradores que o M33, e o estado em cada amostra");
+	fake_power_up();
+	if (probe(0))
+		return;
+
+	/* Every montage x detection, in both orders, against the firmware's
+	 * register builder - which reads its own back on silicon. */
+	for (int ref = 0; ref < 2; ref++) {
+		for (int loff = 0; loff < 2; loff++) {
+			for (int order = 0; order < 2; order++) {
+				const char *mont = ref ? "referential" : "bipolar";
+				const char *det = loff ? "dc" : "off";
+				char what[96];
+
+				if (order) {
+					CHECK(store("lead_off", det) > 0);
+					CHECK(store("montage", mont) > 0);
+				} else {
+					CHECK(store("montage", mont) > 0);
+					CHECK(store("lead_off", det) > 0);
+				}
+				afe_registers(6, 6, 0, 0, loff, ref, 0, 0, &r);
+				snprintf(what, sizeof(what), "%s, lead-off %s, %s", mont, det,
+					 order ? "lead-off primeiro" : "montagem primeiro");
+				CHECK_MSG(fake.reg[R_LOFF_SENSP] == r.sens[2], what);
+				CHECK_MSG(fake.reg[R_LOFF_SENSN] == r.sens[3], what);
+				CHECK_MSG((fake.reg[R_CONFIG4] & 0x02) == (r.config4 & 0x02), what);
+				if (loff)
+					CHECK_MSG(fake.reg[0x04] == r.loff, what);
+			}
+		}
+	}
+	CHECK(store("lead_off", "ac") < 0);
+	CHECK(!strcmp(show("lead_off_available"), "off dc\n"));
+
+	/* Bipolar: every electrode, both sides, in every sample. */
+	CHECK(store("montage", "bipolar") > 0);
+	CHECK(store("lead_off", "dc") > 0);
+	CHECK(!strcmp(show("lead_off_monitored"), "ff ff\n"));
+	buffer_on();
+	fake.detached_p = 0x04;		/* electrode 3+ off */
+	fake.detached_n = 0x10;		/* electrode 5- off */
+	shim_scan_count = 0;
+	fake_convert();
+	tick();
+	shim_spi_complete_one();
+	CHECK_EQ(shim_scan_count, 1);
+	CHECK_EQ(shim_scans[0].value[8], (0x04 << 8) | 0x10);
+	/* The voltages are still the voltages. */
+	CHECK_EQ(code24(shim_scans[0].value[0]), fake_code(0));
+	fake.detached_p = 0;
+	fake.detached_n = 0;
+	fake_convert();
+	tick();
+	shim_spi_complete_one();
+	CHECK_EQ(shim_scans[1].value[8], 0);
+	buffer_off();
+
+	/* Referential: one source on the negative side, the reference
+	 * electrode's bit; a negative bit elsewhere is not a measurement. */
+	CHECK(store("montage", "referential") > 0);
+	CHECK(!strcmp(show("lead_off_monitored"), "ff 01\n"));
+	buffer_on();
+	fake.detached_n = 0x10;
+	shim_scan_count = 0;
+	fake_convert();
+	tick();
+	shim_spi_complete_one();
+	CHECK_EQ(shim_scans[0].value[8], 0);
+	fake.detached_n = 0x01;		/* the reference electrode off */
+	fake_convert();
+	tick();
+	shim_spi_complete_one();
+	CHECK_EQ(shim_scans[1].value[8], 0x01);
+	buffer_off();
+
+	/* Off again: comparators down, nothing sensed, nothing reported. */
+	CHECK(store("lead_off", "off") > 0);
+	CHECK(!(fake.reg[R_CONFIG4] & 0x02));
+	CHECK(!strcmp(show("lead_off_monitored"), "00 00\n"));
+	fake.detached_n = 0;
 }
 
 static void test_buffer_square(void)
@@ -455,6 +542,7 @@ int main(void)
 	test_against_m33();
 	test_single_read();
 	test_buffer_host_timer();
+	test_lead_off();
 	test_buffer_square();
 	test_buffer_drdy();
 	test_write_not_taken();

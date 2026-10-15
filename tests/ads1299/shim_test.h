@@ -10,8 +10,8 @@
 
 /* A scan the driver pushed to the IIO buffer, as the buffer received it. */
 struct shim_scan {
-	u32 value[8];
-	unsigned int count;	/* voltage channels in it */
+	u32 value[9];
+	unsigned int count;	/* channels in it, the timestamp apart */
 	s64 timestamp;
 };
 #define SHIM_MAX_SCANS	4096
