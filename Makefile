@@ -436,6 +436,8 @@ check: $(TOOL)
 # They are the only things in this repository that can see a defect in kernel
 # code before the hardware exists. `tests/amp-bench` checks the judge of a
 # test-signal record against losses injected into synthetic captures.
+# `tests/derive` runs the service recipe's per-link translation outside
+# bitbake and reads the eeg.conf and the table of choices it would ship.
 # `tests/eeg-export` compiles the clinical-file
 # converter of the EEG application against the framework and feeds it damaged
 # session records - a wrong scale, a corrupted frame, a truncated tail.
@@ -453,6 +455,7 @@ test:
 	@$(MAKE) --no-print-directory -C tests/eeg-export check
 	@$(MAKE) --no-print-directory -C tests/hmi check
 	@$(MAKE) --no-print-directory -C tests/amp-bench check
+	@$(MAKE) --no-print-directory -C tests/derive check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform

@@ -339,14 +339,28 @@ python do_derive_device_options() {
 
         elif link in ('spi', 'usb'):
             # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
-            # input_mux, test_signal, bias_drive and montage are the driver's own.
-            # One prescription has no attribute at all, and is checked against what
-            # the driver does at probe instead of being passed and ignored.
+            # input_mux, test_signal, bias_drive, montage and lead_off are the
+            # driver's own.
+            #
             # A value enters a link's table when it has been measured on that
-            # link. The kernel driver has the attribute for this one; nobody
-            # has yet read a shorted input or the sensor through it.
-            if source != 'normal':
-                refuse("afe.input = %s has not been measured on link '%s'" % (source, link))
+            # link. The sensor has not been read through the kernel driver, and
+            # its channel would need a gain and a step of its own, which the
+            # driver does not have (implementation_plan_usb_parity.md, phase 4).
+            #
+            # Shorted inputs are input_mux = shorted, every channel at once
+            # (implementation_plan_usb_parity.md, phase 1). Offered before a
+            # bench has read them through this link, and on purpose: the bench
+            # that measures them needs the row on the screen, as with the rates
+            # on "amp". What stands in until then is that the converter's
+            # switch is programmed with the same bytes the producer on "amp"
+            # writes (tests/ads1299 holds the driver against it), and that the
+            # record says "shorted", so the clinical file never calls it EEG.
+            #
+            # Off the electrodes there is no contact to monitor, and the record
+            # would say the electrodes were watched - the rule of "amp".
+            if source == 'shorted' and lead_off:
+                refuse("afe.input = shorted with afe.lead_off_detection = true: no "
+                       "electrode is in the measurement on link '%s'" % link)
             if temperature:
                 refuse("afe.temperature = true has not been measured on link '%s'" % link)
             # The rate reaches the kernel driver as sampling_frequency, written
@@ -393,7 +407,7 @@ python do_derive_device_options() {
             # prescription that can say so, not a different default here.
             options = [
                 ('hardwaregain', str(int(gain))),
-                ('input_mux', 'test_signal' if internal else 'normal'),
+                ('input_mux', 'test_signal' if internal else source),
                 ('test_signal', '1x_slow' if internal else 'off'),
                 ('bias_drive', 'derived' if bias else 'off'),
                 # The same two words on both sides. A kernel without the attribute
