@@ -993,8 +993,31 @@ public:
 
         double fullScale = 0.0;
         unsigned int resolutionBits = 0;
+        std::map<std::uint16_t, double> channelFullScale;
         for (const std::pair<const std::string, std::string>& entry : config.driverOptions) {
             double number = 0.0;
+            // One channel's own range, over the one above: "full_scale.7".
+            static const std::string kChannelFullScale = "full_scale.";
+            if (entry.first.compare(0, kChannelFullScale.size(), kChannelFullScale) == 0) {
+                const std::string index = entry.first.substr(kChannelFullScale.size());
+                if (index.empty() || index.size() > 5 ||
+                    index.find_first_not_of("0123456789") != std::string::npos ||
+                    std::stoul(index) >= config.channelCount) {
+                    return DeviceResult::fail(Status::InvalidArgument,
+                                              "'" + entry.first + "' names no channel of "
+                                              "this device");
+                }
+                if (!parseNumber(entry.second, number)) {
+                    return DeviceResult::fail(Status::InvalidArgument,
+                                              entry.first + " is not a number");
+                }
+                if (number <= 0.0) {
+                    return DeviceResult::fail(Status::OutOfRange,
+                                              entry.first + " must be positive");
+                }
+                channelFullScale[static_cast<std::uint16_t>(std::stoul(index))] = number;
+                continue;
+            }
             if (entry.first == "full_scale") {
                 if (!parseNumber(entry.second, number)) {
                     return DeviceResult::fail(Status::InvalidArgument,
@@ -1046,12 +1069,23 @@ public:
                                       "full_scale and resolution_bits declare a step "
                                       "together; one was given without the other");
         }
+        // And a channel's own range is an exception to a declared step, not
+        // a step of its own: without the rest declared, the other channels
+        // would be scaled by the kernel's text and this one exactly.
+        if (!channelFullScale.empty() && fullScale <= 0.0) {
+            return DeviceResult::fail(Status::InvalidArgument,
+                                      "a channel's full_scale is given without the "
+                                      "device's full_scale and resolution_bits");
+        }
 
         std::unique_ptr<IioDevice> device(new IioDevice(config));
         if (resolutionBits > 0) {
+            const double steps = std::ldexp(1.0, static_cast<int>(resolutionBits) - 1);
             device->declaredBits_ = resolutionBits;
-            device->declaredStep_ =
-                fullScale / std::ldexp(1.0, static_cast<int>(resolutionBits) - 1);
+            device->declaredSteps_.assign(config.channelCount, fullScale / steps);
+            for (const std::pair<const std::uint16_t, double>& own : channelFullScale) {
+                device->declaredSteps_[own.first] = own.second / steps;
+            }
         }
         return DeviceResult::ok(std::unique_ptr<MedicalDevice>(std::move(device)));
     }
@@ -1411,7 +1445,8 @@ private:
         // configured correctly from a map, and that belongs fixed in the
         // driver rather than papered over here.
         for (const std::pair<const std::string, std::string>& entry : config_.driverOptions) {
-            if (entry.first == "full_scale" || entry.first == "resolution_bits") {
+            if (entry.first == "full_scale" || entry.first == "resolution_bits" ||
+                entry.first.compare(0, 11, "full_scale.") == 0) {
                 continue;
             }
             if (::access(attributePath(entry.first).c_str(), F_OK) != 0) {
@@ -1455,31 +1490,44 @@ private:
             }
         }
 
-        // Scale. in_voltage0_scale is millivolts per LSB, as decimal text; the
-        // frames this framework hands out are in microvolts.
-        std::string scaleText;
-        if (!readSysfs("in_voltage0_scale", scaleText)) {
-            lastError_ = "the front-end does not publish a scale, so its samples "
-                         "cannot be given a unit";
-            return Status::NotSupported;
-        }
-        scaleMicrovoltsPerLsb_ = std::strtod(scaleText.c_str(), nullptr) * 1000.0;
-        if (!(scaleMicrovoltsPerLsb_ > 0.0)) {
-            lastError_ = "the front-end published a scale of '" + scaleText + "'";
-            return Status::IntegrityError;
-        }
-
-        // With a declared step the text above is evidence, not the multiplier:
-        // the declaration is exact and the text is not, and the two have to
-        // agree as far as the text goes. A gain the configuration and the
-        // device understand differently stops here.
-        if (declaredStep_ > 0.0) {
-            const Result<double> exact = iio::exactStep(declaredStep_, scaleText);
-            if (!exact.isOk()) {
-                lastError_ = exact.message();
-                return exact.status();
+        // Scale, channel by channel. in_voltageN_scale is millivolts per LSB,
+        // as decimal text; the frames this framework hands out are in
+        // microvolts. Per channel because a channel may run at another gain
+        // than the rest - the kernel driver's decision, which its scale
+        // reports - and one scale for all would put that channel off by the
+        // ratio of the two, plausibly and silently.
+        scales_.assign(config_.channelCount, 0.0);
+        for (std::uint16_t channel = 0; channel < config_.channelCount; ++channel) {
+            const std::string name = "in_voltage" + std::to_string(channel) + "_scale";
+            std::string scaleText;
+            if (!readSysfs(name, scaleText)) {
+                lastError_ = "the front-end does not publish a scale for channel " +
+                             std::to_string(channel) + ", so its samples cannot be given "
+                             "a unit";
+                return Status::NotSupported;
             }
-            scaleMicrovoltsPerLsb_ = exact.value();
+            double scale = std::strtod(scaleText.c_str(), nullptr) * 1000.0;
+            if (!(scale > 0.0)) {
+                lastError_ = "the front-end published a scale of '" + scaleText + "' for "
+                             "channel " + std::to_string(channel);
+                return Status::IntegrityError;
+            }
+
+            // With a declared step the text above is evidence, not the
+            // multiplier: the declaration is exact and the text is not, and
+            // the two have to agree as far as the text goes. A gain the
+            // configuration and the device understand differently stops here.
+            if (!declaredSteps_.empty()) {
+                const Result<double> exact =
+                    iio::exactStep(declaredSteps_[channel], scaleText);
+                if (!exact.isOk()) {
+                    lastError_ = "channel " + std::to_string(channel) + ": " +
+                                 exact.message();
+                    return exact.status();
+                }
+                scale = exact.value();
+            }
+            scales_[channel] = scale;
         }
 
         return Status::Ok;
@@ -1658,7 +1706,7 @@ private:
                 }
                 frame.samples[static_cast<std::size_t>(sample) * config_.channelCount +
                               channel] =
-                    static_cast<double>(raw) * scaleMicrovoltsPerLsb_;
+                    static_cast<double>(raw) * scales_[channel];
             }
         }
 
@@ -1670,8 +1718,8 @@ private:
     std::string sysfsPath_;
     std::string chipName_;
     int fd_ = -1;
-    double scaleMicrovoltsPerLsb_ = 0.0;
-    double declaredStep_ = 0.0;
+    std::vector<double> scales_;
+    std::vector<double> declaredSteps_;
     unsigned int declaredBits_ = 0;
     unsigned int realBits_ = 24;
     bool hasTimestamp_ = false;

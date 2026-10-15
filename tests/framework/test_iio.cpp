@@ -527,6 +527,89 @@ void testIio() {
         }
     }
 
+    medtest::section("iio - um canal com passo próprio (o sensor a outro ganho)");
+    {
+        // Channel 7 runs at half the gain of the rest: twice the step. The
+        // kernel says so in its scale; the configuration declares it.
+        const double step7 = 2.0 * kStepUv;
+        makeTree();
+        put("in_voltage7_scale", "0.000044703");
+        std::vector<std::vector<std::int32_t>> scans(14, std::vector<std::int32_t>(8, 1000));
+        writeScans(scans, 0, 4000000);
+        std::map<std::string, std::string> options = declared();
+        options["full_scale.7"] = "375000";
+        std::unique_ptr<MedicalDevice> device = make(options);
+        CHECK(device != nullptr);
+        if (device) {
+            CHECK_STATUS(device->start(), Status::Ok);
+            // Not an attribute, never written.
+            CHECK_EQ(get("full_scale.7"), std::string("<absent>"));
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                CHECK(frame.value().samples[0] == 1000.0 * kStepUv);
+                CHECK(frame.value().samples[6] == 1000.0 * kStepUv);
+                CHECK(frame.value().samples[7] == 1000.0 * step7);
+            }
+            device->stop();
+        }
+    }
+    {
+        // The kernel runs channel 7 at another gain and the configuration
+        // does not say so: refused, naming the channel - the defect a single
+        // scale for all eight channels used to let through, scaled by 2.
+        makeTree();
+        put("in_voltage7_scale", "0.000044703");
+        writeScans({}, 0, 4000000);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        if (device) {
+            CHECK_STATUS(device->start(), Status::IntegrityError);
+            CHECK(device->lastError().find("channel 7") != std::string::npos);
+        }
+        // And the other way: declared and not what the kernel runs.
+        makeTree();
+        writeScans({}, 0, 4000000);
+        std::map<std::string, std::string> options = declared();
+        options["full_scale.7"] = "375000";
+        device = make(options);
+        if (device) {
+            CHECK_STATUS(device->start(), Status::IntegrityError);
+        }
+    }
+    {
+        // With no declaration at all, each channel takes its own kernel text.
+        makeTree();
+        put("in_voltage7_scale", "0.000044703");
+        std::vector<std::vector<std::int32_t>> scans(14, std::vector<std::int32_t>(8, 1000));
+        writeScans(scans, 0, 4000000);
+        std::unique_ptr<MedicalDevice> device = make({{"hardwaregain", "24"}});
+        if (device && device->start() == Status::Ok) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                // Each by its own text, millivolts to microvolts - which is
+                // why the text is not exactly twice the other, and why a
+                // declared step is the better multiplier.
+                CHECK(std::fabs(frame.value().samples[0] - 1000.0 * 0.022351) < 1e-9);
+                CHECK(std::fabs(frame.value().samples[7] - 1000.0 * 0.044703) < 1e-9);
+            }
+            device->stop();
+        }
+    }
+    {
+        // A channel's range that names no channel, or stands alone.
+        std::map<std::string, std::string> options = declared();
+        options["full_scale.8"] = "375000";
+        CHECK(make(options) == nullptr);
+        options = declared();
+        options["full_scale.x"] = "375000";
+        CHECK(make(options) == nullptr);
+        options = declared();
+        options["full_scale.7"] = "-1";
+        CHECK(make(options) == nullptr);
+        CHECK(make({{"full_scale.7", "375000"}}) == nullptr);
+    }
+
     medtest::section("iio - o autoteste diz o que falta");
     {
         makeTree();
