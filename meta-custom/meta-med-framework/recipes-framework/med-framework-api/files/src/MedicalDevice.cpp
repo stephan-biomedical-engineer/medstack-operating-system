@@ -968,6 +968,15 @@ private:
 /// No libiio. The framework has exactly two external dependencies and that is
 /// a property of the architecture, not an accident of packaging: everything
 /// below is open, read, poll and text files.
+/// Where the kernel lists its industrial I/O devices. A build-time constant,
+/// and the shipped library never redefines it: the host suite does, to point
+/// this driver at a tree of plain files that stands in for the kernel's
+/// (tests/framework/test_iio.cpp), which is the only way anything short of a
+/// board reaches the code below.
+#ifndef MED_IIO_DEVICES_DIR
+#define MED_IIO_DEVICES_DIR "/sys/bus/iio/devices"
+#endif
+
 class IioDevice : public MedicalDevice {
 public:
     static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config) {
@@ -1246,7 +1255,11 @@ private:
     }
 
     bool writeSysfs(const std::string& relative, const std::string& value) const {
-        const int fd = ::open(attributePath(relative).c_str(), O_WRONLY | O_CLOEXEC);
+        // O_TRUNC is what `echo value > attribute` does, and the kernel ignores
+        // it on an attribute. It matters only where the attribute is a plain
+        // file - the host suite's stand-in - and there it is the difference
+        // between "1" written over "24" reading back as "14" and as "1".
+        const int fd = ::open(attributePath(relative).c_str(), O_WRONLY | O_CLOEXEC | O_TRUNC);
         if (fd < 0) {
             return false;
         }
@@ -1286,7 +1299,7 @@ private:
         const std::string::size_type slash = devicePath_.find_last_of('/');
         const std::string node =
             slash == std::string::npos ? devicePath_ : devicePath_.substr(slash + 1);
-        sysfsPath_ = "/sys/bus/iio/devices/" + node;
+        sysfsPath_ = std::string(MED_IIO_DEVICES_DIR) + "/" + node;
 
         struct stat info;
         if (::stat(sysfsPath_.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {

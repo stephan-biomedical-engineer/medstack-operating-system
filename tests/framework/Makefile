@@ -21,6 +21,12 @@ CXXFLAGS ?= -std=c++17 -g -O0
 CXXFLAGS += -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-unused-parameter -Werror
 CXXFLAGS += -I$(FRAMEWORK)/include -I$(AMP_ABI) -I.
 
+# The "iio" driver lists devices from a build-time directory; here it is a tree
+# of plain files test_iio.cpp builds, under this suite's own build directory.
+# The shipped library never sets it (MedicalDevice.cpp, MED_IIO_DEVICES_DIR).
+IIO_FAKE_ROOT := $(CURDIR)/build/fake-iio
+CXXFLAGS += -DMED_IIO_DEVICES_DIR='"$(IIO_FAKE_ROOT)/devices"' -DMED_TEST_IIO_ROOT='"$(IIO_FAKE_ROOT)"'
+
 CRYPTO_LIBS := $(shell pkg-config --libs libcrypto 2>/dev/null)
 LDLIBS      += $(CRYPTO_LIBS) -lpthread
 
@@ -59,6 +65,7 @@ TEST_SOURCES := \
 	test_storage.cpp \
 	test_biosignal.cpp \
 	test_device.cpp \
+	test_iio.cpp \
 	test_amp_abi.cpp
 
 ifeq ($(HAVE_SYSTEMD),yes)

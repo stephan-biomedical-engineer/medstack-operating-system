@@ -16,6 +16,7 @@ void testConfiguration();
 void testStorage();
 void testBiosignal();
 void testDevice();
+void testIio();
 void testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD
 void testLogger();
@@ -30,6 +31,7 @@ int main() {
     testStorage();
     testBiosignal();
     testDevice();
+    testIio();
     testAmpAbi();
 #ifdef MED_TESTS_HAVE_SYSTEMD
     testLogger();
