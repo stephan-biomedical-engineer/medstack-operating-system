@@ -362,10 +362,20 @@ python do_derive_device_options() {
                            % values['acquisition.sample_rate_hz'])
                 refuse("acquisition.sample_rate_hz = %s has not been measured on link "
                        "'%s'" % (values['acquisition.sample_rate_hz'], link))
-            if not lead_off:
-                refuse("afe.lead_off_detection = false cannot be honoured on link '%s': "
-                         "the kernel driver enables the lead-off comparators at probe and "
-                         "offers no control to switch them off" % link)
+            # Lead-off detection is the kernel driver's lead_off attribute since
+            # 2026-10-14 (implementation_plan_usb_parity.md, phase 2): "dc" senses
+            # every electrode - the reference electrode alone on the negative side
+            # in referential - and "off" senses none. Before it the driver powered
+            # the comparators at probe and enabled no channel, so "true" was
+            # accepted here and honoured by nothing, and the record said the
+            # electrodes were monitored. A kernel without the attribute makes the
+            # driver refuse the option, as with the montage.
+            #
+            # The same rule as the producer on "amp": with the test signal on
+            # every channel there is no electrode in the measurement.
+            if test_signal == 'internal' and lead_off:
+                refuse("afe.test_signal = internal with afe.lead_off_detection = true: "
+                       "no electrode is in the measurement on link '%s'" % link)
             if gain != int(gain):
                 refuse("eeg.conf: afe.gain = %s is not an integer" % values['afe.gain'])
             internal = test_signal == 'internal'
@@ -390,6 +400,7 @@ python do_derive_device_options() {
                 # makes the driver refuse the option and the service refuse to
                 # start, which is the right outcome for a montage nobody applied.
                 ('montage', montage),
+                ('lead_off', 'dc' if lead_off else 'off'),
                 # Not attributes, and never written to the device: the range and
                 # the resolution, from which the framework takes the exact step.
                 # The kernel publishes its scale as short text (five significant
