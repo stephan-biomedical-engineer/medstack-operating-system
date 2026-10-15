@@ -1,7 +1,7 @@
 # Plano de implementação — o link `usb` com as funções do link `amp`
 
-> **Status** (2026-10-15): fases 0, 1 e 2 escritas e testadas no host (§7.1–§7.3); **nenhuma
-> foi à bancada**. As fases 3, 4 e 5 não começaram. O que segue é o levantamento de 2026-10-14,
+> **Status** (2026-10-15): fases 0, 1, 2 e 3 escritas e testadas no host (§7.1–§7.4); **nenhuma
+> foi à bancada**. As fases 4 e 5 não começaram. O que segue é o levantamento de 2026-10-14,
 > feito lendo
 > `linux-med/drivers/iio/adc/ti-ads1299.c` (commit `983c5cf`), o driver `iio` do framework, a
 > tradução por link em `do_derive_device_options` e o firmware do M33, mais este plano.
@@ -305,7 +305,7 @@ então é cartão novo.
 | 0 | `tests/ads1299` e o juiz da onda quadrada de pé, cada um com uma injeção vista | **cumprida** — §7.1 | 2026-10-14 |
 | 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | **receita e host prontos, bancada pendente** — §7.3 | 2026-10-15 |
 | 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | **código e host prontos, bancada pendente** — §7.2 | 2026-10-14 |
-| 3 | escrita recusada pelo chip vira recusa da prescrição | — | — |
+| 3 | escrita recusada pelo chip vira recusa da prescrição | **kernel, framework e host prontos, bancada pendente** — §7.4 | 2026-10-15 |
 | 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | — | — |
 | 5 | perda forçada contada igual pelo exportador e pela onda quadrada | — | — |
 
@@ -441,4 +441,68 @@ bipolar, sem eletrodos; escolher o curto na tela; `metadata.json` com `"input": 
 BDF+ sem rótulo EEG; ruído RMS e média por canal em 60 s a ganho 24, contra o mesmo pelo `amp` na
 mesma placa e no mesmo dia (nenhum dos dois foi medido ainda); e a injeção da chave SRB1 em lugar
 nenhum. Vai na mesma imagem da bancada da fase 2, que ainda não foi construída.
+
+### 7.4 Fase 3 — o que foi escrito (2026-10-15)
+
+**Kernel (`linux-med`, `ti-ads1299.c`).** O `reg_write` do regmap lê de volta, pelo barramento,
+cada registrador que escreve, e uma diferença é `-EIO` com o registrador, o escrito e o lido no
+`dmesg`. Ficou no `reg_write` e não em cada atributo porque tudo passa por ali: *probe*,
+autoteste, os sete atributos de configuração e o `debugfs`. A máscara é a do M33, só o bit 0 do
+`CONFIG3` (`BIAS_STAT`); o kernel não escreve `GPIO`, `MISC2` nem `LOFF_FLIP`, que teriam bits de
+leitura. Custa uma troca a mais por registrador, só na configuração.
+
+Um achado que o plano não previa, e é o que dá sentido ao resto: **o regmap do 6.6 escreve o cache
+antes do barramento** (`_regmap_write()`), então uma escrita que falha deixa no cache o valor
+recusado, e o atributo, o próximo `update_bits` e o registro passariam a relatá-lo. Por isso as 27
+escritas de configuração do driver passam por `ads1299_write()`/`ads1299_update_bits()`, que
+chamam `regcache_drop_region()` na falha: a próxima leitura vai ao chip. O shim do
+`tests/ads1299` tinha a ordem trocada (cache depois do barramento, só em sucesso), a ordem em que
+esse defeito não aparece; agora tem a do kernel.
+
+A palavra de status é conferida em toda leitura de conversão: o nibble `1100`, decidido no kernel
+como o M33 decide (`afe_status_valid()`). Fora disso, no buffer, a amostra não é entregue e conta
+em `lost_samples`; numa leitura avulsa, `-EIO`. Isso se afasta do plano, que punha a conferência
+no framework: depois da fase 2 o *layout* do status é do kernel (regra 9), e o framework nunca vê
+a palavra crua.
+
+**Framework (`IioDevice`).** Lê `lost_samples` ao ligar o buffer e depois de cada quadro. Se o
+contador subiu enquanto o quadro se enchia, o quadro é abandonado inteiro e o número de sequência
+é pulado - a regra do `amp` (`med_producer_on_lost`). Vale para **toda** perda que o kernel
+conta, não só a nova: as amostras pedidas pelo timer do host enquanto uma transferência estava em
+curso já eram contadas desde a fase 0 e não deixavam marca nenhuma no registro. Um front-end sem o
+atributo adquire como antes; um contador ilegível impede a partida ou o quadro (`IoError`), sem
+palpite.
+
+Dois limites, ditos. O lugar da marca é tão bom quanto a pontualidade do contador: um leitor
+atrasado em relação ao buffer pode ver o contador subir ainda lendo varreduras de antes da perda,
+e a lacuna cai até dois quadros antes (o tamanho do buffer); a marca nunca se perde. E, como no
+`amp`, a lacuna de um quadro diz "faltou algo aqui", não quantas conversões: o quadro abandonado
+tinha 14 varreduras e a perda pode ter sido de uma. As conversões que o conversor fez e ninguém
+pediu continuam invisíveis: isso é a fase 5.
+
+**O serviço.** Nada mudou. O recuo que o plano pede já existe (`main.cpp`, `session.configure`):
+uma partida que falha reabre o dispositivo com as opções anteriores e recusa o pedido. Com o
+kernel novo, uma escrita que o chip não guardou chega lá como `-EIO` no atributo. Esse caminho não
+tem teste de host; o `make check` o exercita no QEMU, pelo link `simulated`.
+
+| Verificação | Resultado |
+|---|---|
+| `tests/ads1299` | **272 verificações, 0 falhas**; o defeito da fase 3 virou verificação; resta o da fase 5 |
+| toda escrita de configuração | seguida de uma leitura do mesmo registrador |
+| `MISC1` com o SRB1 preso aberto | `montage = referential` falha com `-EIO`, o atributo continua `bipolar`, a derivação do bias volta à bipolar, e a próxima leitura de `MISC1` vai ao chip e lê `0` |
+| o caso do plano: `ff` guardado como `7f` em `LOFF_SENSP` | `lead_off = dc` falha com `-EIO`, continua `off` com `00 00` monitorado, os comparadores nunca ligam; sem a falha, o mesmo pedido passa |
+| barramento que falha no meio de uma escrita | o registro é esquecido e a próxima leitura vai ao chip |
+| `BIAS_STAT` posto pelo chip | não reprova a escrita do `CONFIG3` |
+| o nibble, kernel contra M33 | os 256 primeiros bytes possíveis, mesma decisão |
+| resposta fora de passo no buffer | 10 conversões, 9 varreduras, `lost_samples = 1`; numa leitura avulsa, `-EIO`, e a seguinte volta a dar valor |
+| **injeções** no kernel: sem comparar; sem esquecer o cache; sem a máscara; buffer sem conferir; leitura avulsa sem conferir; nibble errado | 9, 5, 1, 2, 1 e 3 falhas (a última reprova no *probe*: o autoteste) |
+| o shim com a ordem antiga e sem esquecer o cache | a verificação do **sintoma** (o valor lido) passa; só as do mecanismo reprovam - a razão de o shim ter mudado |
+| `tests/framework` | 13 verificações novas, **1681** no total, 0 falhas |
+| **injeções** no framework: abandona sem pular a sequência; pula e entrega o quadro com a perda; ignora o contador | 2, 2 e 4 falhas |
+| contra um kernel de verdade | `make -C scripts/oot-modules W=1` (Ubuntu 6.8.0-147): sem aviso do código; `checkpatch --strict` no diff: 0/0/0 |
+
+**O que falta, e é a bancada.** Na imagem `usb` de sempre (o kernel muda, então é cartão novo):
+trocar a montagem 20 vezes e ver 20 leituras de volta corretas, sem `register .. read back` no
+`dmesg`; nenhuma sessão abrindo com uma prescrição recusada; e `lost_samples` contra as lacunas
+da sequência numa sessão de 10 minutos, que pela primeira vez devem bater.
 
