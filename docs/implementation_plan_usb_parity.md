@@ -1,7 +1,7 @@
 # Plano de implementação — o link `usb` com as funções do link `amp`
 
-> **Status** (2026-10-15): fases 0, 1, 2 e 3 escritas e testadas no host (§7.1–§7.4); **nenhuma
-> foi à bancada**. As fases 4 e 5 não começaram. O que segue é o levantamento de 2026-10-14,
+> **Status** (2026-10-15): fases 0 a 4 escritas e testadas no host (§7.1–§7.5); **nenhuma foi à
+> bancada**. A fase 5 espera a decisão D5 (fiação). O que segue é o levantamento de 2026-10-14,
 > feito lendo
 > `linux-med/drivers/iio/adc/ti-ads1299.c` (commit `983c5cf`), o driver `iio` do framework, a
 > tradução por link em `do_derive_device_options` e o firmware do M33, mais este plano.
@@ -306,7 +306,7 @@ então é cartão novo.
 | 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | **receita e host prontos, bancada pendente** — §7.3 | 2026-10-15 |
 | 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | **código e host prontos, bancada pendente** — §7.2 | 2026-10-14 |
 | 3 | escrita recusada pelo chip vira recusa da prescrição | **kernel, framework e host prontos, bancada pendente** — §7.4 | 2026-10-15 |
-| 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | — | — |
+| 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | **kernel, framework, receita e host prontos, bancada pendente** — §7.5 | 2026-10-15 |
 | 5 | perda forçada contada igual pelo exportador e pela onda quadrada | — | — |
 
 ### 7.1 Fase 0 — o que foi feito, e onde se afasta do plano (2026-10-14)
@@ -505,4 +505,63 @@ tem teste de host; o `make check` o exercita no QEMU, pelo link `simulated`.
 trocar a montagem 20 vezes e ver 20 leituras de volta corretas, sem `register .. read back` no
 `dmesg`; nenhuma sessão abrindo com uma prescrição recusada; e `lost_samples` contra as lacunas
 da sequência numa sessão de 10 minutos, que pela primeira vez devem bater.
+
+### 7.5 Fase 4 — o que foi escrito (2026-10-15)
+
+**A forma se afasta da D3, e por um motivo que só apareceu ao ler o framework.** A D3 pedia
+`input_mux` e `hardwaregain` por canal. Mas o framework escreve as opções em **ordem alfabética
+de chave** (`applyOptions`, que diz no próprio comentário que um driver dependente de ordem se
+corrige no driver): `in_voltage7_input_mux` seria escrito antes de `input_mux`, e o atributo
+global desfaria o canal 7. O que se fez é um atributo só, **`temperature_channel`** (`none` ou o
+número do canal), e um driver que guarda o estado - ganho prescrito, MUX dos eletrodos, canal do
+sensor - e reprograma todos os `CHnSET` a partir dele sempre que um muda. A ordem das escritas
+deixou de importar. `hardwaregain` continua um atributo só e passou a devolver a prescrição; o
+ganho real de cada canal está na escala dele.
+
+**Kernel (`linux-med`, `ti-ads1299.c`).** O canal do sensor recebe MUX `temperature` e
+min(ganho, 12) - a mesma regra de `afe_sensor_gain()` no M33 - e sai da derivação do bias e do
+lead-off (`ads1299_electrodes()`), como em `afe_registers()`. As máscaras saem antes de o MUX ir
+ao sensor e voltam depois de ele voltar aos eletrodos. Trocar o canal com o buffer ligado é
+recusado (`-EBUSY`), e uma troca que o chip recusa (leitura de volta da fase 3) desfaz tudo.
+
+**Framework (`IioDevice`).** Dois achados, e o primeiro existia antes da fase. **O framework lia
+só `in_voltage0_scale` e aplicava essa escala aos oito canais**: com o sensor a ganho 12 e o
+resto a 24, o canal 8 sairia com o dobro do valor, plausível e calado. A escala agora é lida e
+conferida canal a canal. E `full_scale.<n>` declara o passo exato de um canal; sem a declaração,
+a escala desse canal no kernel reprova a partida, nomeando o canal. `full_scale.<n>` sem
+`full_scale` é recusado: seria um canal exato e sete pelo texto do kernel.
+
+**Receita.** O ramo `spi`/`usb` traduz `afe.temperature` para `temperature_channel = 7` e
+`full_scale.7` = referência / min(ganho, 12). O teto, assim, está dito em dois lugares: no
+kernel, que o aplica, e na receita, que o declara. Isso é de propósito: o framework confere um
+contra o outro, e um driver e uma tabela que discordem param a partida em vez de gravar o sensor
+pela metade. Toda linha diz `temperature_channel`, `none` inclusive, porque o kernel guarda o
+valor de uma escolha para a outra. A tabela do `usb` foi de **56 para 98 linhas** (7 ganhos × 2
+montagens × lead-off ligado, desligado, gerador). A linha entra antes da medida pelo `usb`, como o
+curto, e pelo mesmo motivo.
+
+| Verificação | Resultado |
+|---|---|
+| `tests/ads1299` | **1874 verificações, 0 falhas** (o laço do oráculo é a maior parte) |
+| oráculo do M33, com o sensor | 7 ganhos × 2 montagens × bias × lead-off × gerador × 2 ordens de escrita = **224 combinações**: os oito `CHnSET`, os quatro registradores de sensoriamento, `MISC1`, `CONFIG3` e `CONFIG4` iguais aos de `afe_registers()` |
+| os casos do plano | ganho 24: `CH8SET` com PGA 12 e MUX 100, os outros PGA 24 e MUX 000; ganho 6: `CH8SET` com PGA 6 |
+| escala por canal | canal 8 a 4,5 V / (12 × 2²³), os outros a 4,5 V / (24 × 2²³); `hardwaregain` lê 24 |
+| lead-off com o sensor | `lead_off_monitored` = `7f 7f` |
+| recusas | canal 8 ou `seven`: `-EINVAL`; com o buffer ligado: `-EBUSY`; `CH8SET` que não aceita o MUX: `-EIO`, e o bias volta a somar os oito |
+| **injeções** no kernel: sem o teto; sensor nas máscaras; estado zerado no init; sem desfazer numa recusa; canal do sensor sem o MUX do sensor | 3, 2, 3 (o *probe* reprova: o autoteste vê o canal 0 no sensor), 2 e 6 falhas |
+| `tests/framework` | 17 verificações novas, **1698** no total, 0 falhas |
+| **injeções** no framework: um passo para todos; só a escala do canal 0; `full_scale.N` ignorado | 2, 5 e 3 falhas |
+| `tests/derive` | **1452 verificações, 0 falhas**; as 42 linhas do sensor com `temperature_channel = 7` e `full_scale.7` = 4,5 V / min(ganho, 12); toda outra linha com `none` |
+| **injeções** na receita: passo sem o teto; `temperature_channel` omitido; o estado de antes | 3, 4 e 7 falhas |
+| contra um kernel de verdade | `make -C scripts/oot-modules W=1`: sem aviso do código; `checkpatch --strict`: 0/0/0; `make risks`: 0 erros |
+
+**O que o host não vê.** O conversor falso devolve um código plausível para o sensor a qualquer
+ganho (145,3 mV × 24 ainda cabe na escala dele); o −79 °C do `amp` a ganho 24 é do silício, e a
+injeção "sem o teto" só é reprovada aqui pelos bytes, não pela leitura. A ordem das máscaras em
+relação ao MUX também não: o falso não guarda estados intermediários.
+
+**O que falta, e é a bancada** (§3, fase 4): o canal 8 a 43 °C ± 2 nos sete ganhos, contra o
+`amp` no mesmo dia ± 1 °C; os outros sete canais com média e ruído iguais aos de uma sessão sem o
+sensor. Uma imagem com esta receita sobre um kernel sem `temperature_channel` **não adquire** (o
+serviço recusa a opção), como com a montagem e o lead-off: o kernel tem de ser o desta fase.
 
