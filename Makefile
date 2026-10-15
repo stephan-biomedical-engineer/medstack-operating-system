@@ -429,8 +429,14 @@ check: $(TOOL)
 # supplies the kernel APIs it calls and a fake MCP2210 that answers 64-byte
 # reports - so the bridge's transfer state machine, its stall bound and its
 # reply handling are exercised with no board, no USB and no cross toolchain.
-# It is the only thing in this repository that can see a defect in kernel code
-# before the hardware exists. `tests/eeg-export` compiles the clinical-file
+# `tests/ads1299` does the same for the converter's IIO driver, against a fake
+# converter at the SPI core, with the M33 firmware's register builder compiled
+# in as the oracle for the bytes both drivers write to the same part; what the
+# usb link still does wrong is counted there as DEFECT, apart from failures.
+# They are the only things in this repository that can see a defect in kernel
+# code before the hardware exists. `tests/amp-bench` checks the judge of a
+# test-signal record against losses injected into synthetic captures.
+# `tests/eeg-export` compiles the clinical-file
 # converter of the EEG application against the framework and feeds it damaged
 # session records - a wrong scale, a corrupted frame, a truncated tail.
 #
@@ -442,9 +448,11 @@ check: $(TOOL)
 test:
 	@$(MAKE) --no-print-directory -C tests/framework check
 	@$(MAKE) --no-print-directory -C tests/mcp2210 check
+	@$(MAKE) --no-print-directory -C tests/ads1299 check
 	@$(MAKE) --no-print-directory -C tests/m33-producer check
 	@$(MAKE) --no-print-directory -C tests/eeg-export check
 	@$(MAKE) --no-print-directory -C tests/hmi check
+	@$(MAKE) --no-print-directory -C tests/amp-bench check
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform

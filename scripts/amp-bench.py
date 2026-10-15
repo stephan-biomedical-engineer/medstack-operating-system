@@ -10,7 +10,10 @@ recorded with `dd`. The board side is scripts/amp-bench.sh.
                                                    encodeControl() builds it
     amp-bench.py analyse CAPTURE [--seconds S]     verify a synthetic capture
     amp-bench.py converter CAPTURE [--seconds S]   verify a capture of the real
-                                                   converter's internal test signal
+                                                   converter's internal test signal - and,
+                                                   half period by half period, that no
+                                                   conversion is missing. Any link, any
+                                                   rate: a session's raw.bin is a capture
     amp-bench.py leadoff CAPTURE                   a capture on the electrode inputs:
                                                    integrity, and what lead-off said
     amp-bench.py tone CAPTURE --hz F (--uv A | --below A) [--tolerance T]
@@ -199,12 +202,34 @@ def lead_off_summary(bodies):
         print('  nenhum eletrodo monitorado foi reportado solto')
 
 
+def half_periods(v, expect):
+    """Every whole half period of a square wave, in samples, and what they say
+    about missing or extra conversions.
+
+    The converter's test generator divides the same clock that paces its
+    conversions (f_CLK/2^21 against f_CLK/2^(7+DR)), so each half period is an
+    exact number of samples: rate * 2^20 / f_CLK, 128 at 250 SPS and 8192 at
+    16000. A conversion lost anywhere between the converter and the record -
+    an interrupt that never ran, a frame the producer gave up, a bus transfer
+    the host was late for - makes one half period one sample short. The
+    sequence numbers cannot see that; this can. The first and last edges bound
+    the measurement: the partial half periods outside them say nothing."""
+    mid = (max(v) + min(v)) / 2.0
+    edges = [i for i in range(1, len(v)) if (v[i] > mid) != (v[i - 1] > mid)]
+    lengths = [b - a for a, b in zip(edges, edges[1:])]
+    short = sum(expect - h for h in lengths if h < expect)
+    extra = sum(h - expect for h in lengths if h > expect)
+    return lengths, short, extra
+
+
 def converter(path, seconds=None):
     """The converter's internal test signal, judged against its specification
     and not against a formula: on every channel a square wave of +-VREF/2400
     (1.875 mV with the internal 4.5 V reference) at f_CLK/2^21, which is a
-    period of 256 conversions whatever the oscillator's exact frequency. The
-    amplitude tolerance is the kernel driver's self-test one, +-20%."""
+    period of 256 conversions at 250 SPS - 256 * rate / 250 at any other rate
+    - whatever the oscillator's exact frequency. The amplitude tolerance is the
+    kernel driver's self-test one, +-20%. And every half period must be exact
+    (half_periods): a single missing conversion fails the verdict."""
     acks, frames = parse(open(path, 'rb').read())
     for ver, rej, detail in acks:
         print('ack: rejectedIndex %d, "%s"' % (rej, detail))
@@ -212,6 +237,7 @@ def converter(path, seconds=None):
         print('nenhum quadro'); return 1
     bad_crc = gaps = 0
     prev = None
+    rates = set()
     stamps, per_ch, v2_bodies = [], [[] for _ in range(8)], []
     for h, body in frames:
         magic, ver, ch, spc, rate, seq, ts, scale, crc = h
@@ -219,11 +245,12 @@ def converter(path, seconds=None):
             bad_crc += 1; continue
         if ver >= 2:
             v2_bodies.append(body)
+        rates.add(rate)
         payload = body[:ch * spc * 4]
         if prev is not None and seq != prev + 1:
             gaps += 1
         prev = seq
-        stamps.append((seq, ts))
+        stamps.append((seq, ts, spc))
         vals = struct.unpack('<%di' % (ch * spc), payload)
         for i in range(spc):
             for c in range(ch):
@@ -233,25 +260,35 @@ def converter(path, seconds=None):
     lead_off_summary(v2_bodies)
     if not n:
         print('VEREDITO: FALHOU (nenhum quadro válido)'); return 1
+    if len(rates) != 1:
+        print('taxas diferentes no mesmo registro: %s mHz' % sorted(rates))
+        print('VEREDITO: FALHOU'); return 1
+    hz = rates.pop() / 1000.0
+    period_expect = 256.0 * hz / 250.0
+    half_expect = int(round(period_expect / 2))
+    print('taxa declarada %g amostras/s: período esperado %g amostras, meio período %d' % (hz, period_expect, half_expect))
     ok = gaps == 0 and bad_crc == 0
-    print('canal  baixo(uV)  alto(uV)  amplitude(uV)  offset(uV)  periodo(amostras)')
+    print('canal  baixo(uV)  alto(uV)  amplitude(uV)  offset(uV)  periodo(amostras)  meios períodos  faltando  sobrando')
     for c, v in enumerate(per_ch):
         mid = (max(v) + min(v)) / 2.0
         hi = [x for x in v if x > mid]; lo = [x for x in v if x <= mid]
         h_m = sum(hi) / len(hi) / 1000.0; l_m = sum(lo) / len(lo) / 1000.0
         amp = (h_m - l_m) / 2.0; offs = (h_m + l_m) / 2.0
-        edges = [i for i in range(1, len(v)) if (v[i] > mid) != (v[i - 1] > mid)]
-        period = 2.0 * (edges[-1] - edges[0]) / (len(edges) - 1) if len(edges) > 1 else float('nan')
-        good = abs(amp - 1875.0) <= 0.2 * 1875.0 and abs(period - 256.0) <= 2.0
+        lengths, short, extra = half_periods(v, half_expect)
+        period = 2.0 * sum(lengths) / len(lengths) if lengths else float('nan')
+        good = (abs(amp - 1875.0) <= 0.2 * 1875.0 and len(lengths) >= 2
+                and short == 0 and extra == 0)
         ok = ok and good
-        print('  %d   %9.1f  %8.1f  %13.1f  %10.1f  %8.2f  %s' % (c, l_m, h_m, amp, offs, period,
-              '' if good else '<- FORA'))
+        print('  %d   %9.1f  %8.1f  %13.1f  %10.1f  %8.2f  %14d  %8d  %8d  %s' % (
+            c, l_m, h_m, amp, offs, period, len(lengths), short, extra, '' if good else '<- FORA'))
     if len(stamps) > 1:
         span = (stamps[-1][1] - stamps[0][1]) / 1e6
-        nconv = (stamps[-1][0] - stamps[0][0]) * 14
-        print('taxa pelo relógio do M33: %.4f conversões/s (nominal 250; o oscilador interno da peça contra o clock do M33)' % (nconv / span))
+        nconv = (stamps[-1][0] - stamps[0][0]) * stamps[0][2]
+        if span > 0:
+            print('taxa pelo relógio do produtor: %.4f conversões/s (nominal %g; o oscilador da peça contra o relógio de quem carimbou)' % (nconv / span, hz))
         d = [b[1] - a[1] for a, b in zip(stamps, stamps[1:]) if b[0] == a[0] + 1]
-        print('intervalo entre quadros: min %d, max %d us (nominal 56000)' % (min(d), max(d)))
+        if d:
+            print('intervalo entre quadros: min %d, max %d us (nominal %.0f)' % (min(d), max(d), stamps[0][2] * 1e6 / hz))
     if seconds:
         print('taxa pelo relógio do Linux (%.2f s): %.3f amostras/s/canal' % (seconds, n / seconds))
     print('VEREDITO:', 'OK' if ok else 'FALHOU')
