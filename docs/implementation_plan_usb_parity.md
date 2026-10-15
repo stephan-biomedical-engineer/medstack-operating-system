@@ -302,7 +302,7 @@ então é cartão novo.
 |---|---|---|---|
 | 0 | `tests/ads1299` e o juiz da onda quadrada de pé, cada um com uma injeção vista | **cumprida** — §7.1 | 2026-10-14 |
 | 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | — | — |
-| 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | — | — |
+| 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | **código e host prontos, bancada pendente** — §7.2 | 2026-10-14 |
 | 3 | escrita recusada pelo chip vira recusa da prescrição | — | — |
 | 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | — | — |
 | 5 | perda forçada contada igual pelo exportador e pela onda quadrada | — | — |
@@ -356,4 +356,48 @@ conversões não contabilizadas (feitas − lidas − contadas como perdidas).
 exceto onde o silício já respondeu e onde o M33 é o oráculo - uma constante errada nos dois lados
 passa. O shim não tem tempo, concorrência nem contexto de interrupção. E nada disto rodou em
 placa: a fase 0 é o que as fases seguintes vão usar para se provar antes de chegar lá.
+
+### 7.2 Fase 2 — o que foi escrito (2026-10-14)
+
+**Kernel (`linux-med`, `ti-ads1299.c`).** O atributo `lead_off` (`off`, `dc`) programa `LOFF`
+(no valor de reset, escrito), `LOFF_SENSP` (todo canal) e `LOFF_SENSN` (todo canal no bipolar,
+só o bit do eletrodo de referência no referencial) e liga os comparadores por último; desligar
+os apaga primeiro. A troca de montagem reescreve `LOFF_SENSN`. **No *probe* o lead-off fica
+desligado**, comparadores inclusive: o estado antigo - comparadores ligados e nenhum canal - era
+o registro falso. `lead_off_monitored` diz quais eletrodos a palavra cobre (`ff ff`, `ff 01`,
+`00 00`), e o buffer ganhou o canal `in_voltage8_lead_off`: `(positivo << 8) | negativo`, tirado
+da palavra de status de cada leitura e já sem os bits que não são sensoriados. Trocar
+`lead_off` com o buffer ligado é recusado (`-EBUSY`).
+
+Duas escolhas que se afastam do plano. A palavra entregue não é a palavra de status crua (D1
+dizia os 24 bits): o *layout* do status é fato do conversor, e entregá-lo cru poria esse fato no
+framework, contra a regra 9. O kernel decodifica, mascara, e publica um formato próprio dele. E o
+framework não deduz o monitorado da montagem: lê `lead_off_monitored`.
+
+**Framework (`IioDevice`).** Com o canal presente, habilita-o, confere o tipo (`u16/32>>0`), lê
+`lead_off_monitored` e preenche o bloco de lead-off de cada quadro com o OU das amostras -
+exatamente o que o M33 faz no `amp`. Sem o canal, "nada monitorado". Com o canal e sem a lista,
+ou com outro tipo, recusa.
+
+**Receita.** `afe.lead_off_detection` traduz para `lead_off` (`dc`/`off`); "desligado" deixou de
+ser recusado; gerador interno com lead-off ligado passou a ser recusado, como no `amp`. A tabela
+do `usb` foi de **28 para 42 linhas** (lead-off desligado em 28, ligado em 14). Um kernel sem o
+atributo faz o driver recusar a opção e o serviço não sobe - como com a montagem.
+
+| Verificação | Resultado |
+|---|---|
+| `tests/ads1299` | **245 verificações, 0 falhas**; os dois defeitos da fase 2 viraram verificação; restam os das fases 3 e 5 |
+| oráculo do M33, lead-off | montagem × lead-off, nas duas ordens: `LOFF`, `LOFF_SENSP`, `LOFF_SENSN` e `PD_LOFF_COMP` iguais aos de `afe_registers()` |
+| a palavra no buffer | bipolar: 3+ e 5- soltos chegam como `0x0410`; referencial: um 5- solto não chega, o eletrodo de referência chega; desligado: nada |
+| **injeções** no kernel: oito fontes no referencial; bits não sensoriados passando; P e N trocados; comparadores ligados no *probe* | 4, **0**, 2 e 1 falhas |
+| a injeção que passou | o conversor falso só produzia bit onde havia sensoriamento, então a máscara do driver nunca era exercitada. O falso passou a produzir os bits não sensoriados também (o datasheet não diz o que eles leem; o pior caso é parecerem medida), e a injeção dá **1 falha** |
+| `tests/framework` | 22 verificações novas, 1668 no total, 0 falhas |
+| **injeções** no framework: palavra no lugar errado; máscara ignorada; canal ignorado | 4, 2 e 12 falhas |
+| contra um kernel de verdade | `make -C scripts/oot-modules W=1` (Ubuntu 6.8.0-147): compila sem aviso; `checkpatch --strict` no diff: 0/0/0 |
+
+**O que falta, e é a bancada.** Imagem `make stm32 KEY=development KERNEL=med LINK=usb`, e o
+roteiro da fase 2 na §3: resistores num canal, os outros abertos, tirar um resistor, desligar a
+detecção, comparar com o `amp` no mesmo dia, e o juiz da onda quadrada numa sessão com lead-off
+desligado. O código do kernel precisa estar **commitado** no `linux-med` para entrar na imagem
+(`KERNEL=med` constrói o `HEAD`).
 
