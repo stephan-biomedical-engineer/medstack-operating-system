@@ -139,6 +139,36 @@ void writeScans(const std::vector<std::vector<std::int32_t>>& scans, std::int64_
     }
 }
 
+/// The same device with electrode contact: the lead-off word after the
+/// voltages, and the electrodes it speaks for.
+void addLeadOff(const std::string& monitored) {
+    put("scan_elements/in_voltage8_lead_off_en", "0");
+    put("scan_elements/in_voltage8_lead_off_type", "le:u16/32>>0");
+    put("lead_off_monitored", monitored);
+}
+
+/// Scans with the lead-off word: eight voltages, the word at 32, the timestamp
+/// at the next multiple of 8 - 48 bytes, the way the kernel packs them.
+void writeScansLeadOff(const std::vector<std::uint32_t>& words, std::int64_t firstNs) {
+    std::vector<unsigned char> bytes;
+    for (std::size_t s = 0; s < words.size(); ++s) {
+        unsigned char scan[48] = {};
+        for (int c = 0; c < 8; ++c) {
+            const std::uint32_t raw = static_cast<std::uint32_t>(100 * (c + 1));
+            std::memcpy(scan + c * 4, &raw, 4);
+        }
+        std::memcpy(scan + 32, &words[s], 4);
+        const std::int64_t ts = firstNs + static_cast<std::int64_t>(s) * 4000000;
+        std::memcpy(scan + 40, &ts, 8);
+        bytes.insert(bytes.end(), scan, scan + 48);
+    }
+    const int fd = ::open(kNode.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        (void)::write(fd, bytes.data(), bytes.size());
+        ::close(fd);
+    }
+}
+
 DeviceConfig iioConfig(const std::map<std::string, std::string>& options) {
     DeviceConfig config;
     config.driver = "iio";
@@ -335,6 +365,99 @@ void testIio() {
         options = declared();
         options["../name"] = "x";
         CHECK(!MedicalDeviceFactory::create(iioConfig(options)).isOk());
+    }
+
+    medtest::section("iio - o contato dos eletrodos, quadro a quadro");
+    {
+        // A front-end without the lead-off word: nothing monitored, which is
+        // not the same as every electrode attached.
+        makeTree();
+        writeScans(std::vector<std::vector<std::int32_t>>(14, std::vector<std::int32_t>(8, 0)), 0,
+                   4000000);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        CHECK(device != nullptr);
+        if (device && device->start() == Status::Ok) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                CHECK(!frame.value().leadOff.monitored());
+            }
+            device->stop();
+        }
+    }
+    {
+        // Bipolar, every electrode watched. One sample of the frame says 3+
+        // and 5- are off: the frame says so, and the voltages are untouched.
+        makeTree();
+        addLeadOff("ff ff");
+        std::vector<std::uint32_t> words(28, 0);
+        words[6] = (0x04U << 8) | 0x10U;
+        writeScansLeadOff(words, 1000000000LL);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        CHECK(device != nullptr);
+        if (device && device->start() == Status::Ok) {
+            CHECK_EQ(get("scan_elements/in_voltage8_lead_off_en"), std::string("1"));
+            Result<SampleFrame> first = device->read(std::chrono::milliseconds(100));
+            CHECK(first.isOk());
+            if (first.isOk()) {
+                const LeadOff& contact = first.value().leadOff;
+                CHECK_EQ(contact.monitoredPositive, static_cast<std::uint16_t>(0xff));
+                CHECK_EQ(contact.monitoredNegative, static_cast<std::uint16_t>(0xff));
+                CHECK_EQ(contact.detachedPositive(), static_cast<std::uint16_t>(0x04));
+                CHECK_EQ(contact.detachedNegative(), static_cast<std::uint16_t>(0x10));
+                // 100 codes on channel 0: the word did not shift the voltages.
+                CHECK(first.value().samples[0] == 100.0 * kStepUv);
+                CHECK(first.value().samples[7] == 800.0 * kStepUv);
+                CHECK_EQ(toUnixMicros(first.value().timestamp), static_cast<std::uint64_t>(1000000));
+            }
+            Result<SampleFrame> second = device->read(std::chrono::milliseconds(100));
+            CHECK(second.isOk());
+            if (second.isOk()) {
+                CHECK(second.value().leadOff.monitored());
+                CHECK_EQ(second.value().leadOff.detachedPositive(), static_cast<std::uint16_t>(0));
+            }
+            device->stop();
+        }
+    }
+    {
+        // Referential: one source on the negative side. A negative bit other
+        // than the reference electrode's is not a measurement, whatever the
+        // word carries.
+        makeTree();
+        addLeadOff("ff 01");
+        std::vector<std::uint32_t> words(14, 0);
+        words[0] = 0x10U;
+        words[1] = 0x01U;
+        writeScansLeadOff(words, 0);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        if (device && device->start() == Status::Ok) {
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                CHECK_EQ(frame.value().leadOff.monitoredNegative, static_cast<std::uint16_t>(0x01));
+                CHECK_EQ(frame.value().leadOff.detachedNegative(), static_cast<std::uint16_t>(0x01));
+            }
+            device->stop();
+        }
+    }
+    {
+        // A word and no list of what it watches: refused, not guessed.
+        makeTree();
+        addLeadOff("ff ff");
+        ::unlink((kDir + "/lead_off_monitored").c_str());
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        if (device) {
+            CHECK_STATUS(device->start(), Status::NotSupported);
+            CHECK_EQ(get("buffer/enable"), std::string("0"));
+        }
+        // A word of another shape: refused, not misread.
+        makeTree();
+        addLeadOff("ff ff");
+        put("scan_elements/in_voltage8_lead_off_type", "le:u8/8>>0");
+        device = make(declared());
+        if (device) {
+            CHECK_STATUS(device->start(), Status::NotSupported);
+        }
     }
 
     medtest::section("iio - o autoteste diz o que falta");

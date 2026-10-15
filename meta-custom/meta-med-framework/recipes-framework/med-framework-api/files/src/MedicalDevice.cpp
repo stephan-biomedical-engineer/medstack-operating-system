@@ -959,6 +959,15 @@ private:
 /// application's - so a front-end with a private attribute is configured
 /// without this file learning its name.
 ///
+/// Electrode contact, where the kernel driver reports it, arrives the same way
+/// as on the rpmsg link: in every frame's lead-off block. The kernel driver
+/// says which electrodes it watches in `lead_off_monitored` (two hex bytes,
+/// positive inputs then negative, one bit per channel) and puts each sample's
+/// state in one more scan element after the voltages, `in_voltageN_lead_off`:
+/// (positive << 8) | negative, a set bit an electrode off. A driver with
+/// neither reports nothing monitored - which is the truth about it, and not
+/// "every electrode attached".
+///
 /// Two options are not attributes and are never written to the device. They
 /// are the same two words the simulated converter takes, and they go together:
 ///
@@ -1080,6 +1089,26 @@ public:
         const Status armed = enableBuffer();
         if (armed != Status::Ok) {
             return armed;
+        }
+
+        // Which electrodes the lead-off word speaks for - read after the
+        // options, because one of them may be the detection itself.
+        monitoredPositive_ = 0;
+        monitoredNegative_ = 0;
+        if (hasLeadOff_) {
+            std::string monitored;
+            unsigned int positive = 0;
+            unsigned int negative = 0;
+            if (!readSysfs("lead_off_monitored", monitored) ||
+                std::sscanf(monitored.c_str(), "%x %x", &positive, &negative) != 2 ||
+                positive > 0xffffU || negative > 0xffffU) {
+                lastError_ = "the front-end reports electrode contact and not which "
+                             "electrodes it watches";
+                writeSysfs("buffer/enable", "0");
+                return Status::NotSupported;
+            }
+            monitoredPositive_ = static_cast<std::uint16_t>(positive);
+            monitoredNegative_ = static_cast<std::uint16_t>(negative);
         }
 
         fd_ = ::open(devicePath_.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
@@ -1416,6 +1445,20 @@ private:
         // still acquires, but the record must not later be read as if it did.
         hasTimestamp_ = writeSysfs("scan_elements/in_timestamp_en", "1");
 
+        // The lead-off word, where the front-end has one: the scan element
+        // right after the voltages.
+        const std::string leadOff =
+            "scan_elements/in_voltage" + std::to_string(config_.channelCount) + "_lead_off";
+        hasLeadOff_ = ::access(attributePath(leadOff + "_en").c_str(), F_OK) == 0;
+        if (hasLeadOff_) {
+            std::string type;
+            if (!writeSysfs(leadOff + "_en", "1") || !readSysfs(leadOff + "_type", type) ||
+                type.find("u16/32>>0") == std::string::npos) {
+                lastError_ = "the front-end's lead-off element is not the word this driver reads";
+                return Status::NotSupported;
+            }
+        }
+
         const Status layout = computeScanLayout();
         if (layout != Status::Ok) {
             return layout;
@@ -1479,8 +1522,9 @@ private:
         }
         realBits_ = realBits;
 
+        leadOffOffset_ = static_cast<std::size_t>(config_.channelCount) * sizeof(std::int32_t);
         const std::size_t voltageBytes =
-            static_cast<std::size_t>(config_.channelCount) * sizeof(std::int32_t);
+            leadOffOffset_ + (hasLeadOff_ ? sizeof(std::uint32_t) : 0U);
         if (hasTimestamp_) {
             // The kernel aligns each scan element to its own size, so the
             // 64-bit timestamp starts at the next multiple of 8.
@@ -1520,6 +1564,24 @@ private:
             frame.timestamp = Clock::now();
         }
 
+        // Electrode contact over the frame: an electrode is reported off if
+        // any of its samples said so, the way the rpmsg producer reports it.
+        if (hasLeadOff_) {
+            std::uint16_t offPositive = 0;
+            std::uint16_t offNegative = 0;
+            for (std::uint32_t sample = 0; sample < config_.samplesPerFrame; ++sample) {
+                std::uint32_t word = 0;
+                std::memcpy(&word, block_.data() + sample * scanSize_ + leadOffOffset_,
+                            sizeof(word));
+                offPositive = static_cast<std::uint16_t>(offPositive | ((word >> 8) & 0xffU));
+                offNegative = static_cast<std::uint16_t>(offNegative | (word & 0xffU));
+            }
+            frame.leadOff.monitoredPositive = monitoredPositive_;
+            frame.leadOff.monitoredNegative = monitoredNegative_;
+            frame.leadOff.offPositive = static_cast<std::uint16_t>(offPositive & monitoredPositive_);
+            frame.leadOff.offNegative = static_cast<std::uint16_t>(offNegative & monitoredNegative_);
+        }
+
         const int shift = 32 - static_cast<int>(realBits_);
         for (std::uint32_t sample = 0; sample < config_.samplesPerFrame; ++sample) {
             const unsigned char* scan = block_.data() + sample * scanSize_;
@@ -1554,6 +1616,10 @@ private:
     unsigned int declaredBits_ = 0;
     unsigned int realBits_ = 24;
     bool hasTimestamp_ = false;
+    bool hasLeadOff_ = false;
+    std::uint16_t monitoredPositive_ = 0;
+    std::uint16_t monitoredNegative_ = 0;
+    std::size_t leadOffOffset_ = 0;
     std::size_t scanSize_ = 0;
     std::size_t timestampOffset_ = 0;
     std::size_t filled_ = 0;
