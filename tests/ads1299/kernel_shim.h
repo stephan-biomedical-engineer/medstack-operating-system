@@ -390,6 +390,13 @@ int sysfs_emit(char *buf, const char *fmt, ...);
 int sysfs_emit_at(char *buf, int at, const char *fmt, ...);
 int __sysfs_match_string(const char * const *array, size_t n, const char *str);
 #define sysfs_match_string(a, s) __sysfs_match_string(a, ARRAY_SIZE(a), s)
+bool sysfs_streq(const char *s1, const char *s2);
+/* The kernel's: base 10 here, an optional '+', one trailing newline, nothing
+ * else; -EINVAL for anything that is not a number, -ERANGE past UINT_MAX. */
+int kstrtouint(const char *s, unsigned int base, unsigned int *res);
+#ifndef UINT_MAX
+#define UINT_MAX	(~0U)
+#endif
 
 struct iio_dev;
 struct iio_info {

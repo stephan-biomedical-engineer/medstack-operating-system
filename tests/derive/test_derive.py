@@ -141,9 +141,11 @@ expected = {
     'simulated': 700,
     'amp': 490,
     # 42 until phase 1 (2026-10-15); +14 = shorted inputs, 7 gains x 2 montages,
-    # lead-off off, no test signal, no sensor.
-    'spi': 56,
-    'usb': 56,
+    # lead-off off, no test signal, no sensor. +42 in phase 4 (the same day) =
+    # the sensor on the last channel, 7 gains x 2 montages x (lead-off on,
+    # lead-off off, test signal), never with shorted inputs.
+    'spi': 98,
+    'usb': 98,
 }
 tables = {}
 for link, count in expected.items():
@@ -205,9 +207,47 @@ for link in ('spi', 'usb', 'amp'):
             check('%s: o eeg.conf de fábrica diz input_mux = shorted' % link,
                   values.get('device.option.input_mux') == 'shorted')
 
-_, _, fatal = run('usb', afe__temperature='true')
-check('usb: sensor de fábrica ainda recusa o build (fase 4)',
-      fatal is not None and 'afe.temperature' in fatal, fatal)
+# --- the sensor on the last channel (phase 4) --------------------------------
+GAINS = ('1', '2', '4', '6', '8', '12', '24')
+for link in ('spi', 'usb'):
+    rows = tables.get(link, [])
+    sensor = [row for row in rows if row['afe.temperature'] == 'true']
+    check('%s: 42 linhas com o sensor' % link, len(sensor) == 42, len(sensor))
+    check('%s: o sensor vai ao último canal' % link,
+          all(row.get('device.option.temperature_channel') == '7' for row in sensor))
+    # The cap is the kernel driver's, and this is the declaration it is held
+    # against: 4.5 V over min(gain, 12).
+    check('%s: o passo do canal do sensor é o do ganho limitado a 12' % link,
+          all(float(row['device.option.full_scale.7'])
+              == 4500000.0 / min(float(row['afe.gain']), 12.0) for row in sensor),
+          [(row['afe.gain'], row['device.option.full_scale.7']) for row in sensor][:3])
+    check('%s: os outros canais ficam no ganho prescrito' % link,
+          all(float(row['device.option.full_scale']) == 4500000.0 / float(row['afe.gain'])
+              for row in sensor))
+    check('%s: as duas montagens e os sete ganhos com o sensor' % link,
+          {(row['afe.montage'], row['afe.gain']) for row in sensor}
+          == {(m, g) for m in ('bipolar', 'referential') for g in GAINS})
+    check('%s: o registro declara o canal auxiliar' % link,
+          all(row['record.auxiliary_channel'] == '8' and row['record.auxiliary_label'] == 'Temp'
+              for row in sensor))
+    # Every row says where the sensor is, "none" included: the kernel keeps
+    # the last setting, and a row that said nothing would inherit it.
+    others = [row for row in rows if row['afe.temperature'] == 'false']
+    check('%s: toda linha sem o sensor diz temperature_channel = none' % link,
+          all(row.get('device.option.temperature_channel') == 'none' for row in others))
+    check('%s: e não declara passo próprio de canal' % link,
+          all(not any(k.startswith('device.option.full_scale.') for k in row) for row in others))
+
+values, _, fatal = run('usb', afe__temperature='true')
+check('usb: sensor de fábrica deriva', fatal is None, fatal)
+if values:
+    check('usb: sensor de fábrica a ganho 24 declara o canal 7 a 12',
+          values.get('device.option.full_scale.7') == '375000'
+          and values.get('device.option.full_scale') == '187500',
+          (values.get('device.option.full_scale'), values.get('device.option.full_scale.7')))
+_, _, fatal = run('usb', afe__temperature='true', afe__input='shorted',
+                  afe__lead_off_detection='false')
+check('usb: sensor com curto recusa o build', fatal is not None, fatal)
 
 print('%d verificações, %d falhas' % (checks, failures))
 sys.exit(1 if failures else 0)

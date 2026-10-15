@@ -250,6 +250,45 @@ int __sysfs_match_string(const char * const *array, size_t n, const char *str)
 	return -EINVAL;
 }
 
+bool sysfs_streq(const char *s1, const char *s2)
+{
+	while (*s1 && *s1 == *s2) {
+		s1++;
+		s2++;
+	}
+	if (*s1 == *s2)
+		return true;
+	if (!*s1 && *s2 == '\n' && !s2[1])
+		return true;
+	if (*s1 == '\n' && !s1[1] && !*s2)
+		return true;
+	return false;
+}
+
+int kstrtouint(const char *s, unsigned int base, unsigned int *res)
+{
+	unsigned long long v = 0;
+	const char *p = s;
+
+	if (base != 10)
+		return -EINVAL;
+	if (*p == '+')
+		p++;
+	if (*p < '0' || *p > '9')
+		return -EINVAL;
+	for (; *p >= '0' && *p <= '9'; p++) {
+		v = v * 10 + (unsigned long long)(*p - '0');
+		if (v > UINT_MAX)
+			return -ERANGE;
+	}
+	if (*p == '\n')
+		p++;
+	if (*p)
+		return -EINVAL;
+	*res = (unsigned int)v;
+	return 0;
+}
+
 /* ----------------------------------------------------------------- IIO */
 
 struct iio_dev *devm_iio_device_alloc(struct device *parent, size_t priv_size)

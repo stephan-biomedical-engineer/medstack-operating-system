@@ -628,6 +628,136 @@ static void test_out_of_step(void)
 					  IIO_CHAN_INFO_RAW), IIO_VAL_INT);
 }
 
+/* The full register set the M33 compares, read from the fake. */
+static bool same_as_m33(const struct afe_regs *r, char *why, size_t n)
+{
+	for (int c = 0; c < 8; c++) {
+		if ((fake.reg[R_CH1SET + c] & 0x77) != (r->chset[c] & 0x77)) {
+			snprintf(why, n, "CH%dSET %02x, M33 %02x", c + 1,
+				 fake.reg[R_CH1SET + c], r->chset[c]);
+			return false;
+		}
+	}
+	for (int s = 0; s < 4; s++) {
+		if (fake.reg[R_BIAS_SENSP + s] != r->sens[s]) {
+			snprintf(why, n, "sens[%d] %02x, M33 %02x", s,
+				 fake.reg[R_BIAS_SENSP + s], r->sens[s]);
+			return false;
+		}
+	}
+	if (fake.reg[R_MISC1] != r->misc1 || (fake.reg[R_CONFIG4] & 0x02) != r->config4 ||
+	    (fake.reg[R_CONFIG3] & 0x8c) != (r->config3 & 0x8c)) {
+		snprintf(why, n, "MISC1/CONFIG3/CONFIG4");
+		return false;
+	}
+	return true;
+}
+
+static void test_temperature(void)
+{
+	static const int gains[] = { 1, 2, 4, 6, 8, 12, 24 };
+	unsigned int combinations = 0;
+	unsigned int differ = 0;
+	char first_difference[320] = "";
+	struct afe_regs r;
+	int val, val2;
+
+	section("o sensor de temperatura no último canal (fase 4)");
+	fake_power_up();
+	if (probe(0))
+		return;
+	CHECK(!strcmp(show("temperature_channel"), "none\n"));
+	CHECK(!strcmp(show("temperature_channel_available"), "none 0 1 2 3 4 5 6 7\n"));
+
+	/* Every gain, montage, bias, lead-off and input the sensor can share the
+	 * converter with, in both orders: the bytes the M33 writes. */
+	for (int field = 0; field < 7; field++)
+	for (int ref = 0; ref < 2; ref++)
+	for (int bias = 0; bias < 2; bias++)
+	for (int loff = 0; loff < 2; loff++)
+	for (int test = 0; test < 2; test++)
+	for (int order = 0; order < 2; order++) {
+		char why[128];
+
+		CHECK(store("temperature_channel", "none") > 0);
+		if (order == 0)
+			CHECK(store("temperature_channel", "7") > 0);
+		CHECK_EQ(write_raw(IIO_CHAN_INFO_HARDWAREGAIN, gains[field]), 0);
+		CHECK(store("montage", ref ? "referential" : "bipolar") > 0);
+		CHECK(store("bias_drive", bias ? "derived" : "off") > 0);
+		CHECK(store("lead_off", loff ? "dc" : "off") > 0);
+		CHECK(store("input_mux", test ? "test_signal" : "normal") > 0);
+		if (order == 1)
+			CHECK(store("temperature_channel", "7") > 0);
+		afe_registers(6, field, test, bias, loff, ref, 0, 1, &r);
+		combinations++;
+		if (!same_as_m33(&r, why, sizeof(why))) {
+			if (!differ++)
+				snprintf(first_difference, sizeof(first_difference),
+					 "ganho %d, %s, bias %d, lead-off %d, teste %d, ordem %d: %s",
+					 gains[field], ref ? "referencial" : "bipolar", bias, loff,
+					 test, order, why);
+		}
+	}
+	CHECK_EQ(combinations, 7 * 2 * 2 * 2 * 2 * 2);
+	CHECK_MSG(differ == 0, first_difference);
+
+	/* The plan's two cases, said out loud: at 24 the sensor runs at 12, at 6
+	 * it runs at 6, and the electrodes run at the prescription. */
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK(store("lead_off", "off") > 0);
+	CHECK_EQ(write_raw(IIO_CHAN_INFO_HARDWAREGAIN, 24), 0);
+	CHECK_EQ(fake.reg[R_CH1SET + 7] & 0x77, 0x54);	/* PGA 12, MUX 100 */
+	CHECK_EQ(fake.reg[R_CH1SET + 0] & 0x77, 0x60);	/* PGA 24, MUX 000 */
+	CHECK_EQ(fake.reg[R_CH1SET + 6] & 0x77, 0x60);
+	CHECK_EQ(read_raw(IIO_CHAN_INFO_HARDWAREGAIN, &val, &val2), IIO_VAL_INT);
+	CHECK_EQ(val, 24);				/* the prescription */
+	CHECK(!strcmp(show("input_mux"), "normal\n"));
+	/* Each channel's scale is the gain it runs at: 4.5 V / (g x 2^23). */
+	CHECK_EQ(shim_iio->info->read_raw(shim_iio, &shim_iio->channels[7], &val, &val2,
+					  IIO_CHAN_INFO_SCALE), IIO_VAL_INT_PLUS_NANO);
+	CHECK_EQ(val2, (int)(4500000ULL * 1000000ULL / (12ULL << 23)));
+	CHECK_EQ(shim_iio->info->read_raw(shim_iio, &shim_iio->channels[0], &val, &val2,
+					  IIO_CHAN_INFO_SCALE), IIO_VAL_INT_PLUS_NANO);
+	CHECK_EQ(val2, (int)(4500000ULL * 1000000ULL / (24ULL << 23)));
+	CHECK_EQ(write_raw(IIO_CHAN_INFO_HARDWAREGAIN, 6), 0);
+	CHECK_EQ(fake.reg[R_CH1SET + 7] & 0x77, 0x34);	/* PGA 6, MUX 100 */
+	CHECK_EQ(fake.reg[R_CH1SET + 0] & 0x77, 0x30);
+
+	/* The electrodes the word speaks for leave the sensor out. */
+	CHECK(store("montage", "bipolar") > 0);
+	CHECK(store("lead_off", "dc") > 0);
+	CHECK(!strcmp(show("lead_off_monitored"), "7f 7f\n"));
+
+	/* Back to none: every channel an electrode again, exactly as the M33. */
+	CHECK(store("lead_off", "off") > 0);
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("temperature_channel", "none") > 0);
+	afe_registers(6, 3, 0, 1, 0, 0, 0, 0, &r);
+	{
+		char why[128] = "";
+
+		CHECK_MSG(same_as_m33(&r, why, sizeof(why)), why);
+	}
+
+	/* Refusals. */
+	CHECK_EQ(store("temperature_channel", "8"), -EINVAL);
+	CHECK_EQ(store("temperature_channel", "seven"), -EINVAL);
+	CHECK(!strcmp(show("temperature_channel"), "none\n"));
+	buffer_on();
+	CHECK_EQ(store("temperature_channel", "7"), -EBUSY);
+	buffer_off();
+
+	/* A sensor channel the part does not take: refused, and nothing left
+	 * half moved - the bias derivation is back over all eight. */
+	fake.stuck_reg = R_CH1SET + 7;
+	fake.stuck_mask = 0x07;
+	CHECK_EQ(store("temperature_channel", "7"), -EIO);
+	CHECK(!strcmp(show("temperature_channel"), "none\n"));
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0xff);
+	fake.stuck_reg = -1;
+}
+
 int main(void)
 {
 	printf("ti-ads1299 - verificações de host\n");
@@ -641,6 +771,7 @@ int main(void)
 	test_buffer_drdy();
 	test_write_not_taken();
 	test_out_of_step();
+	test_temperature();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - tempo, concorrência e contexto de interrupção (o shim não tem nenhum)\n"

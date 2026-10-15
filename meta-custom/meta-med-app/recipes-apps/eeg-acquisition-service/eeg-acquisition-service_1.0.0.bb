@@ -342,10 +342,18 @@ python do_derive_device_options() {
             # input_mux, test_signal, bias_drive, montage and lead_off are the
             # driver's own.
             #
-            # A value enters a link's table when it has been measured on that
-            # link. The sensor has not been read through the kernel driver, and
-            # its channel would need a gain and a step of its own, which the
-            # driver does not have (implementation_plan_usb_parity.md, phase 4).
+            # The temperature sensor on the last channel is the kernel driver's
+            # temperature_channel (implementation_plan_usb_parity.md, phase 4).
+            # The driver runs that channel at the prescribed gain capped at 12,
+            # takes it out of the bias derivation and of lead-off, and says the
+            # gain in the channel's scale; the cap is the producer's on "amp"
+            # too, where gain 24 read -79 C on the board (2026-10-12). Offered
+            # before a bench has read it through this link, like the short
+            # below, and for the same reason. The channel's step is declared
+            # here, full_scale.<n>, from the same cap - and the framework holds
+            # it against the kernel's scale for that channel, so a driver and a
+            # table that disagree about the cap stop the start instead of
+            # recording the sensor at twice its value.
             #
             # Shorted inputs are input_mux = shorted, every channel at once
             # (implementation_plan_usb_parity.md, phase 1). Offered before a
@@ -361,8 +369,6 @@ python do_derive_device_options() {
             if source == 'shorted' and lead_off:
                 refuse("afe.input = shorted with afe.lead_off_detection = true: no "
                        "electrode is in the measurement on link '%s'" % link)
-            if temperature:
-                refuse("afe.temperature = true has not been measured on link '%s'" % link)
             # The rate reaches the kernel driver as sampling_frequency, written
             # by the framework from the device's sample rate, so there is no
             # option line for it. On "usb" 250 is both the converter's lowest
@@ -415,6 +421,10 @@ python do_derive_device_options() {
                 # start, which is the right outcome for a montage nobody applied.
                 ('montage', montage),
                 ('lead_off', 'dc' if lead_off else 'off'),
+                # Always said, "none" included: the kernel keeps the setting
+                # from one choice to the next, and a choice without it would
+                # leave the sensor where the previous one put it.
+                ('temperature_channel', str(channels - 1) if temperature else 'none'),
                 # Not attributes, and never written to the device: the range and
                 # the resolution, from which the framework takes the exact step.
                 # The kernel publishes its scale as short text (five significant
@@ -425,6 +435,9 @@ python do_derive_device_options() {
                 ('full_scale', compact(reference_uv / gain)),
                 ('resolution_bits', str(resolution_bits)),
             ]
+            if temperature:
+                options.append(('full_scale.%d' % (channels - 1),
+                                compact(reference_uv / min(gain, 12))))
 
         else:
             refuse("MED_EEG_LINK = '%s' has no front-end option table; known links are "
