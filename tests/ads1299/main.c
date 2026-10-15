@@ -358,7 +358,8 @@ static void test_buffer_host_timer(void)
 			      (strtol(show("lost_samples"), NULL, 10) - lost_before);
 		DEFECT(unaccounted > 0,
 		       "conversões que o conversor fez e ninguém leu não são contadas no link sem "
-		       "interrupção (o contador do GP6 é o único que as vê)",
+		       "interrupção (o contador do GP6 é o único que as vê, e o GP6 tem o LED: "
+		       "D5 decidida pela fiação atual, a fase 5 não será feita)",
 		       "usb_parity, fase 5");
 	}
 

@@ -1,7 +1,7 @@
 # Plano de implementação — o link `usb` com as funções do link `amp`
 
 > **Status** (2026-10-15): fases 0 a 4 escritas e testadas no host (§7.1–§7.5); **nenhuma foi à
-> bancada**. A fase 5 espera a decisão D5 (fiação). O que segue é o levantamento de 2026-10-14,
+> bancada**. A fase 5 **não será feita**: a D5 foi decidida pela fiação atual (§7.6). O que segue é o levantamento de 2026-10-14,
 > feito lendo
 > `linux-med/drivers/iio/adc/ti-ads1299.c` (commit `983c5cf`), o driver `iio` do framework, a
 > tradução por link em `do_derive_device_options` e o firmware do M33, mais este plano.
@@ -83,7 +83,7 @@ terra (`BRINGUP_AFE.md` §2). O contador de bordas da ponte só existe no GP6.
 | D2 | Como ligar e desligar o lead-off | atributo `lead_off` (`off`/`dc`), que programa `LOFF`, `LOFF_SENSP` e `LOFF_SENSN` conforme a montagem, como `afe_registers()` no M33 | O M33 já é o oráculo: as mesmas máscaras, os mesmos bits, a mesma regra do referencial (só `AFE_REFERENCE_BIT` no lado negativo) |
 | D3 | Ganho próprio no canal do sensor | `hardwaregain` passa a `info_mask_separate`, e `input_mux` ganha uma forma por canal (`in_voltage7_input_mux`); o canal do sensor recebe min(ganho, 12) **no driver** | É onde o M33 decide (`afe_sensor_gain`). Uma regra no userspace seria uma constante do conversor fora do kernel, que a regra 9 proíbe |
 | D4 | Passo por canal no framework | opção `full_scale.<n>` (microvolts), além de `full_scale` | Vocabulário de transporte: um canal com outro passo, sem dizer por quê. A receita calcula, como já calcula `full_scale` |
-| D5 | **Contar perdas de verdade** | **mudar a fiação**: DRDY no GP6, LED no GP5 (ou fora). Alternativa sem solda: nenhuma que funcione em produção | Só o contador de bordas vê uma conversão que ninguém leu. A troca é de hardware e de provisionamento da ponte (NVRAM), e é **decisão do dono da placa** |
+| D5 | **Contar perdas de verdade** | **mudar a fiação**: DRDY no GP6, LED no GP5 (ou fora). Alternativa sem solda: nenhuma que funcione em produção | Só o contador de bordas vê uma conversão que ninguém leu. A troca é de hardware e de provisionamento da ponte (NVRAM), e é **decisão do dono da placa**. **Decidida em 2026-10-15: a fiação fica como está** (§7.6) |
 | D6 | Prova de escrita | leitura de volta sem o cache (`regcache_cache_bypass`) depois de cada escrita de configuração, recusando a escrita se não bater | O custo é uma troca HID por registrador, só na configuração, nunca no caminho de amostra |
 
 ---
@@ -231,7 +231,7 @@ sai das máscaras de lead-off e de bias (como `afe_registers()`).
 
 ### Fase 5 — uma perda deixa marca
 
-Só começa depois da decisão D5.
+Só começava depois da decisão D5, e a D5 foi pela fiação atual: **esta fase não será feita** (§7.6).
 
 **Hardware**: DRDY para o GP6, LED para fora do GP6; NVRAM da ponte reprovisionada para o GP6
 contar bordas de descida (`implementation_plan_mcp2210.md` §13, o `counter`). O
@@ -307,7 +307,7 @@ então é cartão novo.
 | 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | **código e host prontos, bancada pendente** — §7.2 | 2026-10-14 |
 | 3 | escrita recusada pelo chip vira recusa da prescrição | **kernel, framework e host prontos, bancada pendente** — §7.4 | 2026-10-15 |
 | 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | **kernel, framework, receita e host prontos, bancada pendente** — §7.5 | 2026-10-15 |
-| 5 | perda forçada contada igual pelo exportador e pela onda quadrada | — | — |
+| 5 | perda forçada contada igual pelo exportador e pela onda quadrada | **não será feita**: D5 pela fiação atual — §7.6 | 2026-10-15 |
 
 ### 7.1 Fase 0 — o que foi feito, e onde se afasta do plano (2026-10-14)
 
@@ -564,4 +564,22 @@ relação ao MUX também não: o falso não guarda estados intermediários.
 `amp` no mesmo dia ± 1 °C; os outros sete canais com média e ruído iguais aos de uma sessão sem o
 sensor. Uma imagem com esta receita sobre um kernel sem `temperature_channel` **não adquire** (o
 serviço recusa a opção), como com a montagem e o lead-off: o kernel tem de ser o desta fase.
+
+### 7.6 D5 decidida: a fiação fica (2026-10-15)
+
+O dono da placa decidiu manter a fiação: DRDY no GP5, LED de status no GP6. A fase 5 não será
+feita, e o plano diz isso sem substituto fingido, como a §5 pedia.
+
+**O que o registro do `usb` marca, e o que não marca.** Desde a fase 3 toda perda que o **kernel**
+conta deixa lacuna na sequência: uma amostra pedida pelo timer do host enquanto a transferência
+anterior estava em curso, e uma resposta fora de passo. Uma conversão que o conversor fez e que o
+host **nunca pediu** - o timer do host atrasado em relação ao relógio do conversor - não é vista
+por ninguém, porque só o contador de bordas do GP6 a veria e o GP6 tem o LED. Num registro do
+`usb` uma sequência sem lacuna quer dizer "nada que o kernel tenha visto se perdeu", não "nada se
+perdeu". Quem precisa da segunda frase tem o juiz da onda quadrada (`amp-bench.py converter`, fase
+0.c), que conta as faltas pelo sinal de teste interno, numa sessão com o gerador ligado.
+
+Isso não é novo: é o que `acquisition.link = usb` já declara em cada sessão, e é uma das razões
+de o `amp` ser o link do produto. O `tests/ads1299` mantém o caso como **DEFEITO** contado à parte
+(as conversões que ninguém pediu), para que continue visível; ele não reprova a suíte.
 
