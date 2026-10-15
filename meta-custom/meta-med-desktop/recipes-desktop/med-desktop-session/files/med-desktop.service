@@ -62,7 +62,15 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-PrivateNetwork=yes
+# No IP, but NOT a private network namespace. The compositor learns that a
+# mouse or keyboard was plugged in from udev, over netlink, and udev sends its
+# events in the system's network namespace only: with PrivateNetwork=yes the
+# socket opened (AF_NETLINK is allowed below for exactly this) and heard
+# nothing. On the board, 2026-10-14, a receiver plugged in after boot
+# enumerated, logind saw it, and the cursor stayed frozen - the compositor
+# held only the devices it found at start-up. IPAddressDeny keeps the
+# "no network" half of the old line.
+IPAddressDeny=any
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 ProtectKernelModules=yes
 ProtectControlGroups=yes
