@@ -300,9 +300,60 @@ então é cartão novo.
 
 | Fase | Critério | Resultado | Data |
 |---|---|---|---|
-| 0 | `tests/ads1299` e `square-check.py` de pé, cada um com uma injeção vista | — | — |
+| 0 | `tests/ads1299` e o juiz da onda quadrada de pé, cada um com uma injeção vista | **cumprida** — §7.1 | 2026-10-14 |
 | 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | — | — |
 | 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | — | — |
 | 3 | escrita recusada pelo chip vira recusa da prescrição | — | — |
 | 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | — | — |
 | 5 | perda forçada contada igual pelo exportador e pela onda quadrada | — | — |
+
+### 7.1 Fase 0 — o que foi feito, e onde se afasta do plano (2026-10-14)
+
+**0.c, o juiz da onda quadrada.** Não virou `scripts/square-check.py`: o `amp-bench.py converter`
+já julgava o sinal de teste interno, com o período fixo de 250 e pela média. Ele passou a tirar a
+taxa do cabeçalho de cada quadro, e a contar meio período a meio período quantas amostras faltam
+e sobram. Vale para qualquer link: o `raw.bin` de uma sessão é uma captura.
+
+| Verificação | Resultado |
+|---|---|
+| os dois registros da placa de 2026-10-14 (`amp`, gerador interno) | 4000: 117 meios períodos de 2048, 0 faltando; 16000: 117 de 8192, 0 faltando |
+| `tests/amp-bench`: capturas sintéticas, escritas da especificação | 13 verificações, 0 falhas: um quadro sumido com a sequência contínua (14 faltando por canal, a sequência não vê), o mesmo com lacuna, uma conversão a menos (1), uma duplicada (1 sobrando) |
+| **injeções** no juiz: cego à falta; período fixo de 250 | 5 e 6 falhas |
+
+**0.b, o driver `iio` do framework sob teste.** O plano propunha tirar a raiz do sysfs do
+`address`; o que se fez é menor: `MED_IIO_DEVICES_DIR`, constante de compilação com o valor de
+sempre (`/sys/bus/iio/devices`), que só a suíte redefine. E `writeSysfs` passou a abrir com
+`O_TRUNC`, que é o que `echo valor > atributo` faz e o kernel ignora num atributo.
+`tests/framework/test_iio.cpp` monta a árvore de arquivos comuns e um buffer feito de varreduras.
+
+| Verificação | Resultado |
+|---|---|
+| partida, escrita e leitura de volta, buffer, decodificação com sinal, carimbo, recusas, autoteste | 51 verificações novas; a suíte toda, 1646, 0 falhas |
+| **injeções** no driver: sem extensão de sinal; escala pelo texto do kernel; sem conferir a leitura de volta | 3, 3 e 2 falhas |
+| o que a árvore de arquivos **não** imita | um atributo que recusa ou programa outro valor (imitados por um arquivo somente leitura e um link para `/dev/null`), `poll()` num buffer vazio, tempo |
+
+**0.a, o driver do kernel no host.** `tests/ads1299`: `ti-ads1299.c` incluído como embarca, contra
+um shim do kernel (`kernel_shim.{h,c}`, 725 linhas) e um conversor falso no núcleo SPI
+(`fake_ads1299.{h,c}`, 313 linhas) - abaixo do limite de risco da §5 (1.500 linhas de *stubs*). O falso conhece o conjunto de
+comandos, o arquivo de registradores com os valores de reset lidos do silício, o RDATAC (em que o
+chip ignora comandos de registrador), a palavra de status e o que cada posição do MUX lê. O
+`regmap` do shim tem o cache do driver, e é isso que decide se uma leitura chega ao chip.
+O `afe_regs.c` do firmware do M33 é compilado junto, como oráculo.
+
+| Verificação | Resultado |
+|---|---|
+| a suíte | **179 verificações, 0 falhas**, com ASan e UBSan |
+| oráculo do M33 | montagem × bias (nas duas ordens), as sete taxas, os sete ganhos, gerador interno e curto: **os mesmos bytes** que o firmware escreve |
+| o gerador pelo buffer, a 250 | todo meio período com 128 conversões |
+| **defeitos confirmados**, um por fase do plano | fase 2: comparadores ligados e nenhum canal habilitado; fase 2: a palavra de status lida e descartada; fase 3: uma montagem que o chip não guardou, aceita e relatada pelo cache; fase 5: conversões feitas e não lidas que nada conta |
+| **injeções** no driver: bias negativo no referencial; DR errado acima de 4000; ID lido sem SDATAC; perda não contada | 2, 3, 5 e 1 falhas |
+
+A quarta injeção achou um defeito **do teste**: a condição do defeito da fase 5 comparava com um
+número esperado e "se resolvia" quando o driver deixava de contar perdas. Passou a medir
+conversões não contabilizadas (feitas − lidas − contadas como perdidas).
+
+**O que isto não significa**: o falso foi escrito da mesma leitura do datasheet que o driver,
+exceto onde o silício já respondeu e onde o M33 é o oráculo - uma constante errada nos dois lados
+passa. O shim não tem tempo, concorrência nem contexto de interrupção. E nada disto rodou em
+placa: a fase 0 é o que as fases seguintes vão usar para se provar antes de chegar lá.
+
