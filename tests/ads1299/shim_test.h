@@ -20,6 +20,8 @@ extern struct iio_dev *shim_iio;	/* the device the driver allocated */
 extern struct shim_scan shim_scans[SHIM_MAX_SCANS];
 extern unsigned int shim_scan_count;
 extern unsigned int shim_cache_drops;	/* regcache_drop_region() calls */
+extern unsigned int shim_spi_setups;	/* spi_setup() calls */
+extern bool shim_spi_setup_rt;		/* spi->rt at the last of them */
 
 void shim_reset(void);
 /* Transfers started with spi_async(), held until the test completes them. */

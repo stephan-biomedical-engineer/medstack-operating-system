@@ -256,7 +256,10 @@ struct spi_message {
 struct spi_device {
 	struct device dev;
 	int irq;
+	bool rt;		/* asks the SPI core for a real-time pump */
 };
+/* Records the call and what the device asked for; the bus is the fake's. */
+int spi_setup(struct spi_device *spi);
 struct spi_device_id { char name[32]; };
 struct of_device_id { char compatible[128]; };
 struct spi_driver {

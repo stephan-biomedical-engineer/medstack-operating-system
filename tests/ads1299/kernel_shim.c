@@ -16,6 +16,8 @@ struct iio_dev *shim_iio;
 struct shim_scan shim_scans[SHIM_MAX_SCANS];
 unsigned int shim_scan_count;
 unsigned int shim_cache_drops;
+unsigned int shim_spi_setups;
+bool shim_spi_setup_rt;
 static s64 shim_clock_ns = 1000000000;
 
 static struct spi_message *pending[8];
@@ -45,6 +47,8 @@ void shim_reset(void)
 	shim_iio = NULL;
 	shim_scan_count = 0;
 	shim_cache_drops = 0;
+	shim_spi_setups = 0;
+	shim_spi_setup_rt = false;
 	pending_count = 0;
 }
 
@@ -286,6 +290,13 @@ int kstrtouint(const char *s, unsigned int base, unsigned int *res)
 	if (*p)
 		return -EINVAL;
 	*res = (unsigned int)v;
+	return 0;
+}
+
+int spi_setup(struct spi_device *spi)
+{
+	shim_spi_setups++;
+	shim_spi_setup_rt = spi->rt;
 	return 0;
 }
 

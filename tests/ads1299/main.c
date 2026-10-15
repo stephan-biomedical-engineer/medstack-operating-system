@@ -156,6 +156,10 @@ static void test_probe(void)
 	CHECK(!strcmp(show("lead_off"), "off\n"));
 	CHECK(!strcmp(show("lead_off_monitored"), "00 00\n"));
 	CHECK(!strcmp(show("lead_off_status"), "disabled\n"));
+	/* The pump that carries every conversion at real-time priority: asked
+	 * by the device, through spi_setup(), before the first sample. */
+	CHECK_MSG(shim_spi_setup_rt && shim_spi_setups >= 1,
+		  "o driver não pediu o pump SPI em tempo real");
 }
 
 static void test_probe_refusals(void)

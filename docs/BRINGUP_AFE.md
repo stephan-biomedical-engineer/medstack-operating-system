@@ -1259,6 +1259,41 @@ trocas cabem no início do boot. Foi uma leitura só, sem segunda leitura para v
   sessão que muda de regime. É a segunda vez que "quieto" foi lido como "bom" (a primeira, os
   0,02 mV do §6.9).
 
+### 6.11 A perda volta com a tela, e o pump do SPI em tempo real · **2026-10-15, na placa**
+
+Primeiro boot da imagem das fases 1 a 4 do `implementation_plan_usb_parity.md` (kernel
+`efba42f`, desktop da estação, HMI desenhando o sinal). A HMI mostrou cerca de **230 amostras/s**
+contra 250 declaradas, e o contador de quadros perdidos subindo.
+
+**Por que aparece agora.** Desde a fase 3 o framework abandona o quadro inteiro (14 amostras) a
+cada perda que o kernel conta, a regra do `amp`. Antes disso a mesma perda encurtava o quadro sem
+deixar marca. A perda não é nova; agora ela é vista, e cada uma custa 14 amostras.
+
+**De onde vem a perda**, por contagem de `lost_samples` em janelas, com o governador
+`performance` (fixo pela imagem desde a §6.5) e `NRestarts=0`. O LED de status ficou aceso fixo
+durante a aquisição, então não era ele.
+
+| Condição | Perdidas |
+|---|---|
+| tela com o sinal / desktop parado / tela de novo | 9 / **0** / 9 em 10 s |
+| pump do controlador (`spi0`) em `SCHED_OTHER`, três janelas | 22, 32, 12 em 20 s |
+| o mesmo pump em `SCHED_FIFO` 50 (`chrt`), alternado com as de cima | **0, 0, 0** em 20 s |
+
+O `top` mostrou o núcleo 74 % ocioso, com a HMI em 25 % de um núcleo: **é latência, não carga.**
+Cada conversão é lida por uma mensagem que o pump do núcleo SPI carrega, com um período (4 ms)
+para terminar, e o pump em prioridade normal espera atrás do que estiver no núcleo. Em 10-04 a
+placa não tinha desktop, e perdia 0,02 %.
+
+**Correção**: o driver do conversor pede `spi->rt = true` e chama `spi_setup()` no *probe*, e o
+núcleo SPI põe o pump do controlador em `SCHED_FIFO` (`spi_set_thread_rt()`), a mesma prioridade
+do `chrt` acima. Quem pede é o dispositivo, que é quem amostra; vale também para o link `spi`.
+Testada no host (`tests/ads1299`, com injeção) e compilada contra um kernel de verdade; **ainda
+não medida na placa com a imagem**: a medida acima é do `chrt` à mão, que vale até o reboot.
+
+Um defeito tropeçado no caminho, ainda **aberto**: parar e religar o `med-desktop` derruba o
+`eeg-hmi.service` (`Requires=med-compositor.target`) e nada o religa, porque o alvo só é puxado
+pela própria HMI. A estação fica sem a tela de sinais até o próximo boot, sem botão para trazê-la.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
