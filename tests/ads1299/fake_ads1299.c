@@ -127,11 +127,18 @@ static void rdata(u8 *rx, unsigned int len)
 	const u8 sp = fake.reg[R_LOFF_STATP];
 	const u8 sn = fake.reg[R_LOFF_STATN];
 
+	u8 sync = 0xc0;
+
 	fake.rdata_reads++;
 	if (len < 4)
 		return;
+	/* A reply a bit out of step: the opening nibble is the first thing off. */
+	if (fake.out_of_step) {
+		fake.out_of_step--;
+		sync = 0x40;
+	}
 	/* 1100, LOFF_STATP, LOFF_STATN, GPIO[7:4] */
-	rx[1] = (u8)(0xc0 | (sp >> 4));
+	rx[1] = (u8)(sync | (sp >> 4));
 	rx[2] = (u8)((sp << 4) | (sn >> 4));
 	rx[3] = (u8)((sn << 4) | (fake.reg[R_GPIO] >> 4));
 	for (unsigned int c = 0; c < FAKE_CHANNELS && 4 + 3 * c + 2 < len; c++)

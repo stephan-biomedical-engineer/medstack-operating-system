@@ -1111,6 +1111,19 @@ public:
             monitoredNegative_ = static_cast<std::uint16_t>(negative);
         }
 
+        // The conversions the front-end made and could not deliver, where it
+        // counts them: read once here, after the buffer started, and again
+        // after every frame. A front-end without the count acquires as
+        // before, and its losses leave no mark - which is what the record's
+        // acquisition.link already says about such a link.
+        hasLostCount_ = ::access(attributePath("lost_samples").c_str(), F_OK) == 0;
+        lostSeen_ = 0;
+        if (hasLostCount_ && !readLostCount(lostSeen_)) {
+            lastError_ = "the front-end counts lost samples and the count cannot be read";
+            writeSysfs("buffer/enable", "0");
+            return Status::IoError;
+        }
+
         fd_ = ::open(devicePath_.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
         if (fd_ < 0) {
             lastError_ = "open " + devicePath_ + ": " + std::strerror(errno);
@@ -1144,53 +1157,99 @@ public:
         }
 
         const auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (filled_ < block_.size()) {
-            const ssize_t n = ::read(fd_, block_.data() + filled_, block_.size() - filled_);
-            if (n > 0) {
-                // A short read is normal: the kernel hands over whole scans and
-                // a frame is many of them. Accumulate rather than discard - the
-                // alternative is dropping samples that were successfully
-                // converted, which is data loss invented by the reader.
-                filled_ += static_cast<std::size_t>(n);
-                continue;
-            }
-            if (n == 0) {
-                return Result<SampleFrame>::fail(Status::Unavailable,
-                                                 "the front-end closed its buffer");
-            }
-            if (errno == EINTR) {
-                continue;
-            }
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                return Result<SampleFrame>::fail(Status::IoError, std::strerror(errno));
-            }
-
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) {
-                return Result<SampleFrame>::fail(Status::Timeout, "frame not ready");
-            }
-
-            struct pollfd waiting;
-            waiting.fd = fd_;
-            waiting.events = POLLIN;
-            waiting.revents = 0;
-            const auto remaining =
-                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-            const int ready = ::poll(&waiting, 1, static_cast<int>(remaining.count()));
-            if (ready < 0) {
+        for (;;) {
+            while (filled_ < block_.size()) {
+                const ssize_t n = ::read(fd_, block_.data() + filled_, block_.size() - filled_);
+                if (n > 0) {
+                    // A short read is normal: the kernel hands over whole scans and
+                    // a frame is many of them. Accumulate rather than discard - the
+                    // alternative is dropping samples that were successfully
+                    // converted, which is data loss invented by the reader.
+                    filled_ += static_cast<std::size_t>(n);
+                    continue;
+                }
+                if (n == 0) {
+                    return Result<SampleFrame>::fail(Status::Unavailable,
+                                                     "the front-end closed its buffer");
+                }
                 if (errno == EINTR) {
                     continue;
                 }
-                return Result<SampleFrame>::fail(Status::IoError, std::strerror(errno));
-            }
-            if (ready == 0) {
-                return Result<SampleFrame>::fail(Status::Timeout, "frame not ready");
-            }
-        }
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    return Result<SampleFrame>::fail(Status::IoError, std::strerror(errno));
+                }
 
-        SampleFrame frame = decode();
-        filled_ = 0;
-        return Result<SampleFrame>::ok(std::move(frame));
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= deadline) {
+                    return Result<SampleFrame>::fail(Status::Timeout, "frame not ready");
+                }
+
+                struct pollfd waiting;
+                waiting.fd = fd_;
+                waiting.events = POLLIN;
+                waiting.revents = 0;
+                const auto remaining =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+                const int ready = ::poll(&waiting, 1, static_cast<int>(remaining.count()));
+                if (ready < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    return Result<SampleFrame>::fail(Status::IoError, std::strerror(errno));
+                }
+                if (ready == 0) {
+                    return Result<SampleFrame>::fail(Status::Timeout, "frame not ready");
+                }
+            }
+
+            // A loss leaves a mark where the record's reader looks: the rule of
+            // the "amp" link (med_producer_on_lost). When the front-end counted a
+            // conversion it could not deliver while this frame was filling, the
+            // frame holds samples that are not consecutive - the time between two
+            // of them is not one period - so it is given up whole and its
+            // sequence number is skipped. The record shows a gap of one frame
+            // where samples went missing, never a frame that hides one.
+            //
+            // Where the gap lands is as good as the count is prompt: the kernel
+            // counts a loss when it happens, and a reader that has fallen behind
+            // its buffer can see the count rise while it is still reading scans
+            // from before the loss. That moves the mark at most by the frames
+            // buffered (two), and never loses it.
+            if (hasLostCount_) {
+                std::uint64_t lost = 0;
+                if (!readLostCount(lost)) {
+                    return Result<SampleFrame>::fail(Status::IoError,
+                                                     "the front-end's lost-sample count "
+                                                     "cannot be read");
+                }
+                if (lost != lostSeen_) {
+                    lostSeen_ = lost;
+                    filled_ = 0;
+                    ++sequence_;
+                    continue;
+                }
+            }
+
+            SampleFrame frame = decode();
+            filled_ = 0;
+            return Result<SampleFrame>::ok(std::move(frame));
+        }
+    }
+
+    bool readLostCount(std::uint64_t& count) const {
+        std::string text;
+        if (!readSysfs("lost_samples", text) || text.empty() ||
+            text.find_first_not_of("0123456789") != std::string::npos) {
+            return false;
+        }
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long value = std::strtoull(text.c_str(), &end, 10);
+        if (errno != 0 || end == nullptr || *end != '\0') {
+            return false;
+        }
+        count = value;
+        return true;
     }
 
     Status selfTest() override {
@@ -1617,6 +1676,8 @@ private:
     unsigned int realBits_ = 24;
     bool hasTimestamp_ = false;
     bool hasLeadOff_ = false;
+    bool hasLostCount_ = false;
+    std::uint64_t lostSeen_ = 0;
     std::uint16_t monitoredPositive_ = 0;
     std::uint16_t monitoredNegative_ = 0;
     std::size_t leadOffOffset_ = 0;

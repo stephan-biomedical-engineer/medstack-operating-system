@@ -321,6 +321,7 @@ int regmap_read(struct regmap *map, unsigned int reg, unsigned int *val);
 int regmap_write(struct regmap *map, unsigned int reg, unsigned int val);
 int regmap_update_bits(struct regmap *map, unsigned int reg, unsigned int mask, unsigned int val);
 void regcache_cache_bypass(struct regmap *map, bool enable);
+int regcache_drop_region(struct regmap *map, unsigned int min, unsigned int max);
 
 /* ----------------------------------------------------------------- IIO */
 

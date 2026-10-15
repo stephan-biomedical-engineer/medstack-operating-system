@@ -15,6 +15,7 @@ void *shim_irq_dev;
 struct iio_dev *shim_iio;
 struct shim_scan shim_scans[SHIM_MAX_SCANS];
 unsigned int shim_scan_count;
+unsigned int shim_cache_drops;
 static s64 shim_clock_ns = 1000000000;
 
 static struct spi_message *pending[8];
@@ -43,6 +44,7 @@ void shim_reset(void)
 	shim_irq_dev = NULL;
 	shim_iio = NULL;
 	shim_scan_count = 0;
+	shim_cache_drops = 0;
 	pending_count = 0;
 }
 
@@ -164,14 +166,19 @@ int regmap_write(struct regmap *map, unsigned int reg, unsigned int val)
 
 	if (reg > map->config->max_register)
 		return -EINVAL;
-	ret = map->config->reg_write(map->context, reg, val);
-	if (ret)
-		return ret;
+	/*
+	 * The cache first and the bus after, in that order, as _regmap_write()
+	 * does in the kernel this driver ships with (6.6,
+	 * drivers/base/regmap/regmap.c): a write the bus refuses leaves its
+	 * value in the cache. This shim had it the other way round until phase
+	 * 3, which is the order in which that defect cannot be seen.
+	 */
 	if (!map->bypass && !is_volatile(map, reg)) {
 		map->cache[reg] = val;
 		map->cached[reg] = true;
 	}
-	return 0;
+	ret = map->config->reg_write(map->context, reg, val);
+	return ret;
 }
 
 int regmap_update_bits(struct regmap *map, unsigned int reg, unsigned int mask, unsigned int val)
@@ -188,6 +195,14 @@ int regmap_update_bits(struct regmap *map, unsigned int reg, unsigned int mask, 
 	if (tmp == orig)
 		return 0;
 	return regmap_write(map, reg, tmp);
+}
+
+int regcache_drop_region(struct regmap *map, unsigned int min, unsigned int max)
+{
+	for (unsigned int r = min; r <= max && r <= map->config->max_register; r++)
+		map->cached[r] = false;
+	shim_cache_drops++;
+	return 0;
 }
 
 void regcache_cache_bypass(struct regmap *map, bool enable)

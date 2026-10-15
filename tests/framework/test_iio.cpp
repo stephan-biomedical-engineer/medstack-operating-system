@@ -460,6 +460,73 @@ void testIio() {
         }
     }
 
+    medtest::section("iio - uma perda contada pelo kernel deixa marca na sequência");
+    {
+        // Three frames of scans; scan s carries code s on every channel, so a
+        // frame says by its first sample which scans it holds.
+        makeTree();
+        put("lost_samples", "0");
+        std::vector<std::vector<std::int32_t>> scans;
+        for (int s = 0; s < 42; ++s) {
+            scans.push_back(std::vector<std::int32_t>(8, s));
+        }
+        writeScans(scans, 0, 4000000);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        CHECK(device != nullptr);
+        if (device && device->start() == Status::Ok) {
+            Result<SampleFrame> first = device->read(std::chrono::milliseconds(100));
+            CHECK(first.isOk());
+            if (first.isOk()) {
+                CHECK_EQ(first.value().sequence, static_cast<std::uint64_t>(1));
+                CHECK_EQ(first.value().samples[0], 0.0);
+            }
+            // The kernel counted a conversion it could not deliver while the
+            // second frame filled: that frame is given up and its number
+            // skipped, and the next one is whole.
+            put("lost_samples", "1");
+            Result<SampleFrame> next = device->read(std::chrono::milliseconds(100));
+            CHECK(next.isOk());
+            if (next.isOk()) {
+                CHECK_EQ(next.value().sequence, static_cast<std::uint64_t>(3));
+                CHECK_EQ(next.value().samples[0], 28.0 * kStepUv);
+            }
+            device->stop();
+        }
+    }
+    {
+        // A count that rose before the first frame: the first frame goes.
+        makeTree();
+        put("lost_samples", "0");
+        std::vector<std::vector<std::int32_t>> scans;
+        for (int s = 0; s < 42; ++s) {
+            scans.push_back(std::vector<std::int32_t>(8, s));
+        }
+        writeScans(scans, 0, 4000000);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        if (device && device->start() == Status::Ok) {
+            put("lost_samples", "3");
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                CHECK_EQ(frame.value().sequence, static_cast<std::uint64_t>(2));
+                CHECK_EQ(frame.value().samples[0], 14.0 * kStepUv);
+            }
+            // A count that is not a number is not a reason to guess.
+            put("lost_samples", "3 lost");
+            CHECK_STATUS(device->read(std::chrono::milliseconds(100)).status(), Status::IoError);
+            device->stop();
+        }
+        // Unreadable at the start: the device does not start.
+        makeTree();
+        put("lost_samples", "many");
+        writeScans(scans, 0, 4000000);
+        device = make(declared());
+        if (device) {
+            CHECK_STATUS(device->start(), Status::IoError);
+            CHECK_EQ(get("buffer/enable"), std::string("0"));
+        }
+    }
+
     medtest::section("iio - o autoteste diz o que falta");
     {
         makeTree();

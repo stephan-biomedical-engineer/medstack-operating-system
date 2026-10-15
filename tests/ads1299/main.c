@@ -520,18 +520,112 @@ static void test_buffer_drdy(void)
 
 static void test_write_not_taken(void)
 {
-	section("uma escrita que o conversor não guardou");
+	unsigned int reads;
+	unsigned int val;
+
+	section("uma escrita que o conversor não guardou (fase 3)");
 	fake_power_up();
 	if (probe(0))
 		return;
+
+	/* Every configuration write is followed by a read of the same register. */
+	reads = fake.reg_reads[R_MISC1];
+	CHECK(store("montage", "referential") > 0);
+	CHECK_EQ(fake.reg_reads[R_MISC1], reads + 1);
+	CHECK(store("montage", "bipolar") > 0);
+
 	/* SRB1 stuck open: the part keeps MISC1 bit 5 at 0 whatever is written. */
 	fake.stuck_reg = R_MISC1;
 	fake.stuck_mask = 0x20;
-	CHECK(store("montage", "referential") > 0);
-	DEFECT(fake.reg[R_MISC1] == 0 && !strcmp(show("montage"), "referential\n"),
-	       "a montagem referencial é aceita e relatada sem estar no chip: o cache do "
-	       "regmap responde no lugar dele",
-	       "usb_parity, fase 3");
+	CHECK_EQ(store("montage", "referential"), -EIO);
+	CHECK(!strcmp(show("montage"), "bipolar\n"));
+	CHECK_EQ(fake.reg[R_MISC1], 0);
+	/* The derivation went back where the switch still is: the bipolar one. */
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], fake.reg[R_BIAS_SENSP]);
+	/* And the cache forgot what the part refused: the next read goes to it. */
+	CHECK(shim_cache_drops > 0);
+	reads = fake.reg_reads[R_MISC1];
+	CHECK_EQ(regmap_read(priv()->regmap, R_MISC1, &val), 0);
+	CHECK_EQ(val, 0);
+	CHECK_EQ(fake.reg_reads[R_MISC1], reads + 1);
+
+	/* The plan's case: ff kept as 7f in LOFF_SENSP. Lead-off is refused, and
+	 * the comparators were never powered with a selection the part did not
+	 * take. */
+	fake_power_up();
+	if (probe(0))
+		return;
+	fake.stuck_reg = R_LOFF_SENSP;
+	fake.stuck_mask = 0x80;
+	CHECK_EQ(store("lead_off", "dc"), -EIO);
+	CHECK(!strcmp(show("lead_off"), "off\n"));
+	CHECK(!strcmp(show("lead_off_monitored"), "00 00\n"));
+	CHECK(!(fake.reg[R_CONFIG4] & 0x02));
+	/* With the fault gone the same request goes through: nothing was left
+	 * behind that a retry trips over. */
+	fake.stuck_reg = -1;
+	CHECK(store("lead_off", "dc") > 0);
+	CHECK_EQ(fake.reg[R_LOFF_SENSP], 0xff);
+
+	/* A bus that fails in the middle of a write: the cache forgets that
+	 * register too, because what the part holds is now unknown. */
+	fake.fail_transfers = 1;
+	CHECK(store("test_signal", "1x_slow") < 0);
+	reads = fake.reg_reads[R_CONFIG2];
+	CHECK_EQ(regmap_read(priv()->regmap, R_CONFIG2, &val), 0);
+	CHECK_EQ(fake.reg_reads[R_CONFIG2], reads + 1);
+	CHECK_EQ(val, fake.reg[R_CONFIG2]);
+
+	/* CONFIG3 bit 0 is BIAS_STAT, the bias electrode's lead-off: the part
+	 * sets it, no write can, and it is not part of what was written. */
+	fake_power_up();
+	if (probe(0))
+		return;
+	fake.reg[R_CONFIG3] |= 0x01;
+	fake.stuck_reg = R_CONFIG3;
+	fake.stuck_mask = 0x01;
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK(store("bias_drive", "derived") > 0);
+}
+
+static void test_out_of_step(void)
+{
+	bool agree = true;
+	int value;
+
+	section("uma resposta fora de passo (fase 3)");
+	fake_power_up();
+	if (probe(0))
+		return;
+
+	/* The opening nibble, judged as the M33 judges it, for every byte. */
+	for (unsigned int b = 0; b < 256; b++) {
+		const u8 status[3] = { (u8)b, 0, 0 };
+
+		priv()->rx_buffer[ADS1299_LEAD_OFF_ADDRESS] = (u8)b;
+		agree = agree && ads1299_status_in_sync(priv()) == !!afe_status_valid(status);
+	}
+	CHECK_MSG(agree, "o kernel e o M33 discordam sobre o que abre uma palavra de status");
+
+	/* On the buffer: the reply out of step reaches no one and is counted. */
+	buffer_on();
+	for (int i = 0; i < 10; i++) {
+		fake_convert();
+		if (i == 4)
+			fake.out_of_step = 1;
+		tick();
+		shim_spi_complete_one();
+	}
+	CHECK_EQ(shim_scan_count, 9);
+	CHECK(!strcmp(show("lost_samples"), "1\n"));
+	buffer_off();
+
+	/* A single read out of step is an error, never a value. */
+	fake.out_of_step = 1;
+	CHECK_EQ(shim_iio->info->read_raw(shim_iio, &shim_iio->channels[0], &value, NULL,
+					  IIO_CHAN_INFO_RAW), -EIO);
+	CHECK_EQ(shim_iio->info->read_raw(shim_iio, &shim_iio->channels[0], &value, NULL,
+					  IIO_CHAN_INFO_RAW), IIO_VAL_INT);
 }
 
 int main(void)
@@ -546,6 +640,7 @@ int main(void)
 	test_buffer_square();
 	test_buffer_drdy();
 	test_write_not_taken();
+	test_out_of_step();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - tempo, concorrência e contexto de interrupção (o shim não tem nenhum)\n"

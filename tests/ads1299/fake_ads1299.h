@@ -46,6 +46,7 @@ struct fake_ads1299 {
 	int stuck_reg;			/* -1: none */
 	u8 stuck_mask;			/* bits of stuck_reg a write does not change */
 	int fail_transfers;		/* the next n transfers fail at the bus */
+	unsigned int out_of_step;	/* the next n RDATA replies open 0100, not 1100 */
 
 	/* What happened, for the tests to read. */
 	unsigned int transfers;
