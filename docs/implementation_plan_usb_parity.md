@@ -1,6 +1,8 @@
 # Plano de implementação — o link `usb` com as funções do link `amp`
 
-> **Status**: **nada aqui foi implementado.** É o levantamento de 2026-10-14, feito lendo
+> **Status** (2026-10-15): fases 0, 1 e 2 escritas e testadas no host (§7.1–§7.3); **nenhuma
+> foi à bancada**. As fases 3, 4 e 5 não começaram. O que segue é o levantamento de 2026-10-14,
+> feito lendo
 > `linux-med/drivers/iio/adc/ti-ads1299.c` (commit `983c5cf`), o driver `iio` do framework, a
 > tradução por link em `do_derive_device_options` e o firmware do M33, mais este plano.
 >
@@ -301,7 +303,7 @@ então é cartão novo.
 | Fase | Critério | Resultado | Data |
 |---|---|---|---|
 | 0 | `tests/ads1299` e o juiz da onda quadrada de pé, cada um com uma injeção vista | **cumprida** — §7.1 | 2026-10-14 |
-| 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | — | — |
+| 1 | curto pelo `usb`: ruído ±20 % do `amp`, mesma placa e dia | **receita e host prontos, bancada pendente** — §7.3 | 2026-10-15 |
 | 2 | lead-off por canal na tela e na auditoria; desligado diz "não monitorado"; 0 amostras faltando | **código e host prontos, bancada pendente** — §7.2 | 2026-10-14 |
 | 3 | escrita recusada pelo chip vira recusa da prescrição | — | — |
 | 4 | canal 8 a 43 °C ± 2 nos sete ganhos; vizinhos inalterados | — | — |
@@ -400,4 +402,43 @@ roteiro da fase 2 na §3: resistores num canal, os outros abertos, tirar um resi
 detecção, comparar com o `amp` no mesmo dia, e o juiz da onda quadrada numa sessão com lead-off
 desligado. O código do kernel precisa estar **commitado** no `linux-med` para entrar na imagem
 (`KERNEL=med` constrói o `HEAD`).
+
+### 7.3 Fase 1 — o que foi escrito (2026-10-15)
+
+**Receita.** O ramo `spi`/`usb` de `do_derive_device_options` deixou de recusar `afe.input =
+shorted`: traduz para `input_mux = shorted` e recusa curto com lead-off ligado, como o `amp`.
+Curto com sinal de teste e curto com sensor já eram recusados antes do ramo, para todo link.
+Nada mudou no kernel (o `input_mux = shorted` existe desde o *probe* e o `tests/ads1299` já o
+confere contra os bytes do M33), no framework nem na tela, que já oferecia o curto pelo `amp`
+com o aviso "BENCH: INPUTS SHORTED". A tabela do `usb` (e a do `spi`, mesmo ramo) foi de **42
+para 56 linhas**: 7 ganhos × 2 montagens, todas com lead-off desligado, sem gerador, sem sensor.
+
+Uma escolha que se afasta da regra da receita: **a linha entra antes de ser medida** neste link.
+A bancada que a mede precisa dela na tela, como as taxas do `amp` em 2026-10-13. O que a
+sustenta até lá: o comutador é programado com os mesmos bytes que o produtor do `amp` escreve, e
+o registro diz `shorted`, então o arquivo clínico nunca chama aquilo de EEG.
+
+**`tests/derive`.** Não é o `derive.py` de 2026-10-13 copiado: tira `do_derive_device_options`
+e `do_seal_configuration` do texto da receita como estão, roda-os com substitutos de `d` e `bb`
+sobre o `eeg.conf` de fábrica, e confere os arquivos que uma imagem embarcaria - nunca o interior
+da função. Entrou no `make test`.
+
+| Verificação | Resultado |
+|---|---|
+| a suíte | **1348 verificações, 0 falhas** |
+| o tamanho de cada tabela, com o motivo de cada mudança escrito no teste | `simulated` 700, `amp` 490, `spi` 56, `usb` 56 |
+| as 14 linhas de curto do `usb` e do `spi` | `input_mux = shorted`, `lead_off = off`, `test_signal = off`, `record.input = shorted`, as duas montagens e os sete ganhos |
+| em nenhum link com conversor | curto com lead-off, com gerador ou com sensor; e uma entrada normal nunca chega ao comutador como curto |
+| um `eeg.conf` de fábrica com curto | com lead-off ligado, o build recusa nomeando a chave (`amp`, `spi`, `usb`); desligado, deriva e o registro diz `shorted` |
+| **injeções** na receita: sem a recusa curto+lead-off; curto traduzido como `normal`; o estado de antes (curto recusado) | 36, 4 e 10 falhas |
+
+O primeiro rascunho da suíte exigia "nenhum curto com lead-off" também do `simulated`, e
+reprovou: lá é decisão escrita (sem eletrodos, qualquer valor é o que ele faz). O erro era do
+teste, e a regra passou a valer só para links com conversor.
+
+**O que falta, e é a bancada** (§3, fase 1): imagem `usb`, chave SRB1 **na GNDA**, montagem
+bipolar, sem eletrodos; escolher o curto na tela; `metadata.json` com `"input": "shorted"` e o
+BDF+ sem rótulo EEG; ruído RMS e média por canal em 60 s a ganho 24, contra o mesmo pelo `amp` na
+mesma placa e no mesmo dia (nenhum dos dois foi medido ainda); e a injeção da chave SRB1 em lugar
+nenhum. Vai na mesma imagem da bancada da fase 2, que ainda não foi construída.
 
