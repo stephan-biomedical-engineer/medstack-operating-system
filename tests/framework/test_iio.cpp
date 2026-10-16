@@ -610,6 +610,51 @@ void testIio() {
         CHECK(make({{"full_scale.7", "375000"}}) == nullptr);
     }
 
+    medtest::section("iio - trocar a prescrição não desliga o buffer da nova");
+    {
+        // What the acquisition service does on session.configure: the old
+        // device stopped, a new one created and started on the same kernel
+        // device, and only then the old one let go. On the board, 2026-10-15,
+        // the old one's destructor wrote buffer/enable = 0 under the new one,
+        // and the service acquired nothing with no error anywhere.
+        makeTree();
+        writeScans({}, 0, 4000000);
+        std::unique_ptr<MedicalDevice> old = make(declared());
+        CHECK(old != nullptr);
+        if (old) {
+            CHECK_STATUS(old->start(), Status::Ok);
+            CHECK_EQ(get("buffer/enable"), std::string("1"));
+            old->stop();
+            CHECK_EQ(get("buffer/enable"), std::string("0"));
+            std::unique_ptr<MedicalDevice> replacement = make(declared());
+            CHECK(replacement != nullptr);
+            if (replacement) {
+                CHECK_STATUS(replacement->start(), Status::Ok);
+                CHECK_EQ(get("buffer/enable"), std::string("1"));
+                old.reset();
+                CHECK_EQ(get("buffer/enable"), std::string("1"));
+                CHECK(replacement->isRunning());
+                // Its own stop still stops it, and a second stop is nothing.
+                replacement->stop();
+                CHECK_EQ(get("buffer/enable"), std::string("0"));
+                put("buffer/enable", "1");
+                replacement->stop();
+                CHECK_EQ(get("buffer/enable"), std::string("1"));
+            }
+        }
+    }
+    {
+        // A device that never started touches nothing when it goes.
+        makeTree();
+        put("buffer/enable", "1");
+        std::unique_ptr<MedicalDevice> idle = make(declared());
+        if (idle) {
+            CHECK_STATUS(idle->selfTest(), Status::Ok);
+            idle.reset();
+            CHECK_EQ(get("buffer/enable"), std::string("1"));
+        }
+    }
+
     medtest::section("iio - o autoteste diz o que falta");
     {
         makeTree();

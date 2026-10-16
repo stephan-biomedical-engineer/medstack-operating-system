@@ -1138,7 +1138,7 @@ public:
                 positive > 0xffffU || negative > 0xffffU) {
                 lastError_ = "the front-end reports electrode contact and not which "
                              "electrodes it watches";
-                writeSysfs("buffer/enable", "0");
+                disableBuffer();
                 return Status::NotSupported;
             }
             monitoredPositive_ = static_cast<std::uint16_t>(positive);
@@ -1154,14 +1154,14 @@ public:
         lostSeen_ = 0;
         if (hasLostCount_ && !readLostCount(lostSeen_)) {
             lastError_ = "the front-end counts lost samples and the count cannot be read";
-            writeSysfs("buffer/enable", "0");
+            disableBuffer();
             return Status::IoError;
         }
 
         fd_ = ::open(devicePath_.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
         if (fd_ < 0) {
             lastError_ = "open " + devicePath_ + ": " + std::strerror(errno);
-            writeSysfs("buffer/enable", "0");
+            disableBuffer();
             return Status::IoError;
         }
 
@@ -1175,13 +1175,29 @@ public:
             ::close(fd_);
             fd_ = -1;
         }
-        if (!sysfsPath_.empty()) {
-            writeSysfs("buffer/enable", "0");
-        }
+        disableBuffer();
         return Status::Ok;
     }
 
     bool isRunning() const override { return fd_ >= 0; }
+
+    /// Stop the kernel's buffer - if this instance started it, and only then.
+    ///
+    /// The buffer belongs to the kernel device, not to this object, and two
+    /// objects can stand for the same device: the acquisition service changes
+    /// a prescription by starting a new one and only then letting the old one
+    /// go, whose destructor calls stop(). That used to write buffer/enable = 0
+    /// unconditionally, so the old object stopped the buffer the new one had
+    /// just started. On the board, 2026-10-15, lead-off switched off from the
+    /// screen: the service reported the prescription changed, stayed active,
+    /// and acquired nothing - 0 frames in a 4 s session, buffer/enable 0, and
+    /// no line in any log.
+    void disableBuffer() {
+        if (bufferStarted_) {
+            writeSysfs("buffer/enable", "0");
+            bufferStarted_ = false;
+        }
+    }
 
     std::string lastError() const override { return lastError_; }
 
@@ -1583,6 +1599,7 @@ private:
             lastError_ = "the front-end refused to start its buffer";
             return Status::Unavailable;
         }
+        bufferStarted_ = true;
 
         return Status::Ok;
     }
@@ -1725,6 +1742,7 @@ private:
     bool hasTimestamp_ = false;
     bool hasLeadOff_ = false;
     bool hasLostCount_ = false;
+    bool bufferStarted_ = false;
     std::uint64_t lostSeen_ = 0;
     std::uint16_t monitoredPositive_ = 0;
     std::uint16_t monitoredNegative_ = 0;
