@@ -17,6 +17,11 @@ SRC_URI = " \
     file://src;subdir=sources \
     file://qml;subdir=sources \
     file://eeg-hmi.service \
+    file://eeg-hmi-request.path \
+    file://eeg-hmi-request.service \
+    file://eeg-hmi-request.conf \
+    file://desktop-request.conf \
+    file://signals.desktop \
 "
 
 S = "${WORKDIR}/sources"
@@ -36,13 +41,36 @@ RDEPENDS:${PN} = " \
     qtdeclarative-qmlplugins \
 "
 
-SYSTEMD_SERVICE:${PN} = "eeg-hmi.service"
+# The display at boot, and on request afterwards: the path is what brings it
+# back when nothing else would (eeg-hmi-request.path says when that was).
+SYSTEMD_SERVICE:${PN} = "eeg-hmi.service eeg-hmi-request.path"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/eeg-hmi.service \
         ${D}${systemd_system_unitdir}/eeg-hmi.service
+    install -m 0644 ${WORKDIR}/eeg-hmi-request.path \
+        ${D}${systemd_system_unitdir}/eeg-hmi-request.path
+    install -m 0644 ${WORKDIR}/eeg-hmi-request.service \
+        ${D}${systemd_system_unitdir}/eeg-hmi-request.service
+    install -D -m 0644 ${WORKDIR}/eeg-hmi-request.conf \
+        ${D}${nonarch_libdir}/tmpfiles.d/eeg-hmi-request.conf
+    # Where the station desktop takes its icons from, and leave for it to ask.
+    # Both inert in an image without that desktop. Neither names the desktop's
+    # program: the icon goes where any desktop entry of the station goes, and
+    # the drop-in only says which path its unit may write.
+    install -D -m 0644 ${WORKDIR}/signals.desktop \
+        ${D}${datadir}/medplatform/desktop/signals.desktop
+    install -D -m 0644 ${WORKDIR}/desktop-request.conf \
+        ${D}${systemd_system_unitdir}/med-desktop.service.d/eeg-hmi-request.conf
 }
 
-FILES:${PN} += "${systemd_system_unitdir}/eeg-hmi.service"
+FILES:${PN} += " \
+    ${systemd_system_unitdir}/eeg-hmi.service \
+    ${systemd_system_unitdir}/eeg-hmi-request.path \
+    ${systemd_system_unitdir}/eeg-hmi-request.service \
+    ${systemd_system_unitdir}/med-desktop.service.d/eeg-hmi-request.conf \
+    ${nonarch_libdir}/tmpfiles.d/eeg-hmi-request.conf \
+    ${datadir}/medplatform/desktop/signals.desktop \
+"

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Signals
+Comment=The operator display: the live signal, recording and the front-end settings
+# A request, not the program: the display runs as its own sandboxed unit, and
+# this only asks for it (eeg-hmi-request.path).
+Exec=touch /run/eeg-hmi-request/open
+Icon=video-display
+Terminal=false

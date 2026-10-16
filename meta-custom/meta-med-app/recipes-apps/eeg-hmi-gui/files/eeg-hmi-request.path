@@ -1,0 +1,22 @@
+[Unit]
+Description=MedPlatform EEG operator display, on the operator's request
+# A spool, like the reviewer's (med-review-request.path): whoever may draw on
+# the display asks for the signal window by leaving a file in this directory,
+# and the unit below empties it and starts the display.
+#
+# It exists because the display is a system unit and nothing on the screen
+# could bring it back. On the board, 2026-10-15, the station desktop was
+# stopped and started again; eeg-hmi.service went down with it
+# (Requires=med-compositor.target), nothing restarted it, and the station sat
+# on its file manager with no signal and no way to ask for one until a reboot.
+#
+# The directory is made by tmpfiles (eeg-hmi-request.conf), not by this unit:
+# a path unit makes it root's alone, and the asker is not root.
+After=systemd-tmpfiles-setup.service
+
+[Path]
+DirectoryNotEmpty=/run/eeg-hmi-request
+Unit=eeg-hmi-request.service
+
+[Install]
+WantedBy=multi-user.target

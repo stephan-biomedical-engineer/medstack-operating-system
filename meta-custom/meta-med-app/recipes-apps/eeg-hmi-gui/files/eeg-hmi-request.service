@@ -1,0 +1,13 @@
+[Unit]
+Description=MedPlatform EEG operator display: answer a request
+
+[Service]
+Type=oneshot
+# Empty the spool first: while anything is left in it the path unit would call
+# this again. A fixed command: what was left there is deleted unread.
+#
+# Start, not restart - unlike the reviewer's. A display that is already up has
+# an operator's form in it, and on the station a minimised window is on the
+# task bar; a second click must not throw either away. --no-block so that this
+# unit is finished, and the path armed again, before the display has drawn.
+ExecStart=/bin/sh -c 'rm -f /run/eeg-hmi-request/* && exec /usr/bin/systemctl start --no-block eeg-hmi.service'

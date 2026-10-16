@@ -1329,9 +1329,16 @@ Fica dele uma pergunta **aberta**, que é o silêncio: o laço de aquisição tr
 como "ainda não chegou" e espera para sempre (`main.cpp`), então um front-end que para de entregar
 não vira falha. É "medir estado não é medir função", de novo.
 
-Um defeito tropeçado no caminho, ainda **aberto**: parar e religar o `med-desktop` derruba o
-`eeg-hmi.service` (`Requires=med-compositor.target`) e nada o religa, porque o alvo só é puxado
-pela própria HMI. A estação fica sem a tela de sinais até o próximo boot, sem botão para trazê-la.
+Um defeito tropeçado no caminho: parar e religar o `med-desktop` derruba o `eeg-hmi.service`
+(`Requires=med-compositor.target`) e nada o religa, porque o alvo só é puxado pela própria HMI. A
+estação ficava sem a tela de sinais até o próximo boot, sem botão para trazê-la. **Contornado**:
+o pacote da HMI traz um ícone "Signals" para a área de trabalho, que não abre o programa mas deixa
+um pedido num diretório próprio (`/run/eeg-hmi-request`, `0730 root wayland`), visto por uma unit
+`.path` que faz `systemctl start eeg-hmi` - o mesmo padrão do revisor, e a HMI continua na sua
+própria unit e no seu sandbox. Medido na placa, entregue por `rauc install`: com a HMI parada, o
+clique a trouxe de volta (1937 s); com ela aberta, um pedido foi atendido e ela não reiniciou
+(1257 s, a mesma instância de 1171 s a 1845 s). A causa - nada religar a HMI quando o compositor
+volta - continua **aberta**.
 
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
