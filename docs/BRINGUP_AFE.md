@@ -1287,8 +1287,47 @@ placa não tinha desktop, e perdia 0,02 %.
 **Correção**: o driver do conversor pede `spi->rt = true` e chama `spi_setup()` no *probe*, e o
 núcleo SPI põe o pump do controlador em `SCHED_FIFO` (`spi_set_thread_rt()`), a mesma prioridade
 do `chrt` acima. Quem pede é o dispositivo, que é quem amostra; vale também para o link `spi`.
-Testada no host (`tests/ads1299`, com injeção) e compilada contra um kernel de verdade; **ainda
-não medida na placa com a imagem**: a medida acima é do `chrt` à mão, que vale até o reboot.
+Testada no host (`tests/ads1299`, com injeção) e compilada contra um kernel de verdade, e
+**medida na placa** com a imagem do kernel `801dbf2`: a thread `spi0` sobe em `SCHED_FIFO` 50
+sem `chrt`, e com a tela de sinais desenhando foram **0, 0 e 0** perdas em três janelas de 20 s.
+
+**Medida na placa com a imagem** (kernel `801dbf2`, cartão gravado; depois o bundle com o
+framework `896f4a3`, slot B, `NRestarts=0`): o pump subiu em `SCHED_FIFO` 50 sem nenhum `chrt`, e
+com a tela de sinais desenhando deram **0, 0 e 0 perdidas em três janelas de 20 s**, contra 22, 32
+e 12 antes.
+
+**Um segundo defeito, e mais grave, achado ao desligar o lead-off pela tela.** O serviço
+respondeu "front-end prescription changed on request" e continuou `active`, mas o buffer do
+conversor ficou desligado (`buffer/enable = 0`): uma sessão de 4 s gravou **0 quadros**, e
+nenhum log disse nada. Para trocar a prescrição, o serviço inicia um dispositivo novo e só depois
+solta o antigo, cujo destrutor chama `stop()`; o `stop()` do driver `iio` escrevia
+`buffer/enable = 0` sempre, então o objeto antigo desligava o buffer que o novo acabara de ligar.
+Latente desde que o driver existe: esta foi a primeira troca de prescrição pela tela num link
+com kernel. Corrigido no framework (`896f4a3`: só desliga o buffer quem o ligou), com teste de
+host que faz a troca do serviço e, com o `stop()` antigo, reprova onde a placa reprovou. Na placa,
+pelo bundle: lead-off desligado, `buffer 1`, **74 quadros em 4 s**, nenhum descartado, e de volta
+a `dc` com o buffer ligado.
+
+O silêncio é um defeito à parte, e continua **aberto**: o laço de aquisição trata leitura sem
+quadro como "ainda não chegou" e espera para sempre (`main.cpp`, `Status::Timeout`), então um
+front-end que para de entregar não vira falha. É o "medir estado não é medir função" do
+`CLAUDE.md`, de novo.
+
+**Um segundo defeito, achado ao desligar o lead-off pela tela**, e esse do framework: o serviço
+disse "front-end prescription changed on request", ficou `active`, e uma sessão de 4 s gravou
+**0 quadros**, com `buffer/enable` em 0 e nenhuma linha em log nenhum. Para trocar a prescrição o
+serviço liga um dispositivo novo e só depois solta o antigo, e o `stop()` do antigo, no
+destrutor, escrevia `buffer/enable = 0` sempre - desligando o buffer do novo, porque os dois são o
+mesmo dispositivo do kernel. Latente desde que o driver `iio` existe; esta foi a primeira troca de
+prescrição pela tela num link do kernel. Corrigido no framework (`896f4a3`: o `stop()` só desliga
+o que a própria instância ligou), com o teste de host que faz a troca do serviço e reprova no
+mesmo ponto com o código antigo. Entregue por `rauc install` (slot B, `NRestarts=0`) e medido: com
+lead-off desligado, `buffer/enable` 1, **74 quadros em 4 s, 0 descartados**, e de volta ao de
+fábrica com `buffer` 1 e `lead_off` `dc`.
+
+Fica dele uma pergunta **aberta**, que é o silêncio: o laço de aquisição trata leitura sem quadro
+como "ainda não chegou" e espera para sempre (`main.cpp`), então um front-end que para de entregar
+não vira falha. É "medir estado não é medir função", de novo.
 
 Um defeito tropeçado no caminho, ainda **aberto**: parar e religar o `med-desktop` derruba o
 `eeg-hmi.service` (`Requires=med-compositor.target`) e nada o religa, porque o alvo só é puxado
