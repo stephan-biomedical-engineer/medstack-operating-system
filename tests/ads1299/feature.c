@@ -7,13 +7,14 @@
  * The driver is taken from that branch by the Makefile (FEATURE_DRIVER) and
  * included here as it ships, against the same shim and the same fake converter
  * as main.c. What this file covers is what the board branch does not have: the
- * CLK pin as a clock output, the daisy chain, and the test generator's every
- * setting.
+ * CLK pin as a clock output, a daisy chain refused rather than half read, the
+ * status word checked at probe, and the test generator's every setting.
  *
  * Every check here is consistency, not correctness: the fake was written from
  * the same reading of the datasheet as the driver, and this bench has one
- * converter, so neither a clock output feeding another part nor a chain of
- * devices has been seen on silicon.
+ * converter, so a clock output feeding another part has not been seen on
+ * silicon. The chain's own tests went with the driver code to
+ * wip/ads1299-daisy-chain; they are in this file's history.
  */
 
 #include FEATURE_DRIVER
@@ -130,7 +131,6 @@ static void test_single_device(void)
 		return;
 	CHECK(shim_iio->registered);
 	CHECK_EQ(shim_iio->num_channels, 9);		/* eight voltages, timestamp */
-	CHECK_EQ(priv()->num_chips, 1);
 	/* 0x96 out of reset: DAISY_EN and CLK_EN were already 0, so the write
 	 * the driver asks for changes nothing - and the bits stay 0. */
 	CHECK_EQ(fake.reg[R_CONFIG1] & (CONFIG1_DAISY_EN | CONFIG1_CLK_EN), 0);
@@ -212,149 +212,46 @@ static void test_clock_output(void)
 	CHECK(shim_clk_hw == NULL);
 }
 
-static void test_daisy_chain(void)
+static void test_chain_refused(void)
 {
-	unsigned int c;
-	int val, val2;
+	section("cadeia: recusada no probe, em vez de lida pela metade");
 
-	section("cadeia de 2: 16 canais, um quadro de 2 x 27 bytes");
+	/* A real chain of two on the bus, declared in the firmware: the
+	 * driver reads one device's share of RDATA, so accepting it would
+	 * give eight channels and lose the other eight without a word. */
 	fresh();
 	shim_prop_daisy = 2;
 	shim_ext_clk = &ext_clk;
 	fake.chips = 2;
-	CHECK_EQ(probe(0), 0);
-	if (!shim_iio || !shim_iio->registered)
-		return;
-	CHECK_EQ(priv()->num_chips, 2);
-	CHECK_EQ(shim_iio->num_channels, 17);		/* 16 voltages, timestamp */
-	CHECK_EQ(priv()->rdata_xfer.len, 1 + 2 * 27);
-	CHECK_EQ(shim_iio->channels[8].address, 1 + 27 + 3);	/* device 2, ch 1 */
-	CHECK_EQ(shim_iio->channels[15].address, 1 + 27 + 3 + 21);
-	CHECK_EQ(shim_iio->channels[16].type, IIO_TIMESTAMP);
-	CHECK_EQ(shim_iio->channels[16].scan_index, 16);
-	CHECK_EQ(fake.reg[R_CONFIG1] & CONFIG1_DAISY_EN, 0);	/* daisy-chain mode */
-
-	/* Distinct inputs on every channel of both devices. */
-	for (c = 0; c < 8; c++) {
-		fake.input_uv[c] = 1000.0 * (c + 1);
-		fake.chain_input_uv[1][c] = -1000.0 * (c + 1);
-	}
-
-	section("cadeia de 2: o buffer demultiplexa cada dispositivo no seu canal");
-	buffer_on();
-	fake_convert();
-	tick();
-	shim_spi_complete_one();
-	buffer_off();
-	CHECK_EQ(shim_scan_count, 1);
-	CHECK_EQ(shim_scans[0].count, 16);
-	{
-		bool exact = true;
-
-		for (c = 0; c < 8; c++) {
-			exact = exact && code24(shim_scans[0].value[c]) == fake_chain_code(0, c);
-			exact = exact && code24(shim_scans[0].value[8 + c]) == fake_chain_code(1, c);
-		}
-		CHECK(exact);
-		CHECK(code24(shim_scans[0].value[0]) > 0);
-		CHECK(code24(shim_scans[0].value[8]) < 0);
-	}
-
-	section("cadeia de 2: leitura direta e escala de um canal do dispositivo 2");
-	CHECK_EQ(read_raw_chan(9, IIO_CHAN_INFO_RAW, &val, &val2), IIO_VAL_INT);
-	CHECK_EQ(val, fake_chain_code(1, 1));
-	CHECK_EQ(read_raw_chan(9, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
-	CHECK_EQ(val2, 22351);			/* 4.5 V / (24 * 2^23), in mV x 1e9 */
-
-	section("cadeia de 2: um registro vale para os dois dispositivos");
-	/* Only device 2's channel 1 in the scan: CH1SET powered, the rest down. */
-	buffer_on_mask(BIT(8));
-	CHECK_EQ(fake.reg[R_CH1SET] & 0x80, 0);
-	for (c = 1; c < 8; c++)
-		CHECK_EQ(fake.reg[R_CH1SET + c] & 0x80, 0x80);
-	fake_convert();
-	tick();
-	shim_spi_complete_one();
-	buffer_off();
-	CHECK_EQ(shim_scans[shim_scan_count - 1].count, 1);
-	CHECK_EQ(code24(shim_scans[shim_scan_count - 1].value[0]), fake_chain_code(1, 0));
-	/* One gain for both devices. */
-	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 4, 0,
-					   IIO_CHAN_INFO_HARDWAREGAIN), 0);
-	CHECK_EQ(read_raw_chan(15, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
-	CHECK_EQ(val2, 134110);			/* 4.5 V / (4 * 2^23) */
-
-	section("cadeia de 2: o que uma cadeia não pode fazer é recusado");
-	CHECK_EQ(store("bias_drive", "derived"), -EINVAL);
-	CHECK_EQ(store("bias_drive", "reference"), -EINVAL);
-	CHECK(store("bias_drive", "off") > 0);
-	CHECK(!strcmp(show("bias_drive_available"), "off\n"));
-	CHECK_EQ(fake.reg[R_CONFIG3] & 0x04, 0);		/* PD_BIAS: amplifier down */
-	CHECK(!strcmp(show("lead_off_status"), "<error -95>"));	/* -EOPNOTSUPP */
-}
-
-static void test_daisy_refusals(void)
-{
-	section("cadeia: topologia recusada no probe");
-
-	/* Shared DIN: no device can be told to drive the others' clock. */
-	fresh();
-	shim_prop_daisy = 2;
-	fake.chips = 2;
-	CHECK_EQ(probe(0), -EINVAL);
-	CHECK(strstr(shim_last_error, "external clock") != NULL);
-
-	fresh();
-	shim_prop_daisy = 9;
-	shim_ext_clk = &ext_clk;
-	CHECK_EQ(probe(0), -EINVAL);
-
-	/* A chain shorter than declared: device 2's share reads zeros, its
-	 * status word does not open with 1100, the self test says which. */
-	fresh();
-	shim_prop_daisy = 2;
-	shim_ext_clk = &ext_clk;
-	fake.chips = 2;
-	fake.chips_wired = 1;
-	CHECK_EQ(probe(0), -EIO);
-	CHECK(strstr(shim_error_log, "device 2 of 2") != NULL);
+	CHECK_EQ(probe(0), -EOPNOTSUPP);
+	CHECK(!shim_iio->registered);
+	CHECK(strstr(shim_error_log, "daisy chain of 2 devices") != NULL);
+	CHECK_EQ(fake.rdata_reads, 0);		/* refused before any conversion */
 
 	/* A chain of one is a single device. */
 	fresh();
 	shim_prop_daisy = 1;
 	CHECK_EQ(probe(0), 0);
+	CHECK(shim_iio->registered);
 	CHECK_EQ(shim_iio->num_channels, 9);
-	CHECK(strstr(show("bias_drive_available"), "derived") != NULL);
 }
 
-static void test_daisy_order(void)
+static void test_status_word(void)
 {
-	section("cadeia de 3: cada dispositivo no seu lugar, em ordem");
+	section("palavra de status: 1100b em toda leitura do autoteste");
+
+	/* One reply out of step, the first conversion the self test reads -
+	 * one it discards, which is still checked. */
 	fresh();
-	shim_prop_daisy = 3;
-	shim_ext_clk = &ext_clk;
-	fake.chips = 3;
+	fake.out_of_step = 1;
+	CHECK_EQ(probe(0), -EIO);
+	CHECK(!shim_iio->registered);
+	CHECK(strstr(shim_error_log, "status word opens with 0x4") != NULL);
+
+	/* In step, the same part probes. */
+	fresh();
 	CHECK_EQ(probe(0), 0);
-	if (!shim_iio || !shim_iio->registered)
-		return;
-	CHECK_EQ(shim_iio->num_channels, 25);
-	CHECK_EQ(priv()->rdata_xfer.len, 1 + 3 * 27);
-	for (unsigned int c = 0; c < 8; c++) {
-		fake.input_uv[c] = 100.0;
-		fake.chain_input_uv[1][c] = 200.0;
-		fake.chain_input_uv[2][c] = 300.0;
-	}
-	buffer_on();
-	fake_convert();
-	tick();
-	shim_spi_complete_one();
-	buffer_off();
-	CHECK_EQ(shim_scans[0].count, 24);
-	CHECK_EQ(code24(shim_scans[0].value[7]), fake_chain_code(0, 7));
-	CHECK_EQ(code24(shim_scans[0].value[8]), fake_chain_code(1, 0));
-	CHECK_EQ(code24(shim_scans[0].value[23]), fake_chain_code(2, 7));
-	CHECK(code24(shim_scans[0].value[8]) != code24(shim_scans[0].value[0]));
-	CHECK(code24(shim_scans[0].value[16]) != code24(shim_scans[0].value[8]));
+	CHECK(shim_iio->registered);
 }
 
 static void test_test_signal(void)
@@ -427,14 +324,12 @@ int main(void)
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
 	test_single_device();
 	test_clock_output();
-	test_daisy_chain();
-	test_daisy_refusals();
-	test_daisy_order();
+	test_chain_refused();
+	test_status_word();
 	test_test_signal();
 
 	printf("\nNão coberto por esta suíte:\n"
-	       "  - silício: a bancada tem um conversor, então nem a saída de clock\n"
-	       "    alimentando outro nem uma cadeia foram vistas em hardware\n"
-	       "  - o que um RREG devolve numa cadeia: o datasheet não diz\n");
+	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
+	       "    alimentando outro não foi vista em hardware\n");
 	return report();
 }

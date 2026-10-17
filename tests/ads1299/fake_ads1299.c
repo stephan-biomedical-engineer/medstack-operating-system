@@ -229,6 +229,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			double chain_in[FAKE_MAX_CHIPS][FAKE_CHANNELS];
 			unsigned int chips = fake.chips, wired = fake.chips_wired;
 			bool swapped = fake.chain_swapped;
+			unsigned int step = fake.out_of_step;
 			s32 off = fake.offset_codes;
 			u8 dp = fake.detached_p, dn = fake.detached_n;
 
@@ -238,6 +239,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			fake.chips = chips;
 			fake.chips_wired = wired;
 			fake.chain_swapped = swapped;
+			fake.out_of_step = step;
 			memcpy(fake.chain_input_uv, chain_in, sizeof(chain_in));
 			fake.id_wrong = wrong;
 			fake.stuck_reg = stuck;
