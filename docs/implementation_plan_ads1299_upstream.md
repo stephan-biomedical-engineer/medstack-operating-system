@@ -427,10 +427,10 @@ funcionalidades" e não "todos os registradores":
 | Funcionalidade | Hoje (as duas) | Alvo | Tipo | Sub |
 |---|---|---|---|---|
 | Pino START | só o comando `START` | `start-gpios` opcional no DT. Com ele, o início é pelo pino, que é o que sincroniza vários chips. **Em aberto**: no modo *cascaded* cada chip é um dispositivo IIO, e um pino de START compartilhado precisa de um dono que nenhum dos drivers é (§5.6) | DT | 3.8 |
-| Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend* | DT + PM | 3.7 |
+| Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend*; no *resume* os registradores são tratados como perdidos (o datasheet não diz o que guardam): 150 ms, *reset*, SDATAC, `regcache_sync`, CONFIG3 e GPIO à mão. **Feito** (`59511f846e67`, `bf05f4d465d5`) | DT + PM | 3.7 |
 | Pino CLKSEL | inferido da presença de `clocks` | idem, documentado no *binding* | DT | 3.8 |
-| `STANDBY` / `WAKEUP` | definidos, sem uso | `runtime_pm` e `system sleep` (`pm_ptr`, `DEFINE_RUNTIME_DEV_PM_OPS`) | padrão (PM) | 3.7 |
-| `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número | — | 3.7 |
+| `STANDBY` / `WAKEUP` | definidos, sem uso | *system sleep* (`DEFINE_SIMPLE_DEV_PM_OPS`, `pm_sleep_ptr`): STANDBY/WAKEUP sem pino PWDN. **Feito** (`bf05f4d465d5`). **Sem runtime PM, por decisão**: suspender ocioso derrubaria o bias no paciente e o clock que este chip dá a outros, e cada leitura avulsa pagaria 150 ms de partida da referência | padrão (PM) | 3.7 |
+| `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número. **Em aberto: é medida de bancada** | — | 3.7 |
 | `RREG`/`WREG` de vários registradores | sempre um | não muda a cobertura; fica como está | — | — |
 | Bits GPIO[7:4] da *status word* em cada amostra | descartados | opcional: canal de varredura. Não é exigido para cobrir GPIOD, que o `gpiochip` já cobre | custom | 3.6 |
 
@@ -563,8 +563,8 @@ mora no sysfs. Um `ti,lead-off-current-na` no *binding* é pedido de reescrita g
 | `gpio-controller`, `#gpio-cells = <2>`, `gpio-line-names` | o `gpiochip` dos GPIO1–4; sem ele os pinos são tomados como ligados ao DGND e nenhum chip é registrado. **Feito** (`85b99dffb49e`) | 3.6 |
 | `#clock-cells = <0>` | o CI como provedor de clock (CLK_EN) quando roda do oscilador interno. **Feito** (`8c3d602693f1`), com `clock-output-names` | 3.8 |
 | `start-gpios` | o pino START, que sincroniza chips em cascata | 3.8 |
-| `powerdown-gpios` | o pino PWDN | 3.7 |
-| `dvdd-supply` | a alimentação digital, que hoje não é descrita | 3.7 |
+| `powerdown-gpios` | o pino PWDN. **Feito** (`59511f846e67`) | 3.7 |
+| `dvdd-supply` | a alimentação digital, que hoje não é descrita. **Feito** (`59511f846e67`) | 3.7 |
 | `biasref-supply` | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora. Uma alimentação e não um booleano `ti,`: tensão num pino é o que o `-supply` descreve, como o `vref-supply` (padrão antes de customizado). **Feito** (`b82dc6df6759`) | 3.4 |
 | `#daisy-chained-devices` (a propriedade comum, `common-properties.txt`) | quantos chips dividem o CS, o que muda o quadro inteiro. O *binding* descreve o hardware mesmo que o driver não o suporte: com N > 1 exige `clocks` e proíbe `#clock-cells`, e o driver do `v1` recusa a cadeia. **Feito** (`8c3d602693f1`) | 3.8 |
 
@@ -949,7 +949,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`); derivação por canal e `bias_drive` = `off`/`on` (`8c0d40ff063a`); a política do referencial saiu do kernel com o `montage` (`11a174bc5f1f`). **Só host** | **feito**, 2026-10-17 |
 | 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 (`308e6166ef98`); evento `fault`/`openwire` com o *backport* `66874e950a96`, e a palavra por amostra (`8b545d83bad2`). **Só host** | **feito**, 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | binding (`85b99dffb49e`) e `gpiochip` (`263f1a3f9860`); injeção do plano (GPIOC invertido) vista, e a de leitura-modificação-escrita, a primeira versão do próprio driver. **Só host** | **feito**, 2026-10-17 |
-| 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
+| 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | binding (`59511f846e67`) e *suspend*/*resume*, PWDN, DVDD (`bf05f4d465d5`); injeção do plano (sem `regcache_sync`) vista, e um defeito achado pelo teste (níveis do GPIO perdidos no *resume*). Sem runtime PM, por decisão. **Só host**. A medida do `RDATAC` a 16 kSPS e o que o PWDN guarda ficam para a bancada | **feito no host**, 2026-10-17 |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
 | 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | — | — |
 | 4 | autoteste passa com tolerância medida | — | — |
