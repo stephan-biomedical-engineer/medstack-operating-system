@@ -27,7 +27,8 @@ struct check_counters counters;
 
 enum {
 	R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_LOFF, R_CH1SET,
-	R_LOFF_SENSP = 0x0f, R_LOFF_SENSN, R_LOFF_FLIP, R_CONFIG4 = 0x17,
+	R_BIAS_SENSP = 0x0d, R_BIAS_SENSN,
+	R_LOFF_SENSP = 0x0f, R_LOFF_SENSN, R_LOFF_FLIP, R_MISC1 = 0x15, R_CONFIG4 = 0x17,
 };
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
@@ -863,6 +864,84 @@ static void test_lead_off_event(void)
 	fake.detached_p = 0;
 }
 
+static void test_srb(void)
+{
+	bool ok;
+
+	section("SRB1 e SRB2: abertos e gravados no probe");
+	fresh();
+	fake.reg[R_MISC1] = 0x20;
+	for (int c = 0; c < 8; c++)
+		fake.reg[R_CH1SET + c] |= 0x08;
+	fake.reset_ignored = true;
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_MISC1], 0x00);
+	ok = true;
+	for (int c = 0; c < 8; c++)
+		ok = ok && (fake.reg[R_CH1SET + c] & 0x08) == 0;
+	CHECK(ok);
+
+	section("SRB2 por canal: o bit 3 do CHnSET do canal, e só ele");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	CHECK_EQ(fake.reg[R_CH1SET], 0x60);		/* gain 24, electrodes */
+	ok = true;
+	for (int c = 0; c < 8; c++) {
+		ok = ok && ext_store(c, "srb2", "1") > 0;
+		for (int o = 0; o < 8; o++)
+			ok = ok && fake.reg[R_CH1SET + o] == (o == c ? 0x68 : 0x60);
+		ok = ok && !strcmp(ext_show(c, "srb2"), "1\n");
+		ok = ok && ext_store(c, "srb2", "0") > 0;
+		ok = ok && fake.reg[R_CH1SET + c] == 0x60;
+		ok = ok && !strcmp(ext_show(c, "srb2"), "0\n");
+	}
+	CHECK(ok);
+
+	/* Gain and MUX keep it, and it keeps them. */
+	CHECK(ext_store(3, "srb2", "1") > 0);
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 4, 0,
+					   IIO_CHAN_INFO_HARDWAREGAIN), 0);
+	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x28);		/* gain 4, SRB2, MUX 0 */
+	CHECK(store("input_mux", "shorted") > 0);
+	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x29);
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK(ext_store(3, "srb2", "0") > 0);
+	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x20);
+
+	CHECK_EQ(ext_store(3, "srb2", "maybe"), -EINVAL);
+	buffer_on();
+	CHECK_EQ(ext_store(3, "srb2", "1"), -EBUSY);
+	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x20);
+	buffer_off();
+
+	section("SRB1: montage, só a chave");
+	CHECK(!strcmp(show("montage"), "bipolar\n"));
+	CHECK(!strcmp(show("montage_available"), "bipolar referential\n"));
+	/* With a bias derivation and sensing in place, which it must not touch. */
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(ext_store(0, "lead_off_sense_n", "1") > 0);
+	CHECK(store("montage", "referential") > 0);
+	CHECK_EQ(fake.reg[R_MISC1], 0x20);
+	CHECK(!strcmp(show("montage"), "referential\n"));
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0xff);
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0xff);
+	CHECK_EQ(fake.reg[R_LOFF_SENSN], 0x01);
+	CHECK(store("montage", "bipolar") > 0);
+	CHECK_EQ(fake.reg[R_MISC1], 0x00);
+	CHECK_EQ(store("montage", "sequential"), -EINVAL);
+	CHECK(store("montage", "referential") > 0);
+	buffer_on();
+	CHECK_EQ(store("montage", "bipolar"), -EBUSY);
+	CHECK_EQ(fake.reg[R_MISC1], 0x20);
+	CHECK(!strcmp(show("montage"), "referential\n"));	/* read while running */
+	buffer_off();
+	CHECK(store("montage", "bipolar") > 0);
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK(ext_store(0, "lead_off_sense_n", "0") > 0);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -879,6 +958,7 @@ int main(void)
 	test_lead_off_channels();
 	test_lead_off_word();
 	test_lead_off_event();
+	test_srb();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
