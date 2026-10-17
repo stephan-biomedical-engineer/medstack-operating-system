@@ -8,11 +8,11 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **20 / 5 / 4 / 4** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> **Atualização (2026-10-17)**: a feature chegou a **22 / 5 / 4 / 2** (CLK_EN, CAL_FREQ, BIAS_MEAS,
 > BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN, LOFF_FLIP,
-> LOFF_STATP e LOFF_STATN fechados; DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP passou a
-> ser derivado). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria acima
-> fica como foi medida.
+> LOFF_STATP, LOFF_STATN, SRB1 e SRB2 fechados; DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP
+> passou a ser derivado). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria
+> acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -400,7 +400,7 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | LOFF | FLEAD_OFF | ✅ `a6edbf1cfde1` | ⚙️ DC | `lead_off_frequency` + `_available` (`dc`, `ac_7.8`, `ac_31.2`, `ac_fdr_div_4`; Hz do clock interno de 2,048 MHz). O significado do LOFF_STAT em AC segue sem confirmação (§3.1.2) | custom | 3.5 |
 | CHnSET | PD | ✅ | ✅ | já fechado (máscara de varredura) | padrão | — |
 | CHnSET | PGA | ⚠️ um para todos | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`). Ganho igual para todos vira política da plataforma | padrão | 3.2 |
-| CHnSET | SRB2 | ❌ | ❌ | `in_voltageN_srb2` por canal | custom | 3.3 |
+| CHnSET | SRB2 | ✅ `11a174bc5f1f` | ❌ | `in_voltageN_srb2` por canal (0/1, `ext_info`) | custom | 3.3 |
 | CHnSET | MUX | ⚠️ um para todos | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, mais os canais da §3.1.1 | custom + padrão | 3.1, 3.2 |
 | BIAS_SENSP | IN1P…IN8P | ⚠️ tudo ou nada | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal | custom | 3.4 |
 | BIAS_SENSN | IN1N…IN8N | ⚠️ tudo ou nada | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal | custom | 3.4 |
@@ -411,7 +411,7 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | LOFF_STATN | canal 1…8 | ✅ `8b545d83bad2` | ✅ | idem | padrão + custom | 3.5 |
 | GPIO | GPIOD[4:1] | ❌ | ❌ | **`gpiochip`** de 4 linhas, registrador volátil | padrão | 3.6 |
 | GPIO | GPIOC[4:1] | ❌ | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
-| MISC1 | SRB1 | ❌ | ✅ `montage` | atributo global; o nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
+| MISC1 | SRB1 | ✅ `11a174bc5f1f` | ✅ `montage` | `montage` (`bipolar`/`referential`), o nome e os valores da board, mas **só a chave**: a regra do referencial (BIAS_SENSN = 0, um bit no LOFF_SENSN) sai do kernel e vai para a tradução da plataforma (§3.3). O nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
 | CONFIG4 | SINGLE_SHOT | ⚙️ | ⚙️ | segue o modo, single-shot na leitura direta e contínuo no buffer | — (fica ⚙️) | — |
 | CONFIG4 | PD_LOFF_COMP | ⚙️ derivado (`308e6166ef98`) | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
 
@@ -940,7 +940,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
 | 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`ad3a2ec3641b`), entrada de teste nunca sem o gerador (`17eccf84c5d6`), `BIAS_MEAS` seguindo o MUX e D1 corrigido (`89bed0807417`); só host. MUX por canal em aberto | 2026-10-17 |
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
-| 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
+| 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`11a174bc5f1f`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
 | 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 (`308e6166ef98`); evento `fault`/`openwire` com o *backport* `66874e950a96`, e a palavra por amostra (`8b545d83bad2`). **Só host** | **feito**, 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | — | — |
