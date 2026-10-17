@@ -973,7 +973,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | binding (`59511f846e67`) e *suspend*/*resume*, PWDN, DVDD (`bf05f4d465d5`); injeção do plano (sem `regcache_sync`) vista, e um defeito achado pelo teste (níveis do GPIO perdidos no *resume*). Sem runtime PM, por decisão. **Só host**. A medida do `RDATAC` a 16 kSPS e o que o PWDN guarda ficam para a bancada | **feito no host**, 2026-10-17 |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
 | 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`2204c67ec03d`; só host) | **feito** | 2026-10-17 |
-| 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | — | — |
+| 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | **feito no host**: 28 ✅ / 5 ⚙️, e `sysfs-bus-iio-adc-ti-ads1299` com todos os atributos próprios, o evento `fault_openwire` incluído (`2fa0c715e980`). O `KernelVersion` está em 6.6, a versão desta árvore, e passa à da mainline-alvo na submissão | 2026-10-17 |
 | 4 | autoteste passa com tolerância medida | — | — |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
 | 6 | série na lore, Message-ID | — | — |
