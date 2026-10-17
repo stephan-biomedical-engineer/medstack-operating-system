@@ -8,11 +8,11 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **25 / 5 / 1 / 2** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> **Atualização (2026-10-17)**: a feature chegou a **26 / 5 / 0 / 2** (CLK_EN, CAL_FREQ, BIAS_MEAS,
 > BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN, LOFF_FLIP,
-> LOFF_STATP, LOFF_STATN, SRB1, SRB2, BIAS_SENSP, BIAS_SENSN e o PGA fechados; DAISY_EN passou a ser
-> escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host. A coluna **PR** da §3.1
-> acompanha a feature; a auditoria acima fica como foi medida.
+> LOFF_STATP, LOFF_STATN, SRB1, SRB2, BIAS_SENSP, BIAS_SENSN o PGA e o MUX fechados; DAISY_EN passou a
+> ser escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host. A coluna **PR** da
+> §3.1 acompanha a feature; a auditoria acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -401,7 +401,7 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | CHnSET | PD | ✅ | ✅ | já fechado (máscara de varredura) | padrão | — |
 | CHnSET | PGA | ✅ `c880fb1f02f6` | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`, com `_available`), `-EBUSY` com o buffer ligado; o autoteste julga cada canal pelo seu ganho. Ganho igual para todos vira política da plataforma | padrão | 3.2 |
 | CHnSET | SRB2 | ✅ `11a174bc5f1f` | ❌ | `in_voltageN_srb2` por canal (0/1, `ext_info`) | custom | 3.3 |
-| CHnSET | MUX | ⚠️ um para todos | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, mais os canais da §3.1.1 | custom + padrão | 3.1, 3.2 |
+| CHnSET | MUX | ✅ `e749f79fd717` | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, um `_available` por tipo; BIAS_MEAS e a entrada de teste valem para "algum canal". Os canais de temperatura e alimentação da §3.1.1 seguem em aberto (3.2) | custom | 3.1, 3.2 |
 | BIAS_SENSP | IN1P…IN8P | ✅ `8c0d40ff063a` | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal (0/1, `ext_info`) | custom | 3.4 |
 | BIAS_SENSN | IN1N…IN8N | ✅ `8c0d40ff063a` | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal (0/1, `ext_info`); o 0 em referencial vai para a tradução da plataforma | custom | 3.4 |
 | LOFF_SENSP | IN1P…IN8P | ✅ `308e6166ef98` | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal (0/1, `ext_info`) | custom | 3.5 |
@@ -938,7 +938,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 2 | `dt_binding_check` limpo; injeção de falha vista | — | — |
 | 3 | auditoria campo a campo (§3.1): PR 6 ✅ / 5 ⚙️ / 7 ⚠️ / 15 ❌; board 9 / 10 / 5 / 9, de 33 | **medido**, 7 defeitos (§3.2) | 2026-10-16 |
 | 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
-| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`ad3a2ec3641b`), entrada de teste nunca sem o gerador (`17eccf84c5d6`), `BIAS_MEAS` seguindo o MUX e D1 corrigido (`89bed0807417`); só host. MUX por canal em aberto | 2026-10-17 |
+| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`ad3a2ec3641b`), entrada de teste nunca sem o gerador (`17eccf84c5d6`), `BIAS_MEAS` seguindo o MUX e D1 (`89bed0807417`), MUX por canal (`e749f79fd717`). **Só host** | **feito**, 2026-10-17 |
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | ganho por canal (`c880fb1f02f6`; só host). `in_temp_*`, alimentação e as constantes em aberto: dependem do MUX por canal (3.1) e da Fase 0 do plano de bancada | 2026-10-17 |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`11a174bc5f1f`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`); derivação por canal e `bias_drive` = `off`/`on` (`8c0d40ff063a`); a política do referencial saiu do kernel com o `montage` (`11a174bc5f1f`). **Só host** | **feito**, 2026-10-17 |
