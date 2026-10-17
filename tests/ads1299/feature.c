@@ -1577,6 +1577,33 @@ static void test_power(void)
 	CHECK(!fake.started);
 }
 
+static void test_rate_while_running(void)
+{
+	int val, val2;
+
+	section("taxa de amostragem: recusada com o buffer ligado");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 500, 0,
+					   IIO_CHAN_INFO_SAMP_FREQ), 0);
+	buffer_on();
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 1000, 0,
+					   IIO_CHAN_INFO_SAMP_FREQ), -EBUSY);
+	CHECK_EQ(fake.reg[R_CONFIG1] & 0x07, 0x05);		/* still 500 SPS */
+	CHECK_EQ(priv()->timer_period, (ktime_t)2000000);	/* and the timer's period */
+	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_SAMP_FREQ, &val, &val2), IIO_VAL_INT);
+	CHECK_EQ(val, 500);					/* read while running */
+	buffer_off();
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 1000, 0,
+					   IIO_CHAN_INFO_SAMP_FREQ), 0);
+	CHECK_EQ(fake.reg[R_CONFIG1] & 0x07, 0x04);
+	/* Still refused as before: a rate the part does not have. */
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 300, 0,
+					   IIO_CHAN_INFO_SAMP_FREQ), -EINVAL);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1600,6 +1627,7 @@ int main(void)
 	test_gpio();
 	test_temperature_and_supplies();
 	test_power();
+	test_rate_while_running();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
