@@ -8,9 +8,9 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **15 / 5 / 6 / 7** (CLK_EN, CAL_FREQ, BIAS_MEAS,
-> BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT e os três campos do LOFF fechados; DAISY_EN passou a ser
-> escrito, sem opção). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria
+> **Atualização (2026-10-17)**: a feature chegou a **18 / 5 / 6 / 4** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN e LOFF_FLIP
+> fechados; DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria
 > acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
@@ -403,16 +403,16 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | CHnSET | MUX | ⚠️ um para todos | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, mais os canais da §3.1.1 | custom + padrão | 3.1, 3.2 |
 | BIAS_SENSP | IN1P…IN8P | ⚠️ tudo ou nada | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal | custom | 3.4 |
 | BIAS_SENSN | IN1N…IN8N | ⚠️ tudo ou nada | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal | custom | 3.4 |
-| LOFF_SENSP | IN1P…IN8P | ❌ | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal | custom | 3.5 |
-| LOFF_SENSN | IN1N…IN8N | ❌ | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal | custom | 3.5 |
-| LOFF_FLIP | canal 1…8 | ❌ | ❌ | `in_voltageN_lead_off_flip` por canal | custom | 3.5 |
-| LOFF_STATP | canal 1…8 | ⚠️ inalcançável (D2) | ✅ | evento por eletrodo **e** a palavra por amostra no buffer (§3.1.2) | padrão + custom | 3.5 |
-| LOFF_STATN | canal 1…8 | ⚠️ inalcançável | ✅ | idem | padrão + custom | 3.5 |
+| LOFF_SENSP | IN1P…IN8P | ✅ `308e6166ef98` | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal (0/1, `ext_info`) | custom | 3.5 |
+| LOFF_SENSN | IN1N…IN8N | ✅ `308e6166ef98` | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal (0/1, `ext_info`); a política do referencial fica na plataforma | custom | 3.5 |
+| LOFF_FLIP | canal 1…8 | ✅ `308e6166ef98` | ❌ | `in_voltageN_lead_off_flip` por canal (0/1, `ext_info`) | custom | 3.5 |
+| LOFF_STATP | canal 1…8 | ⚠️ alcançável por `lead_off_status` (`308e6166ef98`), `ac` em AC; faltam evento e palavra por amostra | ✅ | evento por eletrodo **e** a palavra por amostra no buffer (§3.1.2) | padrão + custom | 3.5 |
+| LOFF_STATN | canal 1…8 | ⚠️ idem | ✅ | idem | padrão + custom | 3.5 |
 | GPIO | GPIOD[4:1] | ❌ | ❌ | **`gpiochip`** de 4 linhas, registrador volátil | padrão | 3.6 |
 | GPIO | GPIOC[4:1] | ❌ | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
 | MISC1 | SRB1 | ❌ | ✅ `montage` | atributo global; o nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
 | CONFIG4 | SINGLE_SHOT | ⚙️ | ⚙️ | segue o modo, single-shot na leitura direta e contínuo no buffer | — (fica ⚙️) | — |
-| CONFIG4 | PD_LOFF_COMP | ⚙️ sempre ligado | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
+| CONFIG4 | PD_LOFF_COMP | ⚙️ derivado (`308e6166ef98`) | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
 
 **Saldo do alvo**: 5 campos ficam ⚙️ **por desenho**, porque cada um é função da fiação ou de outro
 mecanismo e não tem valor que o usuário possa querer escolher à parte: Device ID, PD_REFBUF,
@@ -473,11 +473,13 @@ mainline antes da subfase 3.5.** O canal `in_voltageN_lead_off` da board, de tip
 ser tensão, é o ponto que mais vai ser discutido na revisão e entra na carta como pergunta, não como
 afirmação.
 
-**E o modo AC muda o que o bit significa.** Com `FLEAD_OFF` ≠ 00, a excitação é fora de banda, e não
-está estabelecido que `LOFF_STAT*` continue valendo como em DC. A outra leitura é que o host tem de
-detectar a amplitude da excitação nos dados. **A confirmar no datasheet antes de expor o modo AC.** Se
-o bit não valer em AC, o evento é suprimido nesse modo e o atributo diz isso, para não repetir o D2
-(um status que parece "conectado" porque ninguém o habilitou).
+**E o modo AC muda o que o bit significa - confirmado no datasheet em 2026-10-17.** Os comparadores
+são o método DC (SBAS499 §9.3.2.4.3.1: "if dc lead-off is not used, the lead-off comparators can be
+powered down"). Em AC (§9.3.2.4.3.2), a excitação é **dentro** da banda (7,8 Hz e 31,2 Hz, e não fora,
+como esta seção dizia), passa pelo canal, e o eletrodo se mede nos dados, pela amplitude na
+frequência da excitação; o `LOFF_STAT*` não é o status dele. Por isso o `lead_off_status` responde
+`ac` nesse modo (`308e6166ef98`), e o evento, quando existir, é suprimido em AC. Medir a amplitude é trabalho
+de quem lê os dados, não do driver.
 
 ### 3.2 Defeitos achados pela auditoria
 
@@ -487,7 +489,7 @@ cobertura nova sobre um mecanismo quebrado só multiplica o defeito.
 | # | Onde | Defeito | Conserto | Sub |
 |---|---|---|---|---|
 | D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1). **Corrigido na feature** (`89bed0807417`) | 3.1 |
-| D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3) | 3.0 |
+| D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3). **Corrigido na feature** (`308e6166ef98`): *sense* por canal e comparadores só com algo monitorado | 3.0 |
 | D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso. **Corrigido na feature** (`b27cb88553d0`: CONFIG3 volátil) | 3.5 |
 | D4 | board | o comentário acima de `ADS1299_REG_LOFF_SENSP` ainda abre com "this driver never writes either of them", e o próprio bloco diz depois que `ads1299_set_lead_off()` os grava | reescrever o comentário | 3.0 |
 | D5 | as duas | `ads1299_read_one()` limpa o `PD` do canal lido e nunca o devolve, então uma leitura direta deixa um canal ligado contra a máscara de varredura | restaurar o `PD` ao fim da leitura | 3.0 |
@@ -934,7 +936,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
-| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 corrigido (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); só host. *Sense* por canal, FLIP, LOFF_STAT em AC e evento em aberto | 2026-10-17 |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 corrigido, `lead_off_status` com `ac` (`308e6166ef98`); só host. Evento e palavra por amostra em aberto | 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | — | — |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
