@@ -1,7 +1,20 @@
 # Plano de implementação — o driver ADS1299 como release no kernel Linux
 
-> **Estado**: **nada submetido**, e nada aqui foi executado. O que já existe medido é o ponto de
-> partida da §1, e ele é melhor do que a média de uma primeira submissão.
+> **Estado (2026-10-16)**: **nada submetido**. A Fase 0 está feita (§13), e a branch de submissão
+> `feature/ads1299-mcp2210-driver` tem o driver, o *binding* e a entrada em `MAINTAINERS`. Uma
+> auditoria campo a campo, feita em 2026-10-16 (§3.1), mediu quanto do CI ela cobre: dos **33 campos
+> funcionais** dos registradores, **6** estão expostos ao usuário, **5** são escritos com um valor
+> fixo, **7** estão cobertos pela metade e **15** não têm caminho nenhum. A `board/medplatform-afe`
+> chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
+> fechar os 33.
+>
+> **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
+> as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
+> diretriz de 2026-09-26 (§3) deixa de ser interpretada como "o que a plataforma precisa". Cobertura é
+> propriedade do driver e não da placa.
+>
+> **A exceção, decidida em 2026-10-17, é a daisy-chain** (§5.6): o *binding* a descreve, o driver do
+> `v1` a recusa no *probe*, e o código que a suporta espera numa branch própria por uma série separada.
 >
 > **Objetivo**: `drivers/iio/adc/ti-ads1299.c` aceito na árvore principal, com o *binding* YAML e a
 > documentação de ABI que a aceitação exige.
@@ -324,34 +337,182 @@ Colidem porque **os mantenedores do IIO resistem a ABI privada de driver**. A re
 atributo novo é "use a ABI existente, ou proponha uma extensão *genérica* do IIO" — e um driver que
 chega com vinte arquivos sysfs inventados não é aceito, é reescrito.
 
-**A resolução é a regra do mecanismo padrão primeiro**, que é exatamente o mapeamento já proposto em
-2026-09-26. As duas diretrizes são compatíveis *se* cada funcionalidade for exposta pelo mecanismo
-que o kernel já tem para ela:
+**A resolução é a regra do mecanismo padrão primeiro.** As duas diretrizes são compatíveis *se*
+cada funcionalidade for exposta pelo mecanismo que o kernel já tem para ela, e se cada campo tiver
+**um** mecanismo, não dois. A tabela de 2026-09-26 que estava aqui era o esboço desse mapeamento.
+A §3.1 a substitui, campo a campo e contra o código das duas branches.
 
-| Funcionalidade | Registrador | Mecanismo | Aceitabilidade upstream |
-|---|---|---|---|
-| Ganho | CHnSET 6:4 | `hardwaregain` | **padrão** |
-| Taxa | CONFIG1 DR | `sampling_frequency` | **padrão** |
-| Sensor de temperatura | MUX=100 | **canal `IIO_TEMP`** | **padrão** |
-| Medida de MVDD | MUX=011 | canal de tensão de alimentação | **padrão** |
-| Lead-off (status e habilitação) | LOFF_SENS*/LOFF_STAT* | **eventos IIO** por canal | **padrão**, e melhor: com carimbo e *poll* |
-| Bias status | CONFIG3 BIAS_STAT | evento IIO | **padrão** |
-| GPIO (4 pinos) | 0x14 | **gpiochip** | **padrão** |
-| Power-down de canal | CHnSET bit 7 | ver §5.5 — conflita com `available_scan_masks` | a decidir |
-| SRB1, SRB2 | MISC1 bit 5, CHnSET bit 3 | atributo (global e por canal) | **customizado, defensável**: não há ABI de montagem de eletrodo |
-| Corrente/frequência de lead-off | LOFF 3:2, 1:0 | atributo | customizado, defensável |
-| MUX de entrada | CHnSET 2:0 | `input_mux` por canal | customizado, já existe no arquivo |
-| Sinal de teste | CONFIG2 | `test_signal` | customizado, já existe |
-| Daisy-chain, clock out | CONFIG1 6, 5 | ver §5.6 | a decidir |
-| MISC2 | 0x16 | reservado: escrever 0 | nada a expor |
+Três regras decidem o mecanismo de cada campo, e elas são as mesmas do §4:
 
-O saldo: a maior parte da diretriz de completude é atendida por **ABI padrão**, e o que sobra de
-customizado é pequeno, coerente e justificável — montagem de eletrodo e parâmetros de lead-off, para
-os quais o IIO realmente não tem vocabulário.
+1. **Fiação vai para o DT.** Se o campo é consequência de como a placa foi montada (um BIASREF
+   externo, uma cascata de chips, um clock no pino CLK), ele vira propriedade do *binding*, e o
+   driver o escreve a partir dela. O usuário não escolhe.
+2. **Configuração vai para o sysfs.** Se um operador pode querer mudar em campo, é atributo, e
+   **padrão do IIO antes de customizado**.
+3. **Política fica fora do kernel.** O driver expõe o mecanismo do CI e não decide por ele. A
+   `board/medplatform-afe` hoje decide em dois lugares: em referencial, zera o `BIAS_SENSN` e reduz
+   o `LOFF_SENSN` a um bit. Essa decisão é correta para EEG e não é do driver. Ela desce para a
+   tradução por ligação (`do_derive_device_options`), que já é onde a plataforma traduz uma
+   prescrição em opções de dispositivo.
 
 **E há um ganho colateral que vale dizer**: cada atributo customizado é uma palavra que a tabela de
 tradução do `do_derive_device_options` precisa conhecer. Mecanismo padrão é acoplamento que não
 existe. Upstreamabilidade e a métrica de reuso deste trabalho pedem a mesma coisa.
+
+### 3.1 Auditoria campo a campo — 2026-10-16
+
+Feita contra `ti-ads1299.c` nas duas branches, com o datasheet transcrito em
+`Register_Map_ADS1299.md` (Tabelas 11 a 28 do SBAS499). Os bits reservados ficam de fora, e o MISC2
+inteiro também, porque o registrador todo é reservado.
+
+Legenda: ✅ exposto ao usuário · ⚙️ o driver escreve um valor fixo ou derivado, sem opção · ⚠️
+coberto pela metade ou com defeito · ❌ sem caminho (fica no valor de reset). **Alvo** é o mecanismo
+que fecha o campo, e a coluna **Sub** aponta a subfase da Fase 3 (§8) que o implementa.
+
+| Reg | Campo | PR | Board | Alvo | Tipo | Sub |
+|---|---|---|---|---|---|---|
+| ID | Device ID | ⚙️ | ⚙️ | confere a família no *probe*; `REV_ID` vai para o `dmesg` | — (fica ⚙️) | 3.0 |
+| ID | Nº de canais | ✅ | ✅ | já fechado | — | — |
+| CONFIG1 | DAISY_EN | ❌ | ❌ | gravado 0 no *probe*: é o modo daisy-chain, o único em que um chip só lê igual; a cadeia é recusada (§5.6). **Feito** (`ed48db8df4c8`) | — (fica ⚙️) | 3.8 |
+| CONFIG1 | CLK_EN | ❌ | ❌ | **provedor de clock** (`#clock-cells = <0>`), ligado por `clk_prepare_enable` de quem consome. **Feito** (`ceaa3f09e909`) | padrão (clk) | 3.8 |
+| CONFIG1 | DR | ✅ | ✅ | já fechado | padrão | — |
+| CONFIG2 | INT_CAL | ✅ | ✅ | já fechado | custom | — |
+| CONFIG2 | CAL_AMP | ✅ | ✅ | já fechado | custom | — |
+| CONFIG2 | CAL_FREQ | ⚠️ sem DC | ⚠️ sem DC | `test_signal` ganha `1x_dc` e `2x_dc` (o código 10 não é usado), mais `test_signal_available` e `-EBUSY` com o buffer ligado. **Feito na feature** (`ad3a2ec3641b`) | custom | 3.1 |
+| CONFIG3 | PD_REFBUF | ⚙️ | ⚙️ | segue o `vref-supply` (fiação) | — (fica ⚙️) | — |
+| CONFIG3 | BIAS_MEAS | ❌ | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
+| CONFIG3 | BIASREF_INT | ⚙️ sempre interno | ⚙️ | propriedade booleana de BIASREF externo no DT | DT | 3.4 |
+| CONFIG3 | PD_BIAS | ✅ | ✅ | `bias_drive` passa a ser `off`/`on` e só isso (ver BIAS_SENS) | custom | 3.4 |
+| CONFIG3 | BIAS_LOFF_SENS | ❌ | ❌ | atributo `bias_lead_off` (`off`/`on`) | custom | 3.5 |
+| CONFIG3 | BIAS_STAT | ❌ | ❌ | lido **sem cache** e entregue pelo mesmo mecanismo do status de lead-off (D3) | evento | 3.5 |
+| LOFF | COMP_TH | ❌ | ⚙️ 95/5 % | `lead_off_threshold` + `_available` (8 pares, 95/5 % … 70/30 %) | custom | 3.5 |
+| LOFF | ILEAD_OFF | ❌ | ⚙️ 6 nA | `lead_off_current` + `_available` (6 nA, 24 nA, 6 µA, 24 µA) | custom | 3.5 |
+| LOFF | FLEAD_OFF | ❌ | ⚙️ DC | `lead_off_frequency` + `_available` (DC, 7,8 Hz, 31,2 Hz, f_DR/4) | custom | 3.5 |
+| CHnSET | PD | ✅ | ✅ | já fechado (máscara de varredura) | padrão | — |
+| CHnSET | PGA | ⚠️ um para todos | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`). Ganho igual para todos vira política da plataforma | padrão | 3.2 |
+| CHnSET | SRB2 | ❌ | ❌ | `in_voltageN_srb2` por canal | custom | 3.3 |
+| CHnSET | MUX | ⚠️ um para todos | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, mais os canais da §3.1.1 | custom + padrão | 3.1, 3.2 |
+| BIAS_SENSP | IN1P…IN8P | ⚠️ tudo ou nada | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal | custom | 3.4 |
+| BIAS_SENSN | IN1N…IN8N | ⚠️ tudo ou nada | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal | custom | 3.4 |
+| LOFF_SENSP | IN1P…IN8P | ❌ | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal | custom | 3.5 |
+| LOFF_SENSN | IN1N…IN8N | ❌ | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal | custom | 3.5 |
+| LOFF_FLIP | canal 1…8 | ❌ | ❌ | `in_voltageN_lead_off_flip` por canal | custom | 3.5 |
+| LOFF_STATP | canal 1…8 | ⚠️ inalcançável (D2) | ✅ | evento por eletrodo **e** a palavra por amostra no buffer (§3.1.2) | padrão + custom | 3.5 |
+| LOFF_STATN | canal 1…8 | ⚠️ inalcançável | ✅ | idem | padrão + custom | 3.5 |
+| GPIO | GPIOD[4:1] | ❌ | ❌ | **`gpiochip`** de 4 linhas, registrador volátil | padrão | 3.6 |
+| GPIO | GPIOC[4:1] | ❌ | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
+| MISC1 | SRB1 | ❌ | ✅ `montage` | atributo global; o nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
+| CONFIG4 | SINGLE_SHOT | ⚙️ | ⚙️ | segue o modo, single-shot na leitura direta e contínuo no buffer | — (fica ⚙️) | — |
+| CONFIG4 | PD_LOFF_COMP | ⚙️ sempre ligado | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
+
+**Saldo do alvo**: 5 campos ficam ⚙️ **por desenho**, porque cada um é função da fiação ou de outro
+mecanismo e não tem valor que o usuário possa querer escolher à parte: Device ID, PD_REFBUF,
+SINGLE_SHOT, PD_LOFF_COMP e DAISY_EN (desde 2026-10-17, §5.6). 2 vão para o DT: BIASREF_INT e a
+descrição da cadeia, que o driver do `v1` recusa. Os outros 26 têm atributo ou mecanismo padrão. O critério da Fase 3 é que nenhuma linha fique ❌ ou ⚠️.
+
+**O que não é registrador e também é funcionalidade do CI**, porque a diretriz é "todas as
+funcionalidades" e não "todos os registradores":
+
+| Funcionalidade | Hoje (as duas) | Alvo | Tipo | Sub |
+|---|---|---|---|---|
+| Pino START | só o comando `START` | `start-gpios` opcional no DT. Com ele, o início é pelo pino, que é o que sincroniza vários chips. **Em aberto**: no modo *cascaded* cada chip é um dispositivo IIO, e um pino de START compartilhado precisa de um dono que nenhum dos drivers é (§5.6) | DT | 3.8 |
+| Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend* | DT + PM | 3.7 |
+| Pino CLKSEL | inferido da presença de `clocks` | idem, documentado no *binding* | DT | 3.8 |
+| `STANDBY` / `WAKEUP` | definidos, sem uso | `runtime_pm` e `system sleep` (`pm_ptr`, `DEFINE_RUNTIME_DEV_PM_OPS`) | padrão (PM) | 3.7 |
+| `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número | — | 3.7 |
+| `RREG`/`WREG` de vários registradores | sempre um | não muda a cobertura; fica como está | — | — |
+| Bits GPIO[7:4] da *status word* em cada amostra | descartados | opcional: canal de varredura. Não é exigido para cobrir GPIOD, que o `gpiochip` já cobre | custom | 3.6 |
+
+#### 3.1.1 Temperatura e alimentação: um campo de MUX, dois mecanismos de leitura
+
+MUX=100 (sensor de temperatura) e MUX=011 (MVDD) são valores do MUX de um canal físico, e não canais
+próprios. O IIO tem canal padrão para os dois (`IIO_TEMP` com `_raw`/`_scale`/`_offset`, e uma tensão
+de alimentação), e o caminho padrão é:
+
+- **leitura direta** de `in_temp_raw` e da tensão de alimentação: o driver troca o MUX de um canal,
+  faz uma conversão single-shot e devolve o MUX. É mecanismo padrão, e é o que um mantenedor espera.
+  A conversão para °C fica em `_scale`/`_offset`, e as constantes vêm do datasheet: 145.300 µV a
+  25 °C e 490 µV/°C, **marcadas `[SBAS499?]`**. Elas estão em §9.3.1, fora das tabelas que
+  `Register_Map_ADS1299.md` transcreveu, e entram na Fase 0 do plano de bancada como dívida. A
+  plataforma converte hoje no *build* (`implementation_plan_hmi_desktop.md` §12.8), e as duas
+  conversões têm de concordar, ou uma das duas está errada.
+- **no buffer**, um canal dedicado ao sensor por toda a sessão: é o `temperature_channel` da
+  `board/medplatform-afe`, que a plataforma usa, e continua customizado. Ele expressa o
+  `in_voltageN_input_mux = temperature` com o ganho limitado a 12, que é a parte que vale guardar.
+  Quando o MUX virar por canal (3.1), esse atributo vira redundante e **sai**, e o limite de ganho
+  passa a ser recusado com `-EINVAL` quando o MUX daquele canal é o sensor e o ganho passa de 12.
+  Um campo, um mecanismo.
+
+Para o MVDD, o que cada canal mede é diferente: (AVDD − AVSS)/2 nos canais 1, 2 e 5–8, DVDD/4 nos 3
+e 4. **`[SBAS499?]`, e a confirmar antes de escrever o `_scale`.** É o tipo de constante que, errada,
+sai como bug em kernel estável.
+
+#### 3.1.2 Status de lead-off: evento e palavra por amostra não são duplicação
+
+A regra "um campo, um mecanismo" tem uma exceção aqui, e ela é justificada. O evento IIO diz
+**quando** um eletrodo se soltou, com carimbo e *poll*. A palavra no buffer diz **em que estado cada
+amostra foi adquirida**, que é o que o registro clínico precisa (`implementation_plan_usb_parity.md`
+§7.2). São duas funções distintas sobre o mesmo bit, e a segunda não se reconstrói a partir da
+primeira sem perder a associação com a amostra.
+
+**O tipo de evento ainda não está decidido, e isso é uma tensão entre as duas bases (§2.2).** O
+candidato natural é `IIO_EV_TYPE_FAULT` com `IIO_EV_DIR_FAULT_OPENWIRE`, e **ele não existe no 6.6 da
+placa**: `grep -n 'FAULT\|OPENWIRE' include/uapi/linux/iio/types.h` não acha nada no `linux-med`. Se
+existir na mainline que for o alvo da submissão, o driver o usa lá e a árvore 6.6 precisa de um
+*backport* do tipo de evento ou de um `#ifdef`, e as duas coisas são custo a declarar. **A conferir na
+mainline antes da subfase 3.5.** O canal `in_voltageN_lead_off` da board, de tipo `IIO_VOLTAGE` sem
+ser tensão, é o ponto que mais vai ser discutido na revisão e entra na carta como pergunta, não como
+afirmação.
+
+**E o modo AC muda o que o bit significa.** Com `FLEAD_OFF` ≠ 00, a excitação é fora de banda, e não
+está estabelecido que `LOFF_STAT*` continue valendo como em DC. A outra leitura é que o host tem de
+detectar a amplitude da excitação nos dados. **A confirmar no datasheet antes de expor o modo AC.** Se
+o bit não valer em AC, o evento é suprimido nesse modo e o atributo diz isso, para não repetir o D2
+(um status que parece "conectado" porque ninguém o habilitou).
+
+### 3.2 Defeitos achados pela auditoria
+
+Nenhum deles é visto por um *build*, e são consertados antes de qualquer funcionalidade nova, porque
+cobertura nova sobre um mecanismo quebrado só multiplica o defeito.
+
+| # | Onde | Defeito | Conserto | Sub |
+|---|---|---|---|---|
+| D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1) | 3.1 |
+| D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3) | 3.0 |
+| D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso | 3.5 |
+| D4 | board | o comentário acima de `ADS1299_REG_LOFF_SENSP` ainda abre com "this driver never writes either of them", e o próprio bloco diz depois que `ads1299_set_lead_off()` os grava | reescrever o comentário | 3.0 |
+| D5 | as duas | `ads1299_read_one()` limpa o `PD` do canal lido e nunca o devolve, então uma leitura direta deixa um canal ligado contra a máscara de varredura | restaurar o `PD` ao fim da leitura | 3.0 |
+| D6 | PR | `input_mux = temperature`/`supply` devolve a escala de tensão, sem conversão | §3.1.1 | 3.2 |
+| D7 | *binding* | `interrupts` é obrigatório, mas o driver tem um caminho sem IRQ. É coerente **só se** o caminho sem DRDY ficar fora do `v1` (§5.2), e o *binding* e o driver têm de dizer a mesma coisa na série | decidir junto com a §5.2 | 3.0 |
+
+### 3.3 As duas branches, e para onde vai o trabalho
+
+A cobertura é feita na **`feature/ads1299-mcp2210-driver`**, que é a que vira série. A
+`board/medplatform-afe` está 801 linhas à frente nesse arquivo, e boa parte do que ela tem a mais é
+cobertura que a série precisa:
+
+| Commit da board | O que traz | Destino |
+|---|---|---|
+| `df866328fcff` | releitura de toda escrita de configuração + checagem da *status word* | **sobe como está**: robustez sem ABI nova |
+| `763fa13369bd` | lead-off DC, `lead_off_monitored`, palavra por amostra | sobe **remodelado** pela §3.1: parâmetros de LOFF, *sense* por canal, sem a política de referencial |
+| `983c5cf63b54` | `montage` (SRB1), com a derivação do bias trocada junto | sobe **remodelado**: o SRB1 como atributo, sem mexer no `BIAS_SENS*` |
+| `efba42f1ee08` | canal de temperatura e todos os CHnSET derivados de um estado | sobe **o estado único**. O `temperature_channel` vira MUX por canal (§3.1.1) |
+| `2d1f7fb7efc1` | autoteste pelo nível DC | já está na feature como `e577cc080449` |
+| `801dbf215569`, `c2291fd29166`, `643c0d757892` | *pump* de SPI em tempo real; driver da placa do MCP2210 | ficam na board: são da placa, não da cobertura |
+
+Depois disso a board é **rebaseada sobre a feature** e fica só com o que é da placa. É a regra da
+§2.2 aplicada ao conteúdo: o que a placa testa e o que se submete são a mesma história.
+
+**O preço disso fica escrito aqui, porque cai fora deste plano**: a ABI de que a plataforma depende
+hoje muda. A tradução das ligações `spi`/`usb` (`do_derive_device_options`, no recipe do
+`eeg-acquisition-service`) e o driver `iio` do framework usam `hardwaregain` compartilhado,
+`input_mux`, `test_signal`, `bias_drive` (três modos), `montage`, `lead_off`, `lead_off_monitored`,
+`temperature_channel` e `in_voltageN_lead_off`. Com a §3.1, o ganho e o MUX passam a ser por canal,
+o `bias_drive` perde o modo `derived` (que vira escrita por canal em `bias_sense_*`), o
+`temperature_channel` sai e a política de referencial passa a ser da plataforma. **Uma imagem `usb`
+construída com a receita antiga sobre um módulo novo não adquire**, e o `CLAUDE.md` já descreve o
+mesmo efeito para o `montage`. Por isso a troca na plataforma tem de entrar no **mesmo** `SRCREV` que
+leva a ABI nova para a imagem, e `make check` mais a suíte `tests/derive` são o portão.
 
 ---
 
@@ -371,6 +532,22 @@ morrem. Vão para o DT: `compatible` (`ti,ads1299`, `-6`, `-4`), `reg`, `spi-max
 `interrupts` (DRDY), `reset-gpios`, `avdd-supply`, `vref-supply` opcional, `clocks`/`clock-names`.
 **Não** vão para o DT: ganho, taxa, corrente de lead-off, SRB1 — são configuração, e configuração
 mora no sysfs. Um `ti,lead-off-current-na` no *binding* é pedido de reescrita garantido.
+
+**O que a cobertura total acrescenta ao *binding*** (§3.1). Tudo isto é fiação, e nada disto está no
+`ti,ads1299.yaml` da feature hoje:
+
+| Propriedade | Por quê | Sub |
+|---|---|---|
+| `gpio-controller`, `#gpio-cells = <2>` | o `gpiochip` dos GPIO1–4 | 3.6 |
+| `#clock-cells = <0>` | o CI como provedor de clock (CLK_EN) quando roda do oscilador interno. **Feito** (`8c3d602693f1`), com `clock-output-names` | 3.8 |
+| `start-gpios` | o pino START, que sincroniza chips em cascata | 3.8 |
+| `powerdown-gpios` | o pino PWDN | 3.7 |
+| `dvdd-supply` | a alimentação digital, que hoje não é descrita | 3.7 |
+| booleano de BIASREF externo (nome a decidir, prefixo `ti,`) | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora | 3.4 |
+| `#daisy-chained-devices` (a propriedade comum, `common-properties.txt`) | quantos chips dividem o CS, o que muda o quadro inteiro. O *binding* descreve o hardware mesmo que o driver não o suporte: com N > 1 exige `clocks` e proíbe `#clock-cells`, e o driver do `v1` recusa a cadeia. **Feito** (`8c3d602693f1`) | 3.8 |
+
+Cada propriedade nova entra com o exemplo correspondente, e a injeção de falha da Fase 2 é refeita
+para ela.
 
 ---
 
@@ -491,11 +668,37 @@ distância.
 
 ### 5.6 Daisy-chain
 
-`DAISY_EN` só faz sentido com mais de um chip em cascata, o que muda a leitura de quadro inteira.
-Expor o bit sem suportar a topologia é oferecer um interruptor que quebra o driver.
-**Recomendação**: implementar o bit, documentar que a topologia em cascata não é suportada, e
-recusar `DAISY_EN=1` enquanto não houver. Uma recusa explícita é honesta; um bit que corrompe o
-fluxo de amostras não é.
+**Decisão de 2026-10-17: a daisy-chain sai do `v1`.** O *binding* a descreve, o driver a recusa com
+`-EOPNOTSUPP` no *probe*, e o código que a suporta está pronto e guardado na branch
+`wip/ads1299-daisy-chain` do `linux-med` (`7c9cb5cf7277`), com os testes de host dele no histórico
+de `tests/ads1299/feature.c` (`dcb13d3`). Ela vira uma série separada, depois do `v1`.
+
+Ela chegou a ser implementada (2026-10-17) e foi o que mostrou por que não deve ir agora:
+
+- **O datasheet corrige o que este plano dizia** (SBAS499 §10.1.4.2 e Tabela 13). `DAISY_EN = 0` é o
+  modo daisy-chain, e é o **reset**; o 1, leitura múltipla, só repete dados sob `RDATAC`, que o driver
+  não usa. E a cadeia divide o DIN, então **todo registro escrito chega a todos os chips**: o canal *n*
+  de cada chip divide um CHnSET, a cadeia roda de um clock externo e o bias não pode ser usado. O que
+  um RREG devolve numa cadeia não está documentado, então só o ID do primeiro chip pode ser conferido.
+  A versão anterior desta seção dizia o contrário nos dois pontos.
+- **O custo cresce com o resto da cobertura.** O padrão da mainline para cadeias (`gpio-max3191x`, e o
+  `ad7280a`, cujos chips têm endereço) é "N chips iguais, uma configuração". Num conversor com
+  configuração por canal, cada funcionalidade das subfases 3.1 e 3.2 teria de amarrar o canal *n* de
+  todos os chips, e a cadeia passaria a ser caso especial em toda a ABI por canal.
+- **Não há como testá-la em silício aqui**: a bancada tem um chip.
+
+**O que ficou no `v1`**, porque vale para um chip só (`ed48db8df4c8`): `DAISY_EN = 0` gravado em vez
+de assumido do reset; a *status word* conferida (1100b) em toda leitura do autoteste; e a recusa de
+`#daisy-chained-devices` > 1. Sem a recusa, uma cadeia de dois chips passaria no *probe* como um
+chip de 8 canais e perderia os outros 8 sem aviso - medido no *fake*, é a injeção de falha do teste.
+
+**Quem tiver a placa em cadeia**, até a série separada: aplica o `7c9cb5cf7277` como patch fora da
+árvore (nesta plataforma, a camada adjunta é o lugar dele); ou religa em modo *cascaded*, um CS por
+chip, que o `v1` atende - cada chip é um dispositivo IIO, e um deles fornece o clock aos outros pelo
+`#clock-cells`. O que o *cascaded* ainda não tem é o início simultâneo: sem `start-gpios`, o START vai
+por comando, chip a chip, e a defasagem entre eles fica constante (o clock é comum) mas existe. Um
+pino de START compartilhado entre dispositivos IIO separados precisa de um dono, e esse é o ponto em
+aberto da 3.8.
 
 ---
 
@@ -554,16 +757,49 @@ que o `dt_binding_check` **reprova**. Um esquema que aceita qualquer coisa é pi
 
 ### Fase 3 — reconciliar a ABI com o padrão `[sem hardware]`
 
-**Objetivo**: a diretriz de completude implementada pelos mecanismos do §3.
-**Ordem interna**: canal de temperatura e MVDD → `gpiochip` → eventos IIO para lead-off e
-`BIAS_STAT` → atributos que sobram (SRB1, SRB2, MUX por canal, `LOFF`, `BIAS_SENS*`) → `daisy-chain`
-recusado explicitamente.
-**Critérios**: cada funcionalidade da Tabela 11 do datasheet tem **um** mecanismo; `grep` da tabela
-contra o driver não deixa linha sem cobertura; a documentação de ABI cobre exatamente os
-customizados e nada mais.
-**Injeção de falha**: para cada atributo, escrever um valor inválido e confirmar `-EINVAL` — nunca
-aceitação silenciosa. É a mesma regra do `ControlAck`.
-**Registro**: `implementation_plan_iio_afe.md`, que é a autoridade sobre o driver.
+**Objetivo**: os 33 campos da §3.1 e as funcionalidades fora de registrador fechados, cada um com
+**um** mecanismo, sem nenhuma linha ❌ ou ⚠️.
+
+**Onde**: na `feature/ads1299-mcp2210-driver`, um commit por funcionalidade, para que a série se
+leia como uma lista de capacidades e o revisor possa recusar uma sem levar as outras.
+
+**Critérios que valem para todas as subfases:**
+- **`tests/ads1299` cobre cada campo novo**: o byte gravado em cada registrador para cada valor do
+  atributo, contra o *fake* do conversor. Onde o firmware do M33 também escreve o campo, o
+  `afe_regs.c` dele é o oráculo, como já é hoje. Um teste escrito a partir da mesma leitura do
+  datasheet que escreveu o código prova consistência e não correção (`implementation_plan_afe_bench.md`
+  §13.1), e o §13 registra cada campo dizendo qual dos dois ele tem.
+- **Valor inválido dá `-EINVAL`** em cada atributo, nunca aceitação silenciosa. É a mesma regra do
+  `ControlAck`.
+- **Mudança com o buffer ligado dá `-EBUSY`** em tudo o que muda o significado de uma amostra (MUX,
+  SRB, *sense*, ganho), pelo mesmo argumento que o `bias_drive_store` já escreve: duas configurações
+  num registro, sem marca de onde uma termina.
+- **`checkpatch --strict` 0/0/0, `W=1` e `sparse` limpos nas duas bases** (§2.2), a cada commit e não
+  só no fim.
+- **A documentação de ABI** (`sysfs-bus-iio-ads1299`) **cresce no mesmo commit** que o atributo.
+
+**Subfases, em ordem.** Cada uma depende da anterior só onde está dito.
+
+| Sub | Conteúdo | Campos (§3.1) | Injeção de falha que prova o teste |
+|---|---|---|---|
+| **3.0** | **Base**: trazer da board a releitura, a *status word*, o estado único dos CHnSET e o lead-off (§3.3); corrigir D2, D4, D5 e D7 | — | reverter a releitura e ver o teste de "registro que a peça não guardou" falhar |
+| **3.1** | **MUX por canal** + `BIAS_MEAS` seguindo o MUX + `test_signal` com DC | MUX, BIAS_MEAS, CAL_FREQ | gravar MUX=010 sem `BIAS_MEAS` e ver o teste de D1 falhar |
+| **3.2** | **Ganho por canal** (`hardwaregain` separado); `in_temp_*` e alimentação na leitura direta; `temperature_channel` sai | PGA, MUX (100, 011) | trocar o `_offset` da temperatura e ver a conversão de referência (145.300 µV → 25 °C) falhar |
+| **3.3** | **SRB1** (global) e **SRB2** (por canal) | SRB1, SRB2 | deslocar a máscara do SRB2 para o bit 4 (que é do PGA) e ver o teste do byte do CHnSET falhar |
+| **3.4** | **Bias por campo**: `bias_drive` = PD_BIAS; `bias_sense_p/n` por canal; BIASREF externo pelo DT. A política de referencial sai do driver | PD_BIAS, BIAS_SENSP/N, BIASREF_INT | deixar a política de referencial ligada e ver o teste "SRB1 não mexe em BIAS_SENSN" falhar |
+| **3.5** | **Lead-off completo**: limiar, corrente, frequência; *sense* P/N e FLIP por canal; `BIAS_LOFF_SENS` e `BIAS_STAT` sem cache; PD_LOFF_COMP derivado; evento + palavra por amostra (§3.1.2) | LOFF (3), LOFF_SENSP/N, LOFF_FLIP, LOFF_STATP/N, BIAS_LOFF_SENS, BIAS_STAT, PD_LOFF_COMP | pôr o CONFIG3 em cache e ver o teste do `BIAS_STAT` falhar (D3) |
+| **3.6** | **`gpiochip`** dos GPIO1–4, registrador volátil; *binding* com `gpio-controller` | GPIOD, GPIOC | inverter o sentido do GPIOC (0 = saída) e ver o teste de direção falhar |
+| **3.7** | **Energia**: `STANDBY`/`WAKEUP` em PM, `powerdown-gpios`, `dvdd-supply`; a medida de `RDATAC` a 16 kSPS | — (comandos e pinos) | retomar sem reprogramar o cache (`regcache_sync`) e ver o teste de *resume* falhar |
+| **3.8** | **Vários chips**: provedor de clock (CLK_EN), `DAISY_EN` gravado, a cadeia descrita no *binding* e recusada no driver, `start-gpios` (§5.6) | DAISY_EN, CLK_EN | tirar a recusa e ver uma cadeia de dois passar como um chip de 8 canais |
+
+**A cobertura não depende de uso, e isso tem um custo de verificação que fica escrito.** As subfases
+3.3 (SRB2), 3.6, 3.7 e 3.8, e o modo AC da 3.5, cobrem funções que **esta placa não usa nem pode
+usar**: a chave SRB1 é manual e externa (`BRINGUP_AFE.md` §6.9), os GPIO não estão ligados a nada, e
+há um chip só. Para elas o teste de host é a evidência máxima disponível, e o §13 diz isso campo a
+campo, em vez de deixar "coberto" ser lido como "testado em silício".
+
+**Registro**: §13 deste plano, campo a campo; `implementation_plan_iio_afe.md` para o que muda na
+arquitetura do driver.
 
 ### Fase 4 — silício `[precisa do módulo]`
 
@@ -641,6 +877,11 @@ que converte o atraso do módulo em progresso, em vez de espera.
 | O módulo não chega e a Fase 4 não acontece | submeter sem teste **não** é opção; as Fases 1 a 3 continuam valendo como resultado |
 | O arquivo submetido divergir do nosso | a Fase 7 existe por isso; e nada de *delta* local (§5.2, saída 2) |
 | O ciclo de revisão consumir dezembro | a submissão é o entregável, não a aceitação (§12) |
+| A cobertura total multiplica a ABI customizada (de 8 atributos para ~20, metade por canal) e reabre a tensão do §3 | a ABI é a pergunta explícita da carta (§5.4); cada atributo customizado tem a alternativa padrão considerada escrita; uma série por capacidade (Fase 3) deixa o mantenedor recusar uma sem levar as outras |
+| A ABI nova quebra a plataforma (§3.3) | a troca na tradução por ligação entra no mesmo `SRCREV`; `tests/derive` e `make check` são o portão |
+| Funções sem silício nesta bancada (SRB2, GPIO, saída de clock, lead-off AC, PM) | registradas como "testado no host", nunca como "validado"; a daisy-chain já saiu do `v1` (§5.6) |
+| `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | conferir na mainline-alvo antes da 3.5; o custo do *backport* ou do `#ifdef` é declarado, não descoberto |
+| Constantes fora das tabelas transcritas (temperatura, MVDD) | `[SBAS499?]` até a Fase 0 do plano de bancada; nenhum `_scale`/`_offset` é submetido com elas pendentes |
 
 ---
 
@@ -677,7 +918,17 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 0 | `S:class-devupstream` confirmado em build | — | — |
 | 1 | `checkpatch --strict` 0/0/0; `sparse` e `W=1` limpos | — | — |
 | 2 | `dt_binding_check` limpo; injeção de falha vista | — | — |
-| 3 | toda linha da Tabela 11 coberta por um mecanismo | — | — |
+| 3 | auditoria campo a campo (§3.1): PR 6 ✅ / 5 ⚙️ / 7 ⚠️ / 15 ❌; board 9 / 10 / 5 / 9, de 33 | **medido**, 7 defeitos (§3.2) | 2026-10-16 |
+| 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
+| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC, `_available` e `-EBUSY` feitos (`ad3a2ec3641b`, só host); MUX por canal e D1 em aberto | 2026-10-17 |
+| 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
+| 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
+| 3.4 | bias por campo; BIASREF externo no DT | — | — |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | — | — |
+| 3.6 | `gpiochip` (só host) | — | — |
+| 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
+| 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
+| 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | — | — |
 | 4 | autoteste passa com tolerância medida | — | — |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
 | 6 | série na lore, Message-ID | — | — |
