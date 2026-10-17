@@ -69,6 +69,7 @@ typedef unsigned int gfp_t;
 #define __ffs(x)		((unsigned int)__builtin_ctzl(x))
 #define FIELD_PREP(mask, val)	((((unsigned long)(val)) << __ffs(mask)) & (mask))
 #define FIELD_GET(mask, val)	((((unsigned long)(val)) & (mask)) >> __ffs(mask))
+#define FIELD_PREP_CONST(mask, val)	FIELD_PREP(mask, val)
 
 #define U64_MAX			UINT64_MAX
 #define S32_MAX			INT32_MAX

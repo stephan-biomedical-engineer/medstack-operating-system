@@ -7,7 +7,8 @@
  * The driver is taken from that branch by the Makefile (FEATURE_DRIVER) and
  * included here as it ships, against the same shim and the same fake converter
  * as main.c. What this file covers is what the board branch does not have: the
- * CLK pin as a clock output and the daisy chain.
+ * CLK pin as a clock output, the daisy chain, and the test generator's every
+ * setting.
  *
  * Every check here is consistency, not correctness: the fake was written from
  * the same reading of the datasheet as the driver, and this bench has one
@@ -23,7 +24,7 @@
 
 struct check_counters counters;
 
-enum { R_CONFIG1 = 0x01, R_CONFIG3 = 0x03, R_CH1SET = 0x05 };
+enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_CH1SET = 0x05 };
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
 
@@ -356,6 +357,71 @@ static void test_daisy_order(void)
 	CHECK(code24(shim_scans[0].value[16]) != code24(shim_scans[0].value[8]));
 }
 
+static void test_test_signal(void)
+{
+	/* Every name, and the CONFIG2 byte it must write [SBAS499 Table 14]:
+	 * 110 reserved, INT_CAL, 0 reserved, CAL_AMP, CAL_FREQ. */
+	static const struct { const char *name; u8 config2; } table[] = {
+		{ "off",     0xc0 },
+		{ "1x_slow", 0xd0 },
+		{ "1x_fast", 0xd1 },
+		{ "1x_dc",   0xd3 },
+		{ "2x_slow", 0xd4 },
+		{ "2x_fast", 0xd5 },
+		{ "2x_dc",   0xd7 },
+	};
+	char name[16];
+	int val, val2;
+
+	section("sinal de teste: os sete valores, o byte do CONFIG2 e a volta");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(!strcmp(show("test_signal_available"),
+		      "off 1x_slow 1x_fast 1x_dc 2x_slow 2x_fast 2x_dc\n"));
+	for (unsigned int i = 0; i < ARRAY_SIZE(table); i++) {
+		snprintf(name, sizeof(name), "%s\n", table[i].name);
+		CHECK(store("test_signal", name) > 0);
+		CHECK_EQ(fake.reg[R_CONFIG2], table[i].config2);
+		CHECK(!strcmp(show("test_signal"), name));
+	}
+
+	section("sinal de teste: em DC, a leitura é o nível do gerador");
+	CHECK(store("input_mux", "test_signal") > 0);
+	CHECK(store("test_signal", "1x_dc") > 0);
+	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_RAW, &val, &val2), IIO_VAL_INT);
+	CHECK_EQ(val, fake_code(0));
+	CHECK(val > 0);
+	CHECK(store("test_signal", "2x_dc") > 0);
+	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_RAW, &val2, &val2), IIO_VAL_INT);
+	CHECK_EQ(val2, fake_code(0));
+	CHECK(val2 > val + val / 2);			/* twice, give or take rounding */
+	CHECK(store("input_mux", "normal") > 0);
+
+	section("sinal de teste: recusas");
+	CHECK_EQ(store("test_signal", "loud"), -EINVAL);
+	CHECK_EQ(store("test_signal", "1x"), -EINVAL);
+	CHECK_EQ(store("test_signal", "1x_dc_"), -EINVAL);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xd7);		/* nothing written */
+
+	/* With the buffer running, a test channel's samples would change. */
+	buffer_on();
+	CHECK_EQ(store("test_signal", "off"), -EBUSY);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xd7);
+	buffer_off();
+	CHECK(store("test_signal", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);
+
+	/* CAL_FREQ = 10 is "do not use"; only a register write puts it there,
+	 * and show says it has no name rather than calling it something. */
+	CHECK_EQ(regmap_write(priv()->regmap, ADS1299_REG_CONFIG2, 0xd2), 0);
+	CHECK(!strcmp(show("test_signal"), "<error -22>"));
+	/* The generator off: amplitude and frequency bits do not matter. */
+	CHECK_EQ(regmap_write(priv()->regmap, ADS1299_REG_CONFIG2, 0xc7), 0);
+	CHECK(!strcmp(show("test_signal"), "off\n"));
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -364,6 +430,7 @@ int main(void)
 	test_daisy_chain();
 	test_daisy_refusals();
 	test_daisy_order();
+	test_test_signal();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então nem a saída de clock\n"

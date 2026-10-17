@@ -45,7 +45,9 @@ $(BUILD)/feature-ti-ads1299.c: FORCE
 	@git -C ../../linux-med show $(FEATURE_REF):drivers/iio/adc/ti-ads1299.c > $@.new
 	@cmp -s $@.new $@ && rm -f $@.new || mv $@.new $@
 
-$(BUILD)/feature.o: feature.c $(HEADERS) $(FEATURE_DRIVER)
+# Always rebuilt: FEATURE_DRIVER can name an older file than the last one, and
+# a date comparison would then keep the binary of the other driver.
+$(BUILD)/feature.o: feature.c $(HEADERS) $(FEATURE_DRIVER) FORCE
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -DFEATURE_DRIVER='"$(abspath $(FEATURE_DRIVER))"' -c -o $@ feature.c
 
