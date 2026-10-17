@@ -65,6 +65,11 @@ static double generator_uv(void)
 
 s32 fake_code(unsigned int channel)
 {
+	return fake_chain_code(0, channel);
+}
+
+s32 fake_chain_code(unsigned int chip, unsigned int channel)
+{
 	const u8 chset = fake.reg[R_CH1SET + channel];
 	const int gain = fake_gain(channel);
 	double uv;
@@ -74,7 +79,7 @@ s32 fake_code(unsigned int channel)
 		return 0;
 	switch (chset & 0x07) {
 	case 0:
-		uv = fake.input_uv[channel];
+		uv = chip ? fake.chain_input_uv[chip][channel] : fake.input_uv[channel];
 		break;
 	case 4:				/* the temperature sensor, at 25 degC */
 		uv = 145300.0;
@@ -137,12 +142,24 @@ static void rdata(u8 *rx, unsigned int len)
 		fake.out_of_step--;
 		sync = 0x40;
 	}
-	/* 1100, LOFF_STATP, LOFF_STATN, GPIO[7:4] */
-	rx[1] = (u8)(sync | (sp >> 4));
-	rx[2] = (u8)((sp << 4) | (sn >> 4));
-	rx[3] = (u8)((sn << 4) | (fake.reg[R_GPIO] >> 4));
-	for (unsigned int c = 0; c < FAKE_CHANNELS && 4 + 3 * c + 2 < len; c++)
-		put_be24(rx + 4 + 3 * c, fake_code(c));
+	for (unsigned int chip = 0; chip < (fake.chips ? fake.chips : 1); chip++) {
+		const unsigned int base = 1 + chip * (3 + 3 * FAKE_CHANNELS);
+		unsigned int source = chip;
+
+		/* Past the last wired device DAISY_IN is at DGND: zeros. */
+		if (fake.chips_wired && chip >= fake.chips_wired)
+			break;
+		if (fake.chain_swapped && chip < 2)
+			source = 1 - chip;
+		if (base + 2 >= len)
+			break;
+		/* 1100, LOFF_STATP, LOFF_STATN, GPIO[7:4] */
+		rx[base] = (u8)(sync | (sp >> 4));
+		rx[base + 1] = (u8)((sp << 4) | (sn >> 4));
+		rx[base + 2] = (u8)((sn << 4) | (fake.reg[R_GPIO] >> 4));
+		for (unsigned int c = 0; c < FAKE_CHANNELS && base + 3 + 3 * c + 2 < len; c++)
+			put_be24(rx + base + 3 + 3 * c, fake_chain_code(source, c));
+	}
 }
 
 static void write_reg(unsigned int r, u8 v)
@@ -201,17 +218,27 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 	case 0x02:			/* WAKEUP */
 		break;
 	case 0x06:			/* RESET */
+		if (fake.reset_ignored)
+			break;
 		{
 			bool wrong = fake.id_wrong;
 			int stuck = fake.stuck_reg;
 			u8 mask = fake.stuck_mask;
 			double gen = fake.generator_error;
 			double in[FAKE_CHANNELS];
+			double chain_in[FAKE_MAX_CHIPS][FAKE_CHANNELS];
+			unsigned int chips = fake.chips, wired = fake.chips_wired;
+			bool swapped = fake.chain_swapped;
 			s32 off = fake.offset_codes;
 			u8 dp = fake.detached_p, dn = fake.detached_n;
 
 			memcpy(in, fake.input_uv, sizeof(in));
+			memcpy(chain_in, fake.chain_input_uv, sizeof(chain_in));
 			fake_power_up();
+			fake.chips = chips;
+			fake.chips_wired = wired;
+			fake.chain_swapped = swapped;
+			memcpy(fake.chain_input_uv, chain_in, sizeof(chain_in));
 			fake.id_wrong = wrong;
 			fake.stuck_reg = stuck;
 			fake.stuck_mask = mask;

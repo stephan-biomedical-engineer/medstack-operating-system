@@ -57,6 +57,7 @@ typedef unsigned int gfp_t;
 #define GENMASK(h, l)		(((~0UL) - (1UL << (l)) + 1) & (~0UL >> (64 - 1 - (h))))
 #define ARRAY_SIZE(a)		(sizeof(a) / sizeof((a)[0]))
 #define DIV_ROUND_UP(n, d)	(((n) + (d) - 1) / (d))
+#define ALIGN(x, a)		(((x) + (a) - 1) / (a) * (a))
 #define container_of(p, t, m)	((t *)((char *)(p) - offsetof(t, m)))
 
 /* Type-generic, like the kernel's, so that an s64 is not narrowed to int. */
@@ -123,9 +124,11 @@ typedef int spinlock_t;
 struct device {
 	const char *name;
 };
+static inline const char *dev_name(const struct device *d) { return d->name; }
 
 extern int shim_verbose;
 extern char shim_last_error[256];
+extern char shim_error_log[2048];	/* every error since shim_reset() */
 void shim_log(bool error, const char *fmt, ...);
 #define dev_err(dev, ...)	((void)(dev), shim_log(true, __VA_ARGS__))
 #define dev_info(dev, ...)	((void)(dev), shim_log(false, __VA_ARGS__))
@@ -139,7 +142,26 @@ static inline void *devm_kcalloc(struct device *d, size_t n, size_t s, gfp_t g)
 	(void)d; (void)g;
 	return calloc(n, s);
 }
+static inline void *devm_kzalloc(struct device *d, size_t s, gfp_t g)
+{
+	(void)d; (void)g;
+	return calloc(1, s);
+}
+static inline void *kcalloc(size_t n, size_t s, gfp_t g) { (void)g; return calloc(n, s); }
+static inline void kfree(const void *p) { free((void *)p); }
 char *devm_kasprintf(struct device *d, gfp_t g, const char *fmt, ...);
+
+/*
+ * Firmware properties: the few the driver reads, set by the test. A property
+ * is absent unless the test says otherwise.
+ */
+extern bool shim_prop_clock_cells;	/* "#clock-cells" */
+extern u32 shim_prop_daisy;		/* "#daisy-chained-devices", 0: absent */
+extern const char *shim_prop_clock_name; /* "clock-output-names", NULL: absent */
+bool device_property_present(const struct device *d, const char *name);
+int device_property_read_u32(const struct device *d, const char *name, u32 *val);
+int device_property_read_string(const struct device *d, const char *name,
+				const char **val);
 int devm_add_action_or_reset(struct device *d, void (*fn)(void *), void *data);
 
 /* ------------------------------------------------------- time, sleeping */
@@ -207,11 +229,36 @@ static inline struct regulator *devm_regulator_get(struct device *d, const char 
 static inline int regulator_enable(struct regulator *r) { r->enabled++; return 0; }
 static inline int regulator_disable(struct regulator *r) { r->enabled--; return 0; }
 static inline int regulator_get_voltage(struct regulator *r) { return r->uv; }
+/* An external clock on CLK when the test gives one, none otherwise. */
+extern struct clk *shim_ext_clk;
 static inline struct clk *devm_clk_get_optional_enabled(struct device *d, const char *id)
 {
 	(void)d; (void)id;
-	return NULL;
+	return shim_ext_clk;
 }
+
+/* clk-provider.h: a provider registers one clk_hw, which the test drives. */
+struct clk_hw;
+struct clk_ops {
+	unsigned long (*recalc_rate)(struct clk_hw *hw, unsigned long parent_rate);
+	int (*prepare)(struct clk_hw *hw);
+	void (*unprepare)(struct clk_hw *hw);
+	int (*is_prepared)(struct clk_hw *hw);
+};
+struct clk_init_data {
+	const char *name;
+	const struct clk_ops *ops;
+};
+struct clk_hw {
+	const struct clk_init_data *init;
+};
+extern struct clk_hw *shim_clk_hw;		/* the registered output, or NULL */
+extern char shim_clk_hw_name[64];		/* its name, copied at registration */
+extern const struct clk_ops *shim_clk_hw_ops;
+int devm_clk_hw_register(struct device *d, struct clk_hw *hw);
+struct clk_hw *of_clk_hw_simple_get(void *spec, void *data);
+int devm_of_clk_add_hw_provider(struct device *d,
+				struct clk_hw *(*get)(void *, void *), void *data);
 static inline unsigned long clk_get_rate(struct clk *c) { return c ? c->rate : 0; }
 static inline struct gpio_desc *devm_gpiod_get_optional(struct device *d, const char *id, int f)
 {

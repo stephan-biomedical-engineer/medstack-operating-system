@@ -7,6 +7,7 @@
 
 int shim_verbose;
 char shim_last_error[256];
+char shim_error_log[2048];
 unsigned long shim_sleeps;
 struct regulator *shim_vref;
 struct regulator shim_avdd = { .uv = 5000000 };
@@ -19,6 +20,13 @@ unsigned int shim_cache_drops;
 unsigned int shim_spi_setups;
 bool shim_spi_setup_rt;
 static s64 shim_clock_ns = 1000000000;
+bool shim_prop_clock_cells;
+u32 shim_prop_daisy;
+const char *shim_prop_clock_name;
+struct clk *shim_ext_clk;
+struct clk_hw *shim_clk_hw;
+char shim_clk_hw_name[64];
+const struct clk_ops *shim_clk_hw_ops;
 
 static struct spi_message *pending[8];
 static unsigned int pending_count;
@@ -31,8 +39,12 @@ void shim_log(bool error, const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
-	if (error)
+	if (error) {
+		size_t used = strlen(shim_error_log);
+
 		snprintf(shim_last_error, sizeof(shim_last_error), "%s", line);
+		snprintf(shim_error_log + used, sizeof(shim_error_log) - used, "%s", line);
+	}
 	if (shim_verbose)
 		printf("          [kernel] %s", line);
 }
@@ -40,6 +52,7 @@ void shim_log(bool error, const char *fmt, ...)
 void shim_reset(void)
 {
 	shim_last_error[0] = '\0';
+	shim_error_log[0] = '\0';
 	shim_sleeps = 0;
 	shim_vref = NULL;
 	shim_irq_handler = NULL;
@@ -50,6 +63,72 @@ void shim_reset(void)
 	shim_spi_setups = 0;
 	shim_spi_setup_rt = false;
 	pending_count = 0;
+	shim_prop_clock_cells = false;
+	shim_prop_daisy = 0;
+	shim_prop_clock_name = NULL;
+	shim_ext_clk = NULL;
+	shim_clk_hw = NULL;
+	shim_clk_hw_name[0] = '\0';
+	shim_clk_hw_ops = NULL;
+}
+
+bool device_property_present(const struct device *d, const char *name)
+{
+	(void)d;
+	if (!strcmp(name, "#clock-cells"))
+		return shim_prop_clock_cells;
+	if (!strcmp(name, "#daisy-chained-devices"))
+		return shim_prop_daisy != 0;
+	if (!strcmp(name, "clock-output-names"))
+		return shim_prop_clock_name != NULL;
+	return false;
+}
+
+int device_property_read_u32(const struct device *d, const char *name, u32 *val)
+{
+	(void)d;
+	if (!strcmp(name, "#daisy-chained-devices") && shim_prop_daisy) {
+		*val = shim_prop_daisy;
+		return 0;
+	}
+	return -EINVAL;
+}
+
+int device_property_read_string(const struct device *d, const char *name,
+				const char **val)
+{
+	(void)d;
+	if (!strcmp(name, "clock-output-names") && shim_prop_clock_name) {
+		*val = shim_prop_clock_name;
+		return 0;
+	}
+	return -EINVAL;
+}
+
+/*
+ * The init data lives on the registering function's stack, as in the kernel,
+ * so what the test needs from it is copied here.
+ */
+int devm_clk_hw_register(struct device *d, struct clk_hw *hw)
+{
+	(void)d;
+	shim_clk_hw = hw;
+	snprintf(shim_clk_hw_name, sizeof(shim_clk_hw_name), "%s", hw->init->name);
+	shim_clk_hw_ops = hw->init->ops;
+	return 0;
+}
+
+struct clk_hw *of_clk_hw_simple_get(void *spec, void *data)
+{
+	(void)spec;
+	return data;
+}
+
+int devm_of_clk_add_hw_provider(struct device *d,
+				struct clk_hw *(*get)(void *, void *), void *data)
+{
+	(void)d; (void)get; (void)data;
+	return 0;
 }
 
 char *devm_kasprintf(struct device *d, gfp_t g, const char *fmt, ...)
@@ -343,7 +422,7 @@ int iio_push_to_buffers_with_timestamp(struct iio_dev *d, void *data, s64 ts)
 		return -ENOSPC;
 	s = &shim_scans[shim_scan_count++];
 	memset(s, 0, sizeof(*s));
-	for (int i = 0; i < d->num_channels && n < 9; i++)
+	for (int i = 0; i < d->num_channels && n < SHIM_SCAN_VALUES; i++)
 		if (d->channels[i].type == IIO_VOLTAGE &&
 		    test_bit((unsigned int)d->channels[i].scan_index, d->active_scan_mask))
 			n++;

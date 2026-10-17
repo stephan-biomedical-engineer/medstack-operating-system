@@ -9,8 +9,9 @@
 #include "kernel_shim.h"
 
 /* A scan the driver pushed to the IIO buffer, as the buffer received it. */
+#define SHIM_SCAN_VALUES	64
 struct shim_scan {
-	u32 value[9];
+	u32 value[SHIM_SCAN_VALUES];
 	unsigned int count;	/* channels in it, the timestamp apart */
 	s64 timestamp;
 };

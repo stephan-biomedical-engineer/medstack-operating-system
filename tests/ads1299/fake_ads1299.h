@@ -28,6 +28,7 @@
 #define FAKE_REGS	0x18
 #define FAKE_CHANNELS	8
 #define FAKE_VREF_UV	4500000.0
+#define FAKE_MAX_CHIPS	8
 
 struct fake_ads1299 {
 	u8 reg[FAKE_REGS];
@@ -35,8 +36,19 @@ struct fake_ads1299 {
 	bool started;
 	u64 conversions;	/* conversions the part has made since power-up */
 
+	/*
+	 * A daisy chain: chips devices behind one chip select and one DIN, so
+	 * every register write reaches all of them and one register file
+	 * stands for every device. 0 is a single device. RDATA carries each
+	 * device's status word and samples in chain order.
+	 */
+	unsigned int chips;
+	unsigned int chips_wired;	/* 0: all; fewer: the chain ends early */
+	bool chain_swapped;		/* fault: devices 1 and 2 answer in reverse */
+
 	/* What is on the inputs. */
 	double input_uv[FAKE_CHANNELS];	/* MUX normal: the electrodes */
+	double chain_input_uv[FAKE_MAX_CHIPS][FAKE_CHANNELS]; /* devices 2 on */
 	s32 offset_codes;		/* added to every code: the part's offset */
 	u8 detached_p, detached_n;	/* electrodes off, per input */
 
@@ -47,6 +59,7 @@ struct fake_ads1299 {
 	u8 stuck_mask;			/* bits of stuck_reg a write does not change */
 	int fail_transfers;		/* the next n transfers fail at the bus */
 	unsigned int out_of_step;	/* the next n RDATA replies open 0100, not 1100 */
+	bool reset_ignored;		/* RESET does not take: state is what was left */
 
 	/* What happened, for the tests to read. */
 	unsigned int transfers;
@@ -67,6 +80,8 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len);
 
 /* What the part would put out for a channel right now, as a 24-bit code. */
 s32 fake_code(unsigned int channel);
+/* The same for a device of the chain, 0 being the first. */
+s32 fake_chain_code(unsigned int chip, unsigned int channel);
 /* The conversion rate CONFIG1 selects, in samples per second. */
 unsigned int fake_rate(void);
 /* The gain of a channel's PGA field. */

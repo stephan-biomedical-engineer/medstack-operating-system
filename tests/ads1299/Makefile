@@ -16,13 +16,22 @@ CFLAGS  ?= -std=gnu11 -g -O1 -I. -I$(M33) \
            -Wno-missing-field-initializers -fno-strict-aliasing -fsanitize=address,undefined
 BUILD   := build
 BIN     := $(BUILD)/ads1299-tests
+# The branch going upstream has its own binary: feature.c tests what main.c
+# cannot compile. Its driver comes from the branch itself, so no checkout is
+# needed; FEATURE_DRIVER=<file> tests a working copy instead.
+FEATURE_REF    ?= feature/ads1299-mcp2210-driver
+FEATURE_DRIVER ?= $(BUILD)/feature-ti-ads1299.c
+FEATURE_BIN    := $(BUILD)/ads1299-feature-tests
 OBJS    := $(BUILD)/main.o $(BUILD)/fake_ads1299.o $(BUILD)/kernel_shim.o $(BUILD)/afe_regs.o
 HEADERS := kernel_shim.h fake_ads1299.h shim_test.h check.h
 
-.PHONY: check clean
-check: $(BIN)
+.PHONY: check clean FORCE
+check: $(BIN) $(FEATURE_BIN)
 	@echo "linux-med em $$(git -C ../../linux-med branch --show-current 2>/dev/null) ($$(git -C ../../linux-med rev-parse --short HEAD 2>/dev/null))"
 	@ASAN_OPTIONS=detect_leaks=0 $(BIN)
+	@echo
+	@echo "driver do PR: $(FEATURE_DRIVER)"
+	@ASAN_OPTIONS=detect_leaks=0 $(FEATURE_BIN)
 
 $(BIN): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) -lm
@@ -30,6 +39,18 @@ $(BIN): $(OBJS)
 $(BUILD)/main.o: main.c $(HEADERS) $(DRIVER) $(M33)/afe_regs.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ main.c
+
+$(BUILD)/feature-ti-ads1299.c: FORCE
+	@mkdir -p $(BUILD)
+	@git -C ../../linux-med show $(FEATURE_REF):drivers/iio/adc/ti-ads1299.c > $@.new
+	@cmp -s $@.new $@ && rm -f $@.new || mv $@.new $@
+
+$(BUILD)/feature.o: feature.c $(HEADERS) $(FEATURE_DRIVER)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -DFEATURE_DRIVER='"$(abspath $(FEATURE_DRIVER))"' -c -o $@ feature.c
+
+$(FEATURE_BIN): $(BUILD)/feature.o $(BUILD)/fake_ads1299.o $(BUILD)/kernel_shim.o
+	$(CC) $(CFLAGS) -o $@ $^ -lm
 
 $(BUILD)/%.o: %.c $(HEADERS)
 	@mkdir -p $(BUILD)
