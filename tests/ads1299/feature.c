@@ -400,7 +400,7 @@ static void test_bias_measurement(void)
 
 	/* The bias drive does not touch it, and it does not touch the bias. */
 	CHECK(store("input_mux", "bias_measurement") > 0);
-	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x08 | 0x04);
 	CHECK(store("bias_drive", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10);
@@ -417,10 +417,8 @@ static void test_biasref(void)
 	CHECK_EQ(probe(0), 0);
 	if (!shim_iio || !shim_iio->registered)
 		return;
-	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x0c);	/* BIASREF_INT, PD_BIAS */
-	CHECK(store("bias_drive", "reference") > 0);
-	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x0c);
 	CHECK(store("bias_drive", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0);
 
@@ -429,10 +427,8 @@ static void test_biasref(void)
 	shim_biasref = &biasref;
 	CHECK_EQ(probe(0), 0);
 	CHECK_EQ(biasref.enabled, 1);			/* held for the device */
-	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x04);	/* PD_BIAS, BIASREF fed */
-	CHECK(store("bias_drive", "reference") > 0);
-	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x04);
 	CHECK(store("bias_drive", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0);
 }
@@ -466,7 +462,7 @@ static void test_bias_lead_off(void)
 	CHECK(!strcmp(show("bias_lead_off_status"), "connected\n"));
 
 	section("BIAS_LOFF_SENS: o resto do CONFIG3 intocado, e recusas");
-	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x0c | 0x02);
 	CHECK(store("input_mux", "bias_measurement") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x0c | 0x02);
@@ -920,13 +916,15 @@ static void test_srb(void)
 	CHECK(!strcmp(show("montage"), "bipolar\n"));
 	CHECK(!strcmp(show("montage_available"), "bipolar referential\n"));
 	/* With a bias derivation and sensing in place, which it must not touch. */
-	CHECK(store("bias_drive", "derived") > 0);
+	CHECK(store("bias_drive", "on") > 0);
+	CHECK(ext_store(2, "bias_sense_p", "1") > 0);
+	CHECK(ext_store(5, "bias_sense_n", "1") > 0);
 	CHECK(ext_store(0, "lead_off_sense_n", "1") > 0);
 	CHECK(store("montage", "referential") > 0);
 	CHECK_EQ(fake.reg[R_MISC1], 0x20);
 	CHECK(!strcmp(show("montage"), "referential\n"));
-	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0xff);
-	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0xff);
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0x04);
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0x20);
 	CHECK_EQ(fake.reg[R_LOFF_SENSN], 0x01);
 	CHECK(store("montage", "bipolar") > 0);
 	CHECK_EQ(fake.reg[R_MISC1], 0x00);
@@ -939,7 +937,77 @@ static void test_srb(void)
 	buffer_off();
 	CHECK(store("montage", "bipolar") > 0);
 	CHECK(store("bias_drive", "off") > 0);
+	CHECK(ext_store(2, "bias_sense_p", "0") > 0);
+	CHECK(ext_store(5, "bias_sense_n", "0") > 0);
 	CHECK(ext_store(0, "lead_off_sense_n", "0") > 0);
+}
+
+static void test_bias_derivation(void)
+{
+	static const char * const names[] = { "bias_sense_p", "bias_sense_n" };
+	static const int regs[] = { R_BIAS_SENSP, R_BIAS_SENSN };
+	bool ok;
+
+	section("bias: derivação limpa no probe, bias_drive só liga e desliga");
+	fresh();
+	fake.reg[R_BIAS_SENSP] = 0xff;
+	fake.reg[R_BIAS_SENSN] = 0xff;
+	fake.reset_ignored = true;
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0);
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x04, 0);		/* PD_BIAS: off */
+	CHECK(!strcmp(show("bias_drive"), "off\n"));
+	CHECK(!strcmp(show("bias_drive_available"), "off on\n"));
+
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	/* Selecting inputs does not power the amplifier, and powering it
+	 * does not select inputs: one field, one attribute. */
+	CHECK(ext_store(0, "bias_sense_p", "1") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x04, 0);
+	CHECK(store("bias_drive", "on") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x0c);
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0x01);
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0x00);
+	CHECK(!strcmp(show("bias_drive"), "on\n"));
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK_EQ(fake.reg[R_BIAS_SENSP], 0x01);		/* the selection stays */
+	CHECK(ext_store(0, "bias_sense_p", "0") > 0);
+	CHECK_EQ(store("bias_drive", "derived"), -EINVAL);	/* gone: two attributes now */
+	CHECK_EQ(store("bias_drive", "reference"), -EINVAL);
+
+	section("bias: cada entrada de cada canal, só o seu bit");
+	for (unsigned int a = 0; a < 2; a++) {
+		ok = true;
+		for (int c = 0; c < 8; c++) {
+			ok = ok && ext_store(c, names[a], "1\n") > 0;
+			ok = ok && fake.reg[regs[a]] == (1u << c);
+			ok = ok && fake.reg[regs[1 - a]] == 0;
+			ok = ok && !strcmp(ext_show(c, names[a]), "1\n");
+			/* The derivation is not lead-off: the comparators stay off. */
+			ok = ok && (fake.reg[R_CONFIG4] & 0x02) == 0;
+			ok = ok && ext_store(c, names[a], "0\n") > 0;
+			ok = ok && fake.reg[regs[a]] == 0;
+		}
+		CHECK_MSG(ok, names[a]);
+	}
+
+	section("bias: recusas");
+	CHECK_EQ(ext_store(1, "bias_sense_n", "maybe"), -EINVAL);
+	CHECK(store("bias_drive", "on") > 0);
+	CHECK(ext_store(1, "bias_sense_n", "1") > 0);
+	buffer_on();
+	CHECK_EQ(ext_store(1, "bias_sense_n", "0"), -EBUSY);
+	CHECK_EQ(store("bias_drive", "off"), -EBUSY);
+	CHECK_EQ(fake.reg[R_BIAS_SENSN], 0x02);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x04, 0x04);
+	CHECK(!strcmp(ext_show(1, "bias_sense_n"), "1\n"));	/* read while running */
+	buffer_off();
+	CHECK(ext_store(1, "bias_sense_n", "0") > 0);
+	CHECK(store("bias_drive", "off") > 0);
 }
 
 int main(void)
@@ -959,6 +1027,7 @@ int main(void)
 	test_lead_off_word();
 	test_lead_off_event();
 	test_srb();
+	test_bias_derivation();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
