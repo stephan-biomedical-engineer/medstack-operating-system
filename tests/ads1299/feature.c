@@ -319,6 +319,55 @@ static void test_test_signal(void)
 	CHECK(!strcmp(show("test_signal"), "off\n"));
 }
 
+static void test_test_input_needs_generator(void)
+{
+	unsigned int c;
+	bool all;
+
+	section("entrada de teste: nunca com o gerador desligado");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);			/* generator off */
+
+	/* The test input with nothing driving it: refused, MUX untouched. */
+	CHECK_EQ(store("input_mux", "test_signal"), -EINVAL);
+	for (all = true, c = 0; c < 8; c++)
+		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 0;
+	CHECK(all);
+	CHECK(!strcmp(show("input_mux"), "normal\n"));
+
+	/* Generator on first, then the test input. */
+	CHECK(store("test_signal", "1x_slow") > 0);
+	CHECK(store("input_mux", "test_signal") > 0);
+	for (all = true, c = 0; c < 8; c++)
+		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 5;
+	CHECK(all);
+
+	/* Switching the generator off under it: refused, CONFIG2 untouched;
+	 * another generator setting is fine. */
+	CHECK_EQ(store("test_signal", "off"), -EINVAL);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xd0);
+	CHECK(store("test_signal", "2x_fast") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xd5);
+
+	/* The electrodes back first, then the generator off. */
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK(store("test_signal", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);
+
+	section("entrada de teste: input_mux também recusa com o buffer ligado");
+	buffer_on();
+	CHECK_EQ(store("input_mux", "shorted"), -EBUSY);
+	for (all = true, c = 0; c < 8; c++)
+		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 0;
+	CHECK(all);
+	buffer_off();
+	CHECK(store("input_mux", "shorted") > 0);
+	CHECK(store("input_mux", "normal") > 0);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -327,6 +376,7 @@ int main(void)
 	test_chain_refused();
 	test_status_word();
 	test_test_signal();
+	test_test_input_needs_generator();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
