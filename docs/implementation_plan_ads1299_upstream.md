@@ -8,10 +8,11 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **18 / 5 / 6 / 4** (CLK_EN, CAL_FREQ, BIAS_MEAS,
-> BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN e LOFF_FLIP
-> fechados; DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria
-> acima fica como foi medida.
+> **Atualização (2026-10-17)**: a feature chegou a **20 / 5 / 4 / 4** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN, LOFF_FLIP,
+> LOFF_STATP e LOFF_STATN fechados; DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP passou a
+> ser derivado). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria acima
+> fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -406,8 +407,8 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | LOFF_SENSP | IN1P…IN8P | ✅ `308e6166ef98` | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal (0/1, `ext_info`) | custom | 3.5 |
 | LOFF_SENSN | IN1N…IN8N | ✅ `308e6166ef98` | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal (0/1, `ext_info`); a política do referencial fica na plataforma | custom | 3.5 |
 | LOFF_FLIP | canal 1…8 | ✅ `308e6166ef98` | ❌ | `in_voltageN_lead_off_flip` por canal (0/1, `ext_info`) | custom | 3.5 |
-| LOFF_STATP | canal 1…8 | ⚠️ alcançável por `lead_off_status` (`308e6166ef98`), `ac` em AC; faltam evento e palavra por amostra | ✅ | evento por eletrodo **e** a palavra por amostra no buffer (§3.1.2) | padrão + custom | 3.5 |
-| LOFF_STATN | canal 1…8 | ⚠️ idem | ✅ | idem | padrão + custom | 3.5 |
+| LOFF_STATP | canal 1…8 | ✅ `8b545d83bad2` | ✅ | evento `fault`/`openwire` por canal **e** a palavra por amostra `in_voltage8_lead_off` no buffer (§3.1.2); `lead_off_status` para leitura avulsa | padrão + custom | 3.5 |
+| LOFF_STATN | canal 1…8 | ✅ `8b545d83bad2` | ✅ | idem | padrão + custom | 3.5 |
 | GPIO | GPIOD[4:1] | ❌ | ❌ | **`gpiochip`** de 4 linhas, registrador volátil | padrão | 3.6 |
 | GPIO | GPIOC[4:1] | ❌ | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
 | MISC1 | SRB1 | ❌ | ✅ `montage` | atributo global; o nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
@@ -464,14 +465,19 @@ amostra foi adquirida**, que é o que o registro clínico precisa (`implementati
 §7.2). São duas funções distintas sobre o mesmo bit, e a segunda não se reconstrói a partir da
 primeira sem perder a associação com a amostra.
 
-**O tipo de evento ainda não está decidido, e isso é uma tensão entre as duas bases (§2.2).** O
-candidato natural é `IIO_EV_TYPE_FAULT` com `IIO_EV_DIR_FAULT_OPENWIRE`, e **ele não existe no 6.6 da
-placa**: `grep -n 'FAULT\|OPENWIRE' include/uapi/linux/iio/types.h` não acha nada no `linux-med`. Se
-existir na mainline que for o alvo da submissão, o driver o usa lá e a árvore 6.6 precisa de um
-*backport* do tipo de evento ou de um `#ifdef`, e as duas coisas são custo a declarar. **A conferir na
-mainline antes da subfase 3.5.** O canal `in_voltageN_lead_off` da board, de tipo `IIO_VOLTAGE` sem
-ser tensão, é o ponto que mais vai ser discutido na revisão e entra na carta como pergunta, não como
-afirmação.
+**O tipo de evento foi decidido em 2026-10-17, e a tensão entre as duas bases (§2.2) ficou com custo
+declarado.** É o `IIO_EV_TYPE_FAULT` com `IIO_EV_DIR_FAULT_OPENWIRE`, que **existe na mainline**: entrou
+em 2025 com a detecção de fio aberto do AD4111 no `ad7173` (commit de núcleo `34934d79965518548d33c0513a9572ae936d8c29`,
+"iio: introduce the FAULT event type", revisado no IIO), e o `ad7173` é o modelo seguido - um evento por
+canal, uma habilitação para todos. No 6.6 da placa ele não existia; a feature carrega o **backport** desse
+commit (`66874e950a96`, autor original, marca `[ Upstream commit ... ]`), que **sai da série na submissão**. A
+segunda diferença entre as bases é a assinatura: o `write_event_config` recebe `int state` no 6.6 e
+`bool` na mainline atual, e o driver muda isso ao ir para lá. Implementado em `8b545d83bad2`: o evento sai na
+transição para "fora", uma vez, com o carimbo da amostra; só com o buffer ligado, porque o estado vem
+na *status word*; e de novo se o eletrodo ainda estiver fora quando o buffer religa. O canal
+`in_voltageN_lead_off`, de tipo `IIO_VOLTAGE` sem ser tensão, foi trazido igual ao da board, para a
+tradução da plataforma continuar valendo, e continua sendo o ponto que mais vai ser discutido na
+revisão: entra na carta como pergunta, não como afirmação.
 
 **E o modo AC muda o que o bit significa - confirmado no datasheet em 2026-10-17.** Os comparadores
 são o método DC (SBAS499 §9.3.2.4.3.1: "if dc lead-off is not used, the lead-off comparators can be
@@ -891,7 +897,7 @@ que converte o atraso do módulo em progresso, em vez de espera.
 | A cobertura total multiplica a ABI customizada (de 8 atributos para ~20, metade por canal) e reabre a tensão do §3 | a ABI é a pergunta explícita da carta (§5.4); cada atributo customizado tem a alternativa padrão considerada escrita; uma série por capacidade (Fase 3) deixa o mantenedor recusar uma sem levar as outras |
 | A ABI nova quebra a plataforma (§3.3) | a troca na tradução por ligação entra no mesmo `SRCREV`; `tests/derive` e `make check` são o portão |
 | Funções sem silício nesta bancada (SRB2, GPIO, saída de clock, lead-off AC, PM) | registradas como "testado no host", nunca como "validado"; a daisy-chain já saiu do `v1` (§5.6) |
-| `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | conferir na mainline-alvo antes da 3.5; o custo do *backport* ou do `#ifdef` é declarado, não descoberto |
+| `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | **resolvido em 2026-10-17**: existe na mainline; a feature carrega o *backport* `66874e950a96`, que sai na submissão, e o `write_event_config` passa de `int` para `bool` lá |
 | O driver expõe ILEAD_OFF de 6 e 24 µA, e em DC isso passa do limite de corrente auxiliar de paciente da IEC 60601-1 para corrente contínua (10 µA, citado de memória; conferir na norma) | política fora do kernel (§3): o driver é genérico e expõe o campo inteiro, e a tradução por ligação (`do_derive_device_options`) não oferece esses valores em DC - hoje não oferece nenhum valor de corrente, e uma linha nova de opções tem de respeitar isso |
 | Constantes fora das tabelas transcritas (temperatura, MVDD) | `[SBAS499?]` até a Fase 0 do plano de bancada; nenhum `_scale`/`_offset` é submetido com elas pendentes |
 
@@ -936,7 +942,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
-| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 corrigido, `lead_off_status` com `ac` (`308e6166ef98`); só host. Evento e palavra por amostra em aberto | 2026-10-17 |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 (`308e6166ef98`); evento `fault`/`openwire` com o *backport* `66874e950a96`, e a palavra por amostra (`8b545d83bad2`). **Só host** | **feito**, 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | — | — |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
