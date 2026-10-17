@@ -368,6 +368,71 @@ static void test_test_input_needs_generator(void)
 	CHECK(store("input_mux", "normal") > 0);
 }
 
+static void test_bias_measurement(void)
+{
+	unsigned int c;
+	bool all;
+
+	section("BIAS_MEAS segue o MUX: medir o BIASIN liga o bit, sair desliga");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);	/* off after probe */
+
+	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0x10);
+	for (all = true, c = 0; c < 8; c++)
+		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 2;
+	CHECK(all);
+	/* Only BIAS_MEAS moved: reference buffer on, reserved 11, bias off. */
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10);
+
+	CHECK(store("input_mux", "shorted") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);
+	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0);
+
+	/* The bias drive does not touch it, and it does not touch the bias. */
+	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x08 | 0x04);
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10);
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0);
+}
+
+static void test_biasref(void)
+{
+	static struct regulator biasref = { .uv = 2500000 };
+
+	section("BIASREF: gerado dentro sem biasref-supply, de fora com ele");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x0c);	/* BIASREF_INT, PD_BIAS */
+	CHECK(store("bias_drive", "reference") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x0c);
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0);
+
+	fresh();
+	biasref.enabled = 0;
+	shim_biasref = &biasref;
+	CHECK_EQ(probe(0), 0);
+	CHECK_EQ(biasref.enabled, 1);			/* held for the device */
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x04);	/* PD_BIAS, BIASREF fed */
+	CHECK(store("bias_drive", "reference") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0x04);
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -377,6 +442,8 @@ int main(void)
 	test_status_word();
 	test_test_signal();
 	test_test_input_needs_generator();
+	test_bias_measurement();
+	test_biasref();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

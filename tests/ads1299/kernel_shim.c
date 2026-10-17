@@ -10,6 +10,7 @@ char shim_last_error[256];
 char shim_error_log[2048];
 unsigned long shim_sleeps;
 struct regulator *shim_vref;
+struct regulator *shim_biasref;
 struct regulator shim_avdd = { .uv = 5000000 };
 irq_handler_t shim_irq_handler;
 void *shim_irq_dev;
@@ -55,6 +56,7 @@ void shim_reset(void)
 	shim_error_log[0] = '\0';
 	shim_sleeps = 0;
 	shim_vref = NULL;
+	shim_biasref = NULL;
 	shim_irq_handler = NULL;
 	shim_irq_dev = NULL;
 	shim_iio = NULL;

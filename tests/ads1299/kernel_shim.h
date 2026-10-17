@@ -214,12 +214,15 @@ struct gpio_desc { int value; };
 #define GPIOD_OUT_HIGH		1
 
 extern struct regulator *shim_vref;	/* NULL: the part's internal reference */
+extern struct regulator *shim_biasref;	/* NULL: BIASREF made inside the part */
 extern struct regulator shim_avdd;
 static inline struct regulator *devm_regulator_get_optional(struct device *d, const char *id)
 {
 	(void)d;
 	if (!strcmp(id, "vref") && shim_vref)
 		return shim_vref;
+	if (!strcmp(id, "biasref") && shim_biasref)
+		return shim_biasref;
 	return ERR_PTR(-ENODEV);
 }
 static inline struct regulator *devm_regulator_get(struct device *d, const char *id)
