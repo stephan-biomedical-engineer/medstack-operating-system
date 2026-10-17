@@ -447,6 +447,7 @@ struct iio_chan_spec {
 	struct iio_scan_type scan_type;
 	const char *extend_name;
 	long info_mask_separate;
+	long info_mask_separate_available;
 	long info_mask_shared_by_all;
 	long info_mask_shared_by_all_available;
 	unsigned indexed:1;

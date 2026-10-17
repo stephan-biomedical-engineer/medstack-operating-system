@@ -897,7 +897,7 @@ static void test_srb(void)
 
 	/* Gain and MUX keep it, and it keeps them. */
 	CHECK(ext_store(3, "srb2", "1") > 0);
-	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 4, 0,
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[3], 4, 0,
 					   IIO_CHAN_INFO_HARDWAREGAIN), 0);
 	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x28);		/* gain 4, SRB2, MUX 0 */
 	CHECK(store("input_mux", "shorted") > 0);
@@ -1010,6 +1010,121 @@ static void test_bias_derivation(void)
 	CHECK(store("bias_drive", "off") > 0);
 }
 
+static int gain_of(int chan)
+{
+	int val = 0, val2 = 0;
+
+	if (read_raw_chan(chan, IIO_CHAN_INFO_HARDWAREGAIN, &val, &val2) != IIO_VAL_INT)
+		return -1;
+	return val;
+}
+
+static int set_gain(int chan, int gain)
+{
+	return shim_iio->info->write_raw(shim_iio, &shim_iio->channels[chan],
+					 gain, 0, IIO_CHAN_INFO_HARDWAREGAIN);
+}
+
+static void test_gain_per_channel(void)
+{
+	static const int gains[] = { 1, 2, 4, 6, 8, 12, 24 };
+	const int *vals;
+	int type, length;
+	int val, val2;
+	bool ok;
+
+	section("ganho por canal: hardwaregain separado, com _available");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(shim_iio->channels[0].info_mask_separate & BIT(IIO_CHAN_INFO_HARDWAREGAIN));
+	CHECK(shim_iio->channels[0].info_mask_separate_available &
+	      BIT(IIO_CHAN_INFO_HARDWAREGAIN));
+	CHECK(!(shim_iio->channels[0].info_mask_shared_by_all &
+		BIT(IIO_CHAN_INFO_HARDWAREGAIN)));
+	CHECK_EQ(shim_iio->info->read_avail(shim_iio, &shim_iio->channels[5], &vals,
+					    &type, &length,
+					    IIO_CHAN_INFO_HARDWAREGAIN), IIO_AVAIL_LIST);
+	CHECK_EQ(length, 7);
+	CHECK(length == 7 && !memcmp(vals, gains, sizeof(gains)));
+	ok = true;
+	for (int c = 0; c < 8; c++)
+		ok = ok && gain_of(c) == 24;
+	CHECK(ok);
+
+	section("ganho por canal: cada canal, cada ganho, só o seu PGA");
+	ok = true;
+	for (int c = 0; c < 8; c++) {
+		for (unsigned int g = 0; g < 7; g++) {
+			ok = ok && set_gain(c, gains[g]) == 0;
+			for (int o = 0; o < 8; o++) {
+				u8 pga = (fake.reg[R_CH1SET + o] >> 4) & 0x07;
+
+				ok = ok && pga == (o == c ? g : 6u);
+				ok = ok && gain_of(o) == (o == c ? gains[g] : 24);
+			}
+			/* Only the PGA moved in that CHnSET: MUX normal, SRB2 open. */
+			ok = ok && (fake.reg[R_CH1SET + c] & 0x8f) == 0;
+		}
+		ok = ok && set_gain(c, 24) == 0;
+	}
+	CHECK(ok);
+
+	section("ganho por canal: a escala de cada canal segue o seu ganho");
+	CHECK_EQ(set_gain(2, 1), 0);
+	CHECK_EQ(set_gain(6, 12), 0);
+	CHECK_EQ(read_raw_chan(2, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
+	CHECK_EQ(val2, 536441);			/* 4.5 V / (1 * 2^23), mV x 1e9 */
+	CHECK_EQ(read_raw_chan(6, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
+	CHECK_EQ(val2, 44703);			/* 4.5 V / (12 * 2^23) */
+	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
+	CHECK_EQ(val2, 22351);			/* 4.5 V / (24 * 2^23) */
+	/* A direct read is the fake's code for that channel at its gain. */
+	fake.input_uv[2] = 1000.0;
+	fake.input_uv[6] = 1000.0;
+	CHECK_EQ(read_raw_chan(2, IIO_CHAN_INFO_RAW, &val, &val2), IIO_VAL_INT);
+	CHECK_EQ(val, fake_code(2));
+	CHECK_EQ(read_raw_chan(6, IIO_CHAN_INFO_RAW, &val, &val2), IIO_VAL_INT);
+	CHECK_EQ(val, fake_code(6));
+	CHECK(fake_code(6) > 11 * fake_code(2));	/* twelve times, near enough */
+	fake.input_uv[2] = fake.input_uv[6] = 0.0;
+
+	section("ganho por canal: recusas");
+	CHECK_EQ(set_gain(4, 3), -EINVAL);
+	CHECK_EQ(set_gain(4, 48), -EINVAL);
+	CHECK_EQ(set_gain(4, 0), -EINVAL);
+	CHECK_EQ(gain_of(4), 24);
+	buffer_on();
+	CHECK_EQ(set_gain(4, 1), -EBUSY);
+	CHECK_EQ(gain_of(4), 24);			/* read while running */
+	buffer_off();
+
+	section("ganho por canal: o autoteste julga cada canal pelo seu ganho");
+	/* A part whose RESET did not take, left with mixed gains: the probe's
+	 * self test must still pass, each channel at its own. */
+	fresh();
+	fake.reset_ignored = true;
+	fake.rdatac = false;
+	for (int c = 0; c < 8; c++)
+		fake.reg[R_CH1SET + c] = (u8)((c % 7) << 4);	/* gains 1..24 */
+	CHECK_EQ(probe(0), 0);
+	CHECK(shim_iio && shim_iio->registered);
+	ok = true;
+	for (int c = 0; c < 8; c++)
+		ok = ok && gain_of(c) == gains[c % 7];
+	CHECK(ok);
+	/* And one channel's generator low at its gain fails it, naming it. */
+	fresh();
+	fake.reset_ignored = true;
+	fake.rdatac = false;
+	for (int c = 0; c < 8; c++)
+		fake.reg[R_CH1SET + c] = (u8)((c % 7) << 4);
+	fake.generator_error = 0.5;
+	CHECK(probe(0) != 0);
+	CHECK(strstr(shim_error_log, "channel 0 test signal") != NULL);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1028,6 +1143,7 @@ int main(void)
 	test_lead_off_event();
 	test_srb();
 	test_bias_derivation();
+	test_gain_per_channel();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
