@@ -70,7 +70,9 @@ desde 6.9). Três consequências práticas:
 
 1. **A estrutura já é idioma mainline** — `regmap` com `.reg_read`/`.reg_write`, `REGCACHE_MAPLE`,  `devm_iio_kfifo_buffer_setup`, `dev_err_probe`. Metade do que uma revisão normalmente exige reescrever já está no formato certo porque o original passou por essa revisão.
 2. **O *copyright* do autor original tem de permanecer**, e permanece. É obra derivada de arquivo
-   GPL-2.0; apagar a linha seria fatal para a aceitação, além de errado.
+   GPL-2.0; apagar a linha seria fatal para a aceitação, além de errado. O que saiu foi o
+   `MODULE_AUTHOR` dele (`993b702cf8f9`): essa macro nomeia quem responde pelo driver, e o
+   *copyright* e o "Based on ti-ads1298.c by Mike Looijmans" continuam no cabeçalho.
 3. **O revisor vai fazer o `diff` com o irmão** e perguntar o motivo de cada divergência. Isso é
    bom: as divergências reais estão documentadas no cabeçalho do arquivo (tabela de ganhos, VREF de 4,5 V, ausência do bit HR/LP, reset de `CHnSET`, layout do registrador de ID) e cada uma tem justificativa de datasheet. **O que não estiver justificado será pedido de volta.**
 
@@ -974,6 +976,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8ea9357f8490`, `c2d0410e18b2`, `b18610b58e84`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
 | 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`ebd0d855efc5`; só host) | **feito** | 2026-10-17 |
 | 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | **feito no host**: 28 ✅ / 5 ⚙️, e `sysfs-bus-iio-adc-ti-ads1299` com todos os atributos próprios, o evento `fault_openwire` incluído (`1e902b7494d8`). O `KernelVersion` está em 6.6, a versão desta árvore, e passa à da mainline-alvo na submissão | 2026-10-17 |
+| 3 | comentários enxugados de 490 para 290 linhas (16% → 10%, arquivo 3070 → 2870), um só `MODULE_AUTHOR` (`993b702cf8f9`). Código objeto idêntico ao anterior; `feature.c` 590/0; `W=1` arm64 limpo; `checkpatch --strict` 0/0/0 no patch. A versão comentada, para estudo, fica fora dos repositórios (`~/Documents/TCC/drivers-comentados`, de `eb2b8851cf01`) | **feito** | 2026-10-17 |
 | 4 | autoteste passa com tolerância medida | — | — |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
 | 6 | série na lore, Message-ID | — | — |
