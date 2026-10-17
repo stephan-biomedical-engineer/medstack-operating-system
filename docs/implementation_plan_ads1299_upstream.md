@@ -8,6 +8,10 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
+> **Atualização (2026-10-17)**: a feature chegou a **10 / 5 / 6 / 12** (CLK_EN, CAL_FREQ, BIAS_MEAS e
+> BIASREF_INT fechados; DAISY_EN passou a ser escrito, sem opção). Só testado no host. A coluna **PR**
+> da §3.1 acompanha a feature; a auditoria acima fica como foi medida.
+>
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
 > diretriz de 2026-09-26 (§3) deixa de ser interpretada como "o que a plataforma precisa". Cobertura é
@@ -369,19 +373,23 @@ Legenda: ✅ exposto ao usuário · ⚙️ o driver escreve um valor fixo ou der
 coberto pela metade ou com defeito · ❌ sem caminho (fica no valor de reset). **Alvo** é o mecanismo
 que fecha o campo, e a coluna **Sub** aponta a subfase da Fase 3 (§8) que o implementa.
 
-| Reg | Campo | PR | Board | Alvo | Tipo | Sub |
+A coluna **PR (atual)** acompanha a `feature/ads1299-mcp2210-driver`: um campo fechado depois da
+auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** é a da auditoria de
+2026-10-16, porque nada disso foi para a `board/medplatform-afe`.
+
+| Reg | Campo | PR (atual) | Board | Alvo | Tipo | Sub |
 |---|---|---|---|---|---|---|
 | ID | Device ID | ⚙️ | ⚙️ | confere a família no *probe*; `REV_ID` vai para o `dmesg` | — (fica ⚙️) | 3.0 |
 | ID | Nº de canais | ✅ | ✅ | já fechado | — | — |
-| CONFIG1 | DAISY_EN | ❌ | ❌ | gravado 0 no *probe*: é o modo daisy-chain, o único em que um chip só lê igual; a cadeia é recusada (§5.6). **Feito** (`ed48db8df4c8`) | — (fica ⚙️) | 3.8 |
-| CONFIG1 | CLK_EN | ❌ | ❌ | **provedor de clock** (`#clock-cells = <0>`), ligado por `clk_prepare_enable` de quem consome. **Feito** (`ceaa3f09e909`) | padrão (clk) | 3.8 |
+| CONFIG1 | DAISY_EN | ⚙️ `ed48db8df4c8` | ❌ | gravado 0 no *probe*: é o modo daisy-chain, em que um chip só lê igual; a cadeia é recusada (§5.6) | — (fica ⚙️) | 3.8 |
+| CONFIG1 | CLK_EN | ✅ `ceaa3f09e909` | ❌ | **provedor de clock** (`#clock-cells = <0>`), ligado por `clk_prepare_enable` de quem consome | padrão (clk) | 3.8 |
 | CONFIG1 | DR | ✅ | ✅ | já fechado | padrão | — |
 | CONFIG2 | INT_CAL | ✅ | ✅ | já fechado | custom | — |
 | CONFIG2 | CAL_AMP | ✅ | ✅ | já fechado | custom | — |
-| CONFIG2 | CAL_FREQ | ⚠️ sem DC | ⚠️ sem DC | `test_signal` ganha `1x_dc` e `2x_dc` (o código 10 não é usado), mais `test_signal_available` e `-EBUSY` com o buffer ligado. **Feito na feature** (`ad3a2ec3641b`) | custom | 3.1 |
+| CONFIG2 | CAL_FREQ | ✅ `ad3a2ec3641b` | ⚠️ sem DC | `test_signal` com `1x_dc` e `2x_dc` (o código 10 não é usado), `test_signal_available`, `-EBUSY` com o buffer ligado; a entrada de teste nunca fica sem o gerador (`17eccf84c5d6`) | custom | 3.1 |
 | CONFIG3 | PD_REFBUF | ⚙️ | ⚙️ | segue o `vref-supply` (fiação) | — (fica ⚙️) | — |
-| CONFIG3 | BIAS_MEAS | ❌ | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
-| CONFIG3 | BIASREF_INT | ⚙️ sempre interno | ⚙️ | propriedade booleana de BIASREF externo no DT | DT | 3.4 |
+| CONFIG3 | BIAS_MEAS | ✅ `89bed0807417` | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
+| CONFIG3 | BIASREF_INT | ✅ `89bed0807417` | ⚙️ | `biasref-supply` no DT (`b82dc6df6759`): com ela a placa alimenta o pino e o bit fica 0; sem ela, o CI gera (AVDD + AVSS) / 2 | DT (padrão) | 3.4 |
 | CONFIG3 | PD_BIAS | ✅ | ✅ | `bias_drive` passa a ser `off`/`on` e só isso (ver BIAS_SENS) | custom | 3.4 |
 | CONFIG3 | BIAS_LOFF_SENS | ❌ | ❌ | atributo `bias_lead_off` (`off`/`on`) | custom | 3.5 |
 | CONFIG3 | BIAS_STAT | ❌ | ❌ | lido **sem cache** e entregue pelo mesmo mecanismo do status de lead-off (D3) | evento | 3.5 |
@@ -477,7 +485,7 @@ cobertura nova sobre um mecanismo quebrado só multiplica o defeito.
 
 | # | Onde | Defeito | Conserto | Sub |
 |---|---|---|---|---|
-| D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1) | 3.1 |
+| D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1). **Corrigido na feature** (`89bed0807417`) | 3.1 |
 | D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3) | 3.0 |
 | D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso | 3.5 |
 | D4 | board | o comentário acima de `ADS1299_REG_LOFF_SENSP` ainda abre com "this driver never writes either of them", e o próprio bloco diz depois que `ads1299_set_lead_off()` os grava | reescrever o comentário | 3.0 |
@@ -543,7 +551,7 @@ mora no sysfs. Um `ti,lead-off-current-na` no *binding* é pedido de reescrita g
 | `start-gpios` | o pino START, que sincroniza chips em cascata | 3.8 |
 | `powerdown-gpios` | o pino PWDN | 3.7 |
 | `dvdd-supply` | a alimentação digital, que hoje não é descrita | 3.7 |
-| booleano de BIASREF externo (nome a decidir, prefixo `ti,`) | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora | 3.4 |
+| `biasref-supply` | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora. Uma alimentação e não um booleano `ti,`: tensão num pino é o que o `-supply` descreve, como o `vref-supply` (padrão antes de customizado). **Feito** (`b82dc6df6759`) | 3.4 |
 | `#daisy-chained-devices` (a propriedade comum, `common-properties.txt`) | quantos chips dividem o CS, o que muda o quadro inteiro. O *binding* descreve o hardware mesmo que o driver não o suporte: com N > 1 exige `clocks` e proíbe `#clock-cells`, e o driver do `v1` recusa a cadeia. **Feito** (`8c3d602693f1`) | 3.8 |
 
 Cada propriedade nova entra com o exemplo correspondente, e a injeção de falha da Fase 2 é refeita
@@ -920,10 +928,10 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 2 | `dt_binding_check` limpo; injeção de falha vista | — | — |
 | 3 | auditoria campo a campo (§3.1): PR 6 ✅ / 5 ⚙️ / 7 ⚠️ / 15 ❌; board 9 / 10 / 5 / 9, de 33 | **medido**, 7 defeitos (§3.2) | 2026-10-16 |
 | 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
-| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC, `_available` e `-EBUSY` feitos (`ad3a2ec3641b`, só host); MUX por canal e D1 em aberto | 2026-10-17 |
+| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`ad3a2ec3641b`), entrada de teste nunca sem o gerador (`17eccf84c5d6`), `BIAS_MEAS` seguindo o MUX e D1 corrigido (`89bed0807417`); só host. MUX por canal em aberto | 2026-10-17 |
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
-| 3.4 | bias por campo; BIASREF externo no DT | — | — |
+| 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
 | 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | — | — |
 | 3.6 | `gpiochip` (só host) | — | — |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
