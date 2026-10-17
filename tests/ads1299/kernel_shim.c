@@ -483,8 +483,9 @@ int iio_push_to_buffers_with_timestamp(struct iio_dev *d, void *data, s64 ts)
 		return -ENOSPC;
 	s = &shim_scans[shim_scan_count++];
 	memset(s, 0, sizeof(*s));
+	/* Only scan elements are ever in a scan mask, as in the core. */
 	for (int i = 0; i < d->num_channels && n < SHIM_SCAN_VALUES; i++)
-		if (d->channels[i].type == IIO_VOLTAGE &&
+		if (d->channels[i].type == IIO_VOLTAGE && d->channels[i].scan_index >= 0 &&
 		    test_bit((unsigned int)d->channels[i].scan_index, d->active_scan_mask))
 			n++;
 	memcpy(s->value, data, n * sizeof(u32));

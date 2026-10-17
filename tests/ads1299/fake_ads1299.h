@@ -53,6 +53,8 @@ struct fake_ads1299 {
 	u8 detached_p, detached_n;	/* electrodes off, per input */
 	bool bias_detached;		/* the bias electrode off */
 	u8 gpio_in;			/* GPIO1-4 levels driven from outside, bits 0-3 */
+	double temp_c;			/* the die, for the temperature sensor */
+	double avdd_uv, avss_uv, dvdd_uv;	/* the supplies, for MUX = 011 */
 	u8 gpio_forced;			/* fault: outputs pulled away from their level */
 	u8 gpio_forced_level;		/* ... to these levels */
 

@@ -19,6 +19,8 @@
 
 #include FEATURE_DRIVER
 
+#include <math.h>
+
 #include "check.h"
 #include "fake_ads1299.h"
 #include "shim_test.h"
@@ -133,11 +135,22 @@ static ssize_t mux_all(const char *value)
 	return ret;
 }
 
+/* As the core does: the mask and its length cover the scan elements only. */
+static unsigned int scan_elements(void)
+{
+	unsigned int n = 0;
+
+	for (int i = 0; i < shim_iio->num_channels; i++)
+		if (shim_iio->channels[i].scan_index >= 0)
+			n++;
+	return n;
+}
+
 static void buffer_on_mask(unsigned long mask)
 {
 	shim_iio->scan_mask_storage[0] = mask;
 	shim_iio->active_scan_mask = shim_iio->scan_mask_storage;
-	shim_iio->masklength = (unsigned int)shim_iio->num_channels;
+	shim_iio->masklength = scan_elements();
 	(void)shim_iio->info->update_scan_mode(shim_iio, shim_iio->active_scan_mask);
 	shim_iio->buffer_enabled = true;
 	(void)shim_iio->setup_ops->postenable(shim_iio);
@@ -145,7 +158,7 @@ static void buffer_on_mask(unsigned long mask)
 
 static void buffer_on(void)
 {
-	buffer_on_mask((1UL << shim_iio->num_channels) - 1);
+	buffer_on_mask((1UL << scan_elements()) - 1);
 }
 
 static void buffer_off(void)
@@ -180,7 +193,7 @@ static void test_single_device(void)
 	if (!shim_iio)
 		return;
 	CHECK(shim_iio->registered);
-	CHECK_EQ(shim_iio->num_channels, 10);	/* eight voltages, lead-off, timestamp */
+	CHECK_EQ(shim_iio->num_channels, 13);	/* 8 voltages, lead-off, timestamp, 3 direct */
 	/* 0x96 out of reset: DAISY_EN and CLK_EN were already 0, so the write
 	 * the driver asks for changes nothing - and the bits stay 0. */
 	CHECK_EQ(fake.reg[R_CONFIG1] & (CONFIG1_DAISY_EN | CONFIG1_CLK_EN), 0);
@@ -283,7 +296,7 @@ static void test_chain_refused(void)
 	shim_prop_daisy = 1;
 	CHECK_EQ(probe(0), 0);
 	CHECK(shim_iio->registered);
-	CHECK_EQ(shim_iio->num_channels, 10);
+	CHECK_EQ(shim_iio->num_channels, 13);
 }
 
 static void test_status_word(void)
@@ -1319,6 +1332,133 @@ static void test_gpio(void)
 	buffer_off();
 }
 
+/* The index of a direct-read channel, by type and name. */
+static int find_chan(enum iio_chan_type type, const char *name)
+{
+	for (int i = 0; i < shim_iio->num_channels; i++) {
+		const struct iio_chan_spec *c = &shim_iio->channels[i];
+
+		if (c->type != type || c->scan_index >= 0)
+			continue;
+		if (!name || (c->extend_name && !strcmp(c->extend_name, name)))
+			return i;
+	}
+	return -1;
+}
+
+/* (raw + offset) * scale, as userspace computes it, in millidegrees. */
+static double temp_mdeg(int raw, int *ok)
+{
+	int sv, sv2, ov, ov2;
+	int t = find_chan(IIO_TEMP, NULL);
+
+	*ok = read_raw_chan(t, IIO_CHAN_INFO_SCALE, &sv, &sv2) == IIO_VAL_INT_PLUS_NANO &&
+	      read_raw_chan(t, IIO_CHAN_INFO_OFFSET, &ov, &ov2) == IIO_VAL_INT_PLUS_MICRO;
+	/* INT_PLUS_MICRO with a negative integer part: -(|val| + val2 / 1e6) */
+	return (raw + (ov - ov2 / 1e6)) * (sv + sv2 / 1e9);
+}
+
+static double mvdd_mv(const char *name, int *raw)
+{
+	int c = find_chan(IIO_VOLTAGE, name), sv, sv2;
+
+	if (read_raw_chan(c, IIO_CHAN_INFO_RAW, raw, &sv2) != IIO_VAL_INT ||
+	    read_raw_chan(c, IIO_CHAN_INFO_SCALE, &sv, &sv2) != IIO_VAL_INT_PLUS_NANO)
+		return -1e9;
+	return *raw * (sv + sv2 / 1e9);
+}
+
+static void test_temperature_and_supplies(void)
+{
+	int t, a, d, raw, ok, val, val2;
+	u8 before;
+	unsigned int reads;
+
+	section("temperatura e alimentação: canais de leitura avulsa, fora do buffer");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(shim_iio->num_channels, 13);
+	t = find_chan(IIO_TEMP, NULL);
+	a = find_chan(IIO_VOLTAGE, "mvdd_analog");
+	d = find_chan(IIO_VOLTAGE, "mvdd_digital");
+	CHECK(t >= 0 && a >= 0 && d >= 0);
+	if (t < 0 || a < 0 || d < 0)
+		return;
+	CHECK_EQ(shim_iio->channels[t].info_mask_separate,
+		 BIT(IIO_CHAN_INFO_RAW) | BIT(IIO_CHAN_INFO_SCALE) | BIT(IIO_CHAN_INFO_OFFSET));
+	CHECK(!shim_iio->channels[t].indexed);
+	CHECK_EQ(shim_iio->channels[a].info_mask_separate,
+		 BIT(IIO_CHAN_INFO_RAW) | BIT(IIO_CHAN_INFO_SCALE));
+
+	section("temperatura: a conversão de referência, 145300 uV -> 25 degC");
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_RAW, &raw, &val2), IIO_VAL_INT);
+	/* At gain 1: 145300 uV * 2^23 / 4.5 V. */
+	CHECK(raw >= 270859 && raw <= 270861);
+	CHECK(fabs(temp_mdeg(raw, &ok) - 25000.0) < 2.0);
+	CHECK(ok);
+	fake.temp_c = 37.5;
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_RAW, &raw, &val2), IIO_VAL_INT);
+	CHECK(fabs(temp_mdeg(raw, &ok) - 37500.0) < 2.0);
+	fake.temp_c = -10.0;
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_RAW, &raw, &val2), IIO_VAL_INT);
+	CHECK(fabs(temp_mdeg(raw, &ok) + 10000.0) < 2.0);
+	fake.temp_c = 25.0;
+
+	section("temperatura: o canal emprestado volta exatamente como estava");
+	CHECK(ext_store(0, "input_mux", "shorted") > 0);
+	CHECK(ext_store(0, "srb2", "1") > 0);
+	before = fake.reg[R_CH1SET];
+	CHECK_EQ(before, 0x69);				/* gain 24, SRB2, shorted */
+	reads = fake.rdata_reads;
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_RAW, &raw, &val2), IIO_VAL_INT);
+	CHECK(raw >= 270859 && raw <= 270861);		/* read at gain 1, not 24 */
+	CHECK_EQ(fake.reg[R_CH1SET], before);
+	CHECK_EQ(fake.rdata_reads - reads, 3);		/* two discarded after the MUX moved */
+	CHECK(ext_store(0, "srb2", "0") > 0);
+	CHECK(ext_store(0, "input_mux", "normal") > 0);
+
+	section("alimentação: a tensão medida, o que o datasheet diz que ela é");
+	CHECK(fabs(mvdd_mv("mvdd_analog", &raw) - 2500.0) < 0.01);	/* 0.5 x (5 V + 0) */
+	CHECK(fabs(mvdd_mv("mvdd_digital", &raw) - 450.0) < 0.01);	/* 1.8 V / 4 */
+	fake.avdd_uv = 2500000.0;
+	fake.avss_uv = -2500000.0;
+	CHECK(fabs(mvdd_mv("mvdd_analog", &raw)) < 0.01);		/* as the text reads */
+	fake.avdd_uv = 5000000.0;
+	fake.avss_uv = 0.0;
+	CHECK_EQ(shim_iio->channels[d].address, 2);			/* channel 3: DVDD */
+	CHECK(ext_store(2, "input_mux", "test_signal") == -EINVAL);	/* generator off */
+	CHECK(ext_store(2, "srb2", "1") > 0);
+	before = fake.reg[R_CH1SET + 2];
+	(void)mvdd_mv("mvdd_digital", &raw);
+	CHECK_EQ(fake.reg[R_CH1SET + 2], before);
+	CHECK(ext_store(2, "srb2", "0") > 0);
+
+	section("temperatura e alimentação: recusas, e escala com outra referência");
+	buffer_on();
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_RAW, &val, &val2), -EBUSY);
+	CHECK_EQ(read_raw_chan(a, IIO_CHAN_INFO_RAW, &val, &val2), -EBUSY);
+	CHECK_EQ(read_raw_chan(t, IIO_CHAN_INFO_SCALE, &val, &val2), IIO_VAL_INT_PLUS_NANO);
+	buffer_off();
+	{
+		static struct regulator vref = { .uv = 4000000 };
+
+		fresh();
+		shim_vref = &vref;
+		/* The fake converts at 4.5 V whatever the regulator says, so
+		 * only the scale and offset are checked here, against 145300 uV
+		 * as a 4.0 V reference would code it. */
+		(void)probe(0);
+		if (shim_iio) {
+			int r = (int)llround(145300.0 * 8388608.0 / 4000000.0);
+
+			CHECK(fabs(temp_mdeg(r, &ok) - 25000.0) < 2.0);
+			CHECK(ok);
+		}
+	}
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1340,6 +1480,7 @@ int main(void)
 	test_gain_per_channel();
 	test_mux_per_channel();
 	test_gpio();
+	test_temperature_and_supplies();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

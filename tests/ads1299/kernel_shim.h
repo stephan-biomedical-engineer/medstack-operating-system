@@ -75,6 +75,8 @@ typedef unsigned int gfp_t;
 #define S32_MAX			INT32_MAX
 #define S32_MIN			INT32_MIN
 #define MICRO			1000000UL
+#define NANO			1000000000UL
+#define MILLIDEGREE_PER_DEGREE	1000
 #define MICROHZ_PER_HZ		1000000UL
 #define NSEC_PER_SEC		1000000000L
 
@@ -84,6 +86,8 @@ typedef unsigned int gfp_t;
 
 static inline s64 div_s64(s64 a, s32 b) { return a / b; }
 static inline u64 div_u64(u64 a, u32 b) { return a / b; }
+static inline u64 div64_u64(u64 a, u64 b) { return a / b; }
+static inline u64 div_u64_rem(u64 a, u32 b, u32 *rem) { *rem = (u32)(a % b); return a / b; }
 static inline int ilog2(unsigned long v) { return 63 - __builtin_clzl(v); }
 static inline bool is_power_of_2(unsigned long v) { return v && !(v & (v - 1)); }
 static inline s32 sign_extend32(u32 v, int index)
@@ -404,15 +408,17 @@ int regcache_drop_region(struct regmap *map, unsigned int min, unsigned int max)
 /* ----------------------------------------------------------------- IIO */
 
 #define IIO_DMA_MINALIGN	8
-enum iio_chan_type { IIO_VOLTAGE, IIO_TIMESTAMP };
+enum iio_chan_type { IIO_VOLTAGE, IIO_TEMP, IIO_TIMESTAMP };
 enum iio_endian { IIO_CPU, IIO_BE, IIO_LE };
 enum iio_chan_info_enum {
 	IIO_CHAN_INFO_RAW,
 	IIO_CHAN_INFO_SCALE,
 	IIO_CHAN_INFO_SAMP_FREQ,
 	IIO_CHAN_INFO_HARDWAREGAIN,
+	IIO_CHAN_INFO_OFFSET,
 };
 #define IIO_VAL_INT		1
+#define IIO_VAL_INT_PLUS_MICRO	2
 #define IIO_VAL_INT_PLUS_NANO	3
 #define IIO_AVAIL_LIST		0
 #define INDIO_DIRECT_MODE	0x01

@@ -29,6 +29,10 @@ void fake_power_up(void)
 	fake.rdatac = true;
 	fake.stuck_reg = -1;
 	fake.generator_error = 1.0;
+	fake.temp_c = 25.0;
+	fake.avdd_uv = 5000000.0;
+	fake.avss_uv = 0.0;
+	fake.dvdd_uv = 1800000.0;
 }
 
 unsigned int fake_rate(void)
@@ -81,8 +85,12 @@ s32 fake_chain_code(unsigned int chip, unsigned int channel)
 	case 0:
 		uv = chip ? fake.chain_input_uv[chip][channel] : fake.input_uv[channel];
 		break;
-	case 4:				/* the temperature sensor, at 25 degC */
-		uv = 145300.0;
+	case 3:				/* SBAS499 9.3.1.1.4, as the text says */
+		uv = (channel == 2 || channel == 3) ? fake.dvdd_uv / 4.0 :
+			0.5 * (fake.avdd_uv + fake.avss_uv);
+		break;
+	case 4:				/* SBAS499 Equation 3, read backwards */
+		uv = 145300.0 + (fake.temp_c - 25.0) * 490.0;
 		break;
 	case 5:
 		uv = generator_uv();
@@ -276,6 +284,8 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			u8 dp = fake.detached_p, dn = fake.detached_n;
 			bool bias_off = fake.bias_detached;
 			u8 gpio_in = fake.gpio_in;
+			double temp_c = fake.temp_c, avdd = fake.avdd_uv;
+			double avss = fake.avss_uv, dvdd = fake.dvdd_uv;
 
 			memcpy(in, fake.input_uv, sizeof(in));
 			memcpy(chain_in, fake.chain_input_uv, sizeof(chain_in));
@@ -295,6 +305,10 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			fake.detached_n = dn;
 			fake.bias_detached = bias_off;
 			fake.gpio_in = gpio_in;
+			fake.temp_c = temp_c;
+			fake.avdd_uv = avdd;
+			fake.avss_uv = avss;
+			fake.dvdd_uv = dvdd;
 		}
 		break;
 	case 0x08:			/* START */
