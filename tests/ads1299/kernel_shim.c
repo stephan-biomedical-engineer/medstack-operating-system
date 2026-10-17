@@ -12,6 +12,8 @@ unsigned long shim_sleeps;
 struct regulator *shim_vref;
 struct regulator *shim_biasref;
 struct regulator shim_avdd = { .uv = 5000000 };
+struct gpio_desc *shim_powerdown_gpio;
+unsigned int shim_dvdd_enabled;
 irq_handler_t shim_irq_handler;
 void *shim_irq_dev;
 struct iio_dev *shim_iio;
@@ -60,6 +62,8 @@ void shim_reset(void)
 	shim_error_log[0] = '\0';
 	shim_sleeps = 0;
 	shim_vref = NULL;
+	shim_powerdown_gpio = NULL;
+	shim_dvdd_enabled = 0;
 	shim_biasref = NULL;
 	shim_irq_handler = NULL;
 	shim_irq_dev = NULL;
@@ -262,12 +266,59 @@ int regmap_read(struct regmap *map, unsigned int reg, unsigned int *val)
 	return 0;
 }
 
+static bool in_ranges(const struct regmap_range *r, unsigned int n, unsigned int reg)
+{
+	for (unsigned int i = 0; i < n; i++)
+		if (reg >= r[i].range_min && reg <= r[i].range_max)
+			return true;
+	return false;
+}
+
+static bool is_writeable(const struct regmap *map, unsigned int reg)
+{
+	const struct regmap_access_table *t = map->config->wr_table;
+
+	return !t || !in_ranges(t->no_ranges, t->n_no_ranges, reg);
+}
+
+int devm_regulator_get_enable(struct device *d, const char *id)
+{
+	(void)d;
+	if (!strcmp(id, "dvdd"))
+		shim_dvdd_enabled++;
+	return 0;
+}
+
+void regcache_mark_dirty(struct regmap *map)
+{
+	map->dirty = true;
+}
+
+int regcache_sync(struct regmap *map)
+{
+	if (!map->dirty)
+		return 0;
+	for (unsigned int r = 0; r <= map->config->max_register; r++) {
+		int ret;
+
+		if (!map->cached[r] || is_volatile(map, r) || !is_writeable(map, r))
+			continue;
+		ret = map->config->reg_write(map->context, r, map->cache[r]);
+		if (ret)
+			return ret;
+	}
+	map->dirty = false;
+	return 0;
+}
+
 int regmap_write(struct regmap *map, unsigned int reg, unsigned int val)
 {
 	int ret;
 
 	if (reg > map->config->max_register)
 		return -EINVAL;
+	if (!is_writeable(map, reg))
+		return -EIO;
 	/*
 	 * The cache first and the bus after, in that order, as _regmap_write()
 	 * does in the kernel this driver ships with (6.6,

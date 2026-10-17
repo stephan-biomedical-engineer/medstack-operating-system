@@ -1459,6 +1459,124 @@ static void test_temperature_and_supplies(void)
 	}
 }
 
+/* A configuration that touches every register a resume has to put back. */
+static void configure_everything(void)
+{
+	CHECK_EQ(set_gain(3, 4), 0);
+	CHECK(ext_store(5, "input_mux", "shorted") > 0);
+	CHECK(ext_store(1, "srb2", "1") > 0);
+	CHECK(ext_store(2, "bias_sense_p", "1") > 0);
+	CHECK(ext_store(6, "lead_off_sense_n", "1") > 0);
+	CHECK(ext_store(4, "lead_off_flip", "1") > 0);
+	CHECK(store("bias_drive", "on") > 0);
+	CHECK(store("bias_lead_off", "on") > 0);
+	CHECK(store("montage", "referential") > 0);
+	CHECK(store("test_signal", "2x_fast") > 0);
+	CHECK(store("lead_off_current_nanoamp", "24") > 0);
+	CHECK(ext_store(7, "input_mux", "bias_measurement") > 0);	/* BIAS_MEAS */
+	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[0], 1000, 0,
+					   IIO_CHAN_INFO_SAMP_FREQ), 0);
+	CHECK_EQ(shim_gpio_chip->direction_output(shim_gpio_chip, 1, 1), 0);
+}
+
+/* Every register a resume must restore, as the part holds it. */
+static void snapshot(u8 *regs)
+{
+	for (int r = 1; r < FAKE_REGS; r++)
+		regs[r] = fake.reg[r];
+	regs[R_CONFIG3] &= (u8)~0x01;			/* BIAS_STAT: status */
+	regs[0x12] = regs[0x13] = 0;			/* LOFF_STAT: status */
+}
+
+static bool same_registers(const u8 *before, char *why, size_t len)
+{
+	u8 now[FAKE_REGS];
+
+	snapshot(now);
+	for (int r = 1; r < FAKE_REGS; r++)
+		if (now[r] != before[r]) {
+			snprintf(why, len, "registrador %02x: era %02x, ficou %02x",
+				 r, before[r], now[r]);
+			return false;
+		}
+	return true;
+}
+
+static void test_power(void)
+{
+	static struct gpio_desc pwdn;
+	const struct dev_pm_ops *pm;
+	u8 before[FAKE_REGS];
+	char why[96];
+
+	section("energia: dvdd ligado, e o driver tem suspend e resume");
+	fresh();
+	shim_prop_gpio_controller = true;
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(shim_dvdd_enabled, 1);
+	pm = shim_spi_driver->driver.pm;
+	CHECK(pm && pm->suspend && pm->resume);
+	if (!pm)
+		return;
+	CHECK(dev_get_drvdata(&spi.dev) == shim_iio);
+
+	section("energia: sem PWDN, STANDBY e WAKEUP, os registradores guardados");
+	configure_everything();
+	snapshot(before);
+	CHECK_EQ(pm->suspend(&spi.dev), 0);
+	CHECK(fake.standby);
+	CHECK_EQ(pm->resume(&spi.dev), 0);
+	CHECK(!fake.standby);
+	CHECK_EQ(fake.ignored_in_standby, 0);		/* nothing but WAKEUP sent */
+	CHECK_MSG(same_registers(before, why, sizeof(why)), why);
+
+	section("energia: com PWDN, os registradores perdidos e todos devolvidos");
+	fresh();
+	shim_prop_gpio_controller = true;
+	pwdn.value = 1;
+	shim_powerdown_gpio = &pwdn;
+	shim_sleeps = 0;
+	CHECK_EQ(probe(0), 0);
+	CHECK_EQ(pwdn.value, 0);			/* out of power-down at probe */
+	configure_everything();
+	snapshot(before);
+	CHECK_EQ(pm->suspend(&spi.dev), 0);
+	CHECK_EQ(pwdn.value, 1);
+	CHECK(!fake.standby);
+	fake_lose_power();				/* what PWDN may have done */
+	CHECK(fake.rdatac);
+	CHECK_EQ(pm->resume(&spi.dev), 0);
+	CHECK_EQ(pwdn.value, 0);
+	CHECK(!fake.rdatac);				/* SDATAC before any register */
+	CHECK_EQ(fake.ignored_in_rdatac, 0);
+	CHECK_MSG(same_registers(before, why, sizeof(why)), why);
+	CHECK_EQ(shim_gpio_chip->get(shim_gpio_chip, 1), 1);	/* GPIO2 out, high */
+	CHECK(!strcmp(show("bias_lead_off"), "on\n"));		/* volatile CONFIG3 */
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0x10);		/* BIAS_MEAS too */
+
+	section("energia: um buffer ligado para e recomeça, sem zerar a contagem");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	buffer_on();
+	CHECK(priv()->timer.active);
+	priv()->lost_samples = 5;
+	CHECK_EQ(pm->suspend(&spi.dev), 0);
+	CHECK(!priv()->timer.active);
+	CHECK(!fake.started);				/* STOP before STANDBY */
+	CHECK_EQ(pm->resume(&spi.dev), 0);
+	CHECK(priv()->timer.active);
+	CHECK(fake.started);
+	CHECK_EQ(priv()->lost_samples, 5);
+	buffer_off();
+	/* With the buffer off, resume does not start conversions. */
+	CHECK_EQ(pm->suspend(&spi.dev), 0);
+	CHECK_EQ(pm->resume(&spi.dev), 0);
+	CHECK(!priv()->timer.active);
+	CHECK(!fake.started);
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1481,6 +1599,7 @@ int main(void)
 	test_mux_per_channel();
 	test_gpio();
 	test_temperature_and_supplies();
+	test_power();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

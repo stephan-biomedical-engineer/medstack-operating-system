@@ -33,6 +33,8 @@
 struct fake_ads1299 {
 	u8 reg[FAKE_REGS];
 	bool rdatac;		/* continuous read mode: register commands ignored */
+	bool standby;		/* STANDBY: nothing but WAKEUP is decoded */
+	unsigned int ignored_in_standby;
 	bool started;
 	u64 conversions;	/* conversions the part has made since power-up */
 
@@ -79,6 +81,9 @@ extern struct fake_ads1299 fake;
 
 /* Power-up: every register at its reset value, the part in RDATAC. */
 void fake_power_up(void);
+/* PWDN: the datasheet does not say what the registers keep, so this fake
+ * takes the worse answer - all back to their power-up values. */
+void fake_lose_power(void);
 /* One conversion, as the part makes it on its own clock in continuous mode. */
 void fake_convert(void);
 /* The bytes on the bus. Returns 0, or -EIO for an injected bus failure. */

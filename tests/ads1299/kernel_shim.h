@@ -130,7 +130,18 @@ struct mutex { int unused; };
 
 struct device {
 	const char *name;
+	void *driver_data;
 };
+static inline void *dev_get_drvdata(const struct device *d) { return d->driver_data; }
+
+/* pm.h: the system sleep callbacks, which the test calls */
+struct dev_pm_ops {
+	int (*suspend)(struct device *dev);
+	int (*resume)(struct device *dev);
+};
+#define DEFINE_SIMPLE_DEV_PM_OPS(name, s, r) \
+	const struct dev_pm_ops name = { .suspend = (s), .resume = (r) }
+#define pm_sleep_ptr(p)		(p)
 static inline const char *dev_name(const struct device *d) { return d->name; }
 
 extern int shim_verbose;
@@ -218,6 +229,7 @@ struct regulator { int uv; int enabled; };
 struct clk { unsigned long rate; };
 struct gpio_desc { int value; };
 #define GPIOD_OUT_HIGH		1
+#define GPIOD_OUT_LOW		0
 
 extern struct regulator *shim_vref;	/* NULL: the part's internal reference */
 extern struct regulator *shim_biasref;	/* NULL: BIASREF made inside the part */
@@ -270,9 +282,17 @@ struct clk_hw *of_clk_hw_simple_get(void *spec, void *data);
 int devm_of_clk_add_hw_provider(struct device *d,
 				struct clk_hw *(*get)(void *, void *), void *data);
 static inline unsigned long clk_get_rate(struct clk *c) { return c ? c->rate : 0; }
+/* The PWDN pin when the test gives one; none of the others. */
+extern struct gpio_desc *shim_powerdown_gpio;
+extern unsigned int shim_dvdd_enabled;
+int devm_regulator_get_enable(struct device *d, const char *id);
 static inline struct gpio_desc *devm_gpiod_get_optional(struct device *d, const char *id, int f)
 {
-	(void)d; (void)id; (void)f;
+	(void)d;
+	if (!strcmp(id, "powerdown") && shim_powerdown_gpio) {
+		shim_powerdown_gpio->value = f;
+		return shim_powerdown_gpio;
+	}
 	return NULL;
 }
 static inline void gpiod_set_value_cansleep(struct gpio_desc *g, int v) { if (g) g->value = v; }
@@ -339,12 +359,17 @@ struct spi_device {
 };
 /* Records the call and what the device asked for; the bus is the fake's. */
 int spi_setup(struct spi_device *spi);
+static inline void spi_set_drvdata(struct spi_device *spi, void *data)
+{
+	spi->dev.driver_data = data;
+}
 struct spi_device_id { char name[32]; };
 struct of_device_id { char compatible[128]; };
 struct spi_driver {
 	struct {
 		const char *name;
 		const struct of_device_id *of_match_table;
+		const struct dev_pm_ops *pm;
 	} driver;
 	int (*probe)(struct spi_device *spi);
 	const struct spi_device_id *id_table;
@@ -372,6 +397,8 @@ struct regmap_range { unsigned int range_min, range_max; };
 struct regmap_access_table {
 	const struct regmap_range *yes_ranges;
 	unsigned int n_yes_ranges;
+	const struct regmap_range *no_ranges;
+	unsigned int n_no_ranges;
 };
 struct regmap_config {
 	int reg_bits;
@@ -379,6 +406,7 @@ struct regmap_config {
 	int (*reg_read)(void *context, unsigned int reg, unsigned int *val);
 	int (*reg_write)(void *context, unsigned int reg, unsigned int val);
 	unsigned int max_register;
+	const struct regmap_access_table *wr_table;
 	const struct regmap_access_table *volatile_table;
 	enum regcache_type cache_type;
 };
@@ -396,6 +424,7 @@ struct regmap {
 	unsigned int cache[256];
 	bool cached[256];
 	bool bypass;
+	bool dirty;
 };
 struct regmap *devm_regmap_init(struct device *d, const void *bus, void *ctx,
 				const struct regmap_config *config);
@@ -403,6 +432,10 @@ int regmap_read(struct regmap *map, unsigned int reg, unsigned int *val);
 int regmap_write(struct regmap *map, unsigned int reg, unsigned int val);
 int regmap_update_bits(struct regmap *map, unsigned int reg, unsigned int mask, unsigned int val);
 void regcache_cache_bypass(struct regmap *map, bool enable);
+/* As the kernel's: the cache is written back whole, read-only and volatile
+ * registers apart. */
+void regcache_mark_dirty(struct regmap *map);
+int regcache_sync(struct regmap *map);
 int regcache_drop_region(struct regmap *map, unsigned int min, unsigned int max);
 
 /* ----------------------------------------------------------------- IIO */

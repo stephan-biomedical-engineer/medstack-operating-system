@@ -213,6 +213,17 @@ static void write_reg(unsigned int r, u8 v)
 	fake.reg[r] = v;
 }
 
+void fake_lose_power(void)
+{
+	const u8 reset = 0x06;
+	const bool ignored = fake.reset_ignored;
+
+	fake.standby = false;
+	fake.reset_ignored = false;
+	(void)fake_transfer(&reset, NULL, 1);
+	fake.reset_ignored = ignored;
+}
+
 int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 {
 	u8 op;
@@ -227,6 +238,12 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 	op = tx[0];
 	if (rx && rx != tx)
 		memset(rx, 0, len);
+
+	/* In standby the part decodes nothing but WAKEUP [SBAS499 9.5.3.3]. */
+	if (fake.standby && op != 0x02) {
+		fake.ignored_in_standby++;
+		return 0;
+	}
 
 	if ((op & 0xe0) == 0x20 || (op & 0xe0) == 0x40) {
 		const unsigned int first = op & 0x1f;
@@ -266,6 +283,10 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 
 	switch (op) {
 	case 0x02:			/* WAKEUP */
+		fake.standby = false;
+		break;
+	case 0x04:			/* STANDBY */
+		fake.standby = true;
 		break;
 	case 0x06:			/* RESET */
 		if (fake.reset_ignored)
