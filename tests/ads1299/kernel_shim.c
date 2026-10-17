@@ -24,6 +24,8 @@ unsigned int shim_spi_setups;
 bool shim_spi_setup_rt;
 static s64 shim_clock_ns = 1000000000;
 bool shim_prop_clock_cells;
+bool shim_prop_gpio_controller;
+struct gpio_chip *shim_gpio_chip;
 u32 shim_prop_daisy;
 const char *shim_prop_clock_name;
 struct clk *shim_ext_clk;
@@ -69,6 +71,8 @@ void shim_reset(void)
 	shim_spi_setup_rt = false;
 	pending_count = 0;
 	shim_prop_clock_cells = false;
+	shim_prop_gpio_controller = false;
+	shim_gpio_chip = NULL;
 	shim_prop_daisy = 0;
 	shim_prop_clock_name = NULL;
 	shim_ext_clk = NULL;
@@ -82,6 +86,8 @@ bool device_property_present(const struct device *d, const char *name)
 	(void)d;
 	if (!strcmp(name, "#clock-cells"))
 		return shim_prop_clock_cells;
+	if (!strcmp(name, "gpio-controller"))
+		return shim_prop_gpio_controller;
 	if (!strcmp(name, "#daisy-chained-devices"))
 		return shim_prop_daisy != 0;
 	if (!strcmp(name, "clock-output-names"))
@@ -120,6 +126,14 @@ int devm_clk_hw_register(struct device *d, struct clk_hw *hw)
 	shim_clk_hw = hw;
 	snprintf(shim_clk_hw_name, sizeof(shim_clk_hw_name), "%s", hw->init->name);
 	shim_clk_hw_ops = hw->init->ops;
+	return 0;
+}
+
+int devm_gpiochip_add_data(struct device *d, struct gpio_chip *gc, void *data)
+{
+	(void)d;
+	gc->data = data;
+	shim_gpio_chip = gc;
 	return 0;
 }
 

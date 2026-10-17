@@ -28,7 +28,8 @@ struct check_counters counters;
 enum {
 	R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_LOFF, R_CH1SET,
 	R_BIAS_SENSP = 0x0d, R_BIAS_SENSN,
-	R_LOFF_SENSP = 0x0f, R_LOFF_SENSN, R_LOFF_FLIP, R_MISC1 = 0x15, R_CONFIG4 = 0x17,
+	R_LOFF_SENSP = 0x0f, R_LOFF_SENSN, R_LOFF_FLIP, R_GPIO = 0x14, R_MISC1,
+	R_CONFIG4 = 0x17,
 };
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
@@ -1225,6 +1226,99 @@ static void test_mux_per_channel(void)
 	buffer_off();
 }
 
+static void test_gpio(void)
+{
+	struct gpio_chip *gc;
+	bool ok;
+
+	section("GPIO: sem gpio-controller não há gpiochip, e os pinos ficam entradas");
+	fresh();
+	fake.reg[R_GPIO] = 0x50;		/* left as outputs by something else */
+	fake.reset_ignored = true;
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(shim_gpio_chip == NULL);
+	CHECK_EQ(fake.reg[R_GPIO] & 0x0f, 0x0f);	/* every pin an input */
+
+	section("GPIO: com gpio-controller, um gpiochip de 4 linhas que dorme");
+	fresh();
+	shim_prop_gpio_controller = true;
+	CHECK_EQ(probe(0), 0);
+	gc = shim_gpio_chip;
+	CHECK(gc != NULL);
+	if (!gc)
+		return;
+	CHECK_EQ(gc->ngpio, 4);
+	CHECK(gc->can_sleep);
+	CHECK_EQ(gc->base, -1);
+	CHECK(gc->label && !strcmp(gc->label, "spi0.0"));
+	ok = true;
+	for (unsigned int i = 0; i < 4; i++)
+		ok = ok && gc->get_direction(gc, i) == GPIO_LINE_DIRECTION_IN;
+	CHECK(ok);
+
+	section("GPIO: entradas leem o pino, de novo a cada leitura");
+	fake.gpio_in = 0x05;			/* GPIO1 and GPIO3 high */
+	CHECK_EQ(gc->get(gc, 0), 1);
+	CHECK_EQ(gc->get(gc, 1), 0);
+	CHECK_EQ(gc->get(gc, 2), 1);
+	fake.gpio_in = 0x00;			/* the outside changes: seen */
+	CHECK_EQ(gc->get(gc, 0), 0);
+	gc->set(gc, 3, 1);			/* a level written to an input is lost */
+	CHECK_EQ(gc->get_direction(gc, 3), GPIO_LINE_DIRECTION_IN);
+	CHECK_EQ(gc->get(gc, 3), 0);
+
+	section("GPIO: saídas no nível pedido, cada pino só o seu");
+	CHECK_EQ(gc->direction_output(gc, 1, 1), 0);
+	CHECK_EQ(gc->get_direction(gc, 1), GPIO_LINE_DIRECTION_OUT);
+	CHECK_EQ(gc->get(gc, 1), 1);		/* latched on the pin's first write */
+	CHECK_EQ(fake.reg[R_GPIO] & 0x0f, 0x0d);	/* only GPIO2 an output */
+	CHECK_EQ(gc->direction_output(gc, 2, 0), 0);
+	CHECK_EQ(gc->get(gc, 2), 0);
+	CHECK_EQ(gc->get(gc, 1), 1);
+	gc->set(gc, 1, 0);
+	CHECK_EQ(gc->get(gc, 1), 0);
+	gc->set(gc, 2, 1);
+	CHECK_EQ(gc->get(gc, 2), 1);
+	CHECK_EQ(gc->get(gc, 1), 0);
+	fake.gpio_in = 0x0f;			/* outputs ignore the outside */
+	CHECK_EQ(gc->get(gc, 1), 0);
+	CHECK_EQ(gc->get(gc, 2), 1);
+	CHECK_EQ(gc->get(gc, 0), 1);		/* an input still follows it */
+
+	section("GPIO: de volta a entrada");
+	CHECK_EQ(gc->direction_input(gc, 1), 0);
+	CHECK_EQ(gc->get_direction(gc, 1), GPIO_LINE_DIRECTION_IN);
+	CHECK_EQ(gc->get(gc, 1), 1);		/* the outside, now */
+	CHECK_EQ(gc->get_direction(gc, 2), GPIO_LINE_DIRECTION_OUT);
+	fake.gpio_in = 0;
+
+	section("GPIO: uma saída puxada por fora não muda o nível das outras");
+	/* GPIO2 an output at 1, pulled to 0 by whatever is on the pin. */
+	CHECK_EQ(gc->direction_output(gc, 1, 1), 0);
+	fake.gpio_forced = 0x02;
+	fake.gpio_forced_level = 0x00;
+	CHECK_EQ(gc->get(gc, 1), 0);		/* the pin, as it is */
+	/* Writing GPIO3 must not copy that 0 into GPIO2's level. */
+	gc->set(gc, 2, 0);
+	gc->set(gc, 2, 1);
+	CHECK_EQ(gc->direction_output(gc, 3, 0), 0);
+	CHECK_EQ(gc->direction_input(gc, 0), 0);
+	CHECK_EQ((fake.reg[R_GPIO] >> 4) & 0x02, 0x02);	/* GPIO2's level kept */
+	fake.gpio_forced = 0;
+	CHECK_EQ(gc->get(gc, 1), 1);		/* released, back at its level */
+	CHECK_EQ(gc->get(gc, 2), 1);
+	CHECK_EQ(gc->get_direction(gc, 3), GPIO_LINE_DIRECTION_OUT);
+	CHECK_EQ(gc->get(gc, 3), 0);
+
+	/* While the buffer runs: the pins are not part of a sample. */
+	buffer_on();
+	CHECK_EQ(gc->direction_output(gc, 0, 1), 0);
+	CHECK_EQ(gc->get(gc, 0), 1);
+	buffer_off();
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1245,6 +1339,7 @@ int main(void)
 	test_bias_derivation();
 	test_gain_per_channel();
 	test_mux_per_channel();
+	test_gpio();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

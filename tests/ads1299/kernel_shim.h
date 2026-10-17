@@ -110,6 +110,8 @@ static inline bool test_bit(unsigned int nr, const unsigned long *addr)
 /* cleanup.h: a guard is the lock it names, and a lock is nothing here. */
 #define guard(type)		(void)
 typedef int spinlock_t;
+struct mutex { int unused; };
+#define devm_mutex_init(dev, m)	((void)(dev), (void)(m), 0)
 #define spin_lock_init(l)	(*(l) = 0)
 
 /* ---------------------------------------------------------- module glue */
@@ -270,6 +272,28 @@ static inline struct gpio_desc *devm_gpiod_get_optional(struct device *d, const 
 	return NULL;
 }
 static inline void gpiod_set_value_cansleep(struct gpio_desc *g, int v) { if (g) g->value = v; }
+
+/* gpio/driver.h: a provider registers one gpio_chip, which the test drives. */
+#define GPIO_LINE_DIRECTION_IN	1
+#define GPIO_LINE_DIRECTION_OUT	0
+struct gpio_chip {
+	const char *label;
+	struct device *parent;
+	void *owner;
+	int base;
+	u16 ngpio;
+	bool can_sleep;
+	int (*get_direction)(struct gpio_chip *gc, unsigned int offset);
+	int (*direction_input)(struct gpio_chip *gc, unsigned int offset);
+	int (*direction_output)(struct gpio_chip *gc, unsigned int offset, int value);
+	int (*get)(struct gpio_chip *gc, unsigned int offset);
+	void (*set)(struct gpio_chip *gc, unsigned int offset, int value);
+	void *data;
+};
+static inline void *gpiochip_get_data(struct gpio_chip *gc) { return gc->data; }
+extern struct gpio_chip *shim_gpio_chip;	/* the registered chip, or NULL */
+extern bool shim_prop_gpio_controller;		/* "gpio-controller" */
+int devm_gpiochip_add_data(struct device *d, struct gpio_chip *gc, void *data);
 
 /* ---------------------------------------------------------- interrupts */
 

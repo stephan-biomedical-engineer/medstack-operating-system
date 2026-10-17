@@ -52,6 +52,9 @@ struct fake_ads1299 {
 	s32 offset_codes;		/* added to every code: the part's offset */
 	u8 detached_p, detached_n;	/* electrodes off, per input */
 	bool bias_detached;		/* the bias electrode off */
+	u8 gpio_in;			/* GPIO1-4 levels driven from outside, bits 0-3 */
+	u8 gpio_forced;			/* fault: outputs pulled away from their level */
+	u8 gpio_forced_level;		/* ... to these levels */
 
 	/* Faults the tests inject. */
 	bool id_wrong;			/* the part answers a foreign ID */

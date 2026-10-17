@@ -118,6 +118,24 @@ void fake_convert(void)
 	latch_lead_off();
 }
 
+/*
+ * The GPIO register as read: GPIOC as written, and GPIOD the level of each
+ * pin - what the outside drives on an input, the latched level on an output.
+ * reg[R_GPIO] holds GPIOC and the output latch.
+ */
+static u8 gpio_value(void)
+{
+	const u8 dir = fake.reg[R_GPIO] & 0x0f;
+	const u8 latch = fake.reg[R_GPIO] >> 4;
+
+	u8 level = (u8)((latch & ~dir) | (fake.gpio_in & dir));
+
+	/* An output fighting something outside reads what the pin is at. */
+	level = (u8)((level & ~(fake.gpio_forced & ~dir)) |
+		     (fake.gpio_forced_level & fake.gpio_forced & ~dir));
+	return (u8)((level & 0x0f) << 4 | dir);
+}
+
 static void put_be24(u8 *p, s32 v)
 {
 	const u32 u = (u32)v & 0xffffff;
@@ -156,7 +174,7 @@ static void rdata(u8 *rx, unsigned int len)
 		/* 1100, LOFF_STATP, LOFF_STATN, GPIO[7:4] */
 		rx[base] = (u8)(sync | (sp >> 4));
 		rx[base + 1] = (u8)((sp << 4) | (sn >> 4));
-		rx[base + 2] = (u8)((sn << 4) | (fake.reg[R_GPIO] >> 4));
+		rx[base + 2] = (u8)((sn << 4) | (gpio_value() >> 4));
 		for (unsigned int c = 0; c < FAKE_CHANNELS && base + 3 + 3 * c + 2 < len; c++)
 			put_be24(rx + base + 3 + 3 * c, fake_chain_code(source, c));
 	}
@@ -171,6 +189,17 @@ static void write_reg(unsigned int r, u8 v)
 		return;			/* read only */
 	if (r == R_CONFIG3)
 		v &= (u8)~0x01;		/* BIAS_STAT is read only */
+	if (r == R_GPIO) {
+		/* A level written to an input is lost. Whether the write that
+		 * makes a pin an output also latches its level the datasheet
+		 * does not say; this fake takes the stricter answer, so it
+		 * latches only on pins that were outputs already. */
+		const u8 was_out = (u8)~fake.reg[R_GPIO] & 0x0f;
+		const u8 latch = (u8)(((v >> 4) & was_out) |
+				      ((fake.reg[R_GPIO] >> 4) & ~was_out));
+
+		v = (u8)((latch & 0x0f) << 4 | (v & 0x0f));
+	}
 	if ((int)r == fake.stuck_reg)
 		v = (u8)((v & ~fake.stuck_mask) | (fake.reg[r] & fake.stuck_mask));
 	fake.reg[r] = v;
@@ -211,6 +240,8 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 				if (rx)
 					rx[2 + i] = fake.id_wrong && first + i == R_ID ? 0x00
 										: fake.reg[first + i];
+				if (rx && first + i == R_GPIO)
+					rx[2 + i] = gpio_value();
 				/* BIAS_STAT follows the electrode while BIAS_LOFF_SENS
 				 * and the comparators are on, and reads 0 otherwise.
 				 * The two ways the part senses it - the lead-off
@@ -244,6 +275,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			s32 off = fake.offset_codes;
 			u8 dp = fake.detached_p, dn = fake.detached_n;
 			bool bias_off = fake.bias_detached;
+			u8 gpio_in = fake.gpio_in;
 
 			memcpy(in, fake.input_uv, sizeof(in));
 			memcpy(chain_in, fake.chain_input_uv, sizeof(chain_in));
@@ -262,6 +294,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			fake.detached_p = dp;
 			fake.detached_n = dn;
 			fake.bias_detached = bias_off;
+			fake.gpio_in = gpio_in;
 		}
 		break;
 	case 0x08:			/* START */
