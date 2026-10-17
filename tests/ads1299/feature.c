@@ -133,7 +133,7 @@ static void test_single_device(void)
 	if (!shim_iio)
 		return;
 	CHECK(shim_iio->registered);
-	CHECK_EQ(shim_iio->num_channels, 9);		/* eight voltages, timestamp */
+	CHECK_EQ(shim_iio->num_channels, 10);	/* eight voltages, lead-off, timestamp */
 	/* 0x96 out of reset: DAISY_EN and CLK_EN were already 0, so the write
 	 * the driver asks for changes nothing - and the bits stay 0. */
 	CHECK_EQ(fake.reg[R_CONFIG1] & (CONFIG1_DAISY_EN | CONFIG1_CLK_EN), 0);
@@ -236,7 +236,7 @@ static void test_chain_refused(void)
 	shim_prop_daisy = 1;
 	CHECK_EQ(probe(0), 0);
 	CHECK(shim_iio->registered);
-	CHECK_EQ(shim_iio->num_channels, 9);
+	CHECK_EQ(shim_iio->num_channels, 10);
 }
 
 static void test_status_word(void)
@@ -693,6 +693,176 @@ static void test_lead_off_channels(void)
 	fake.detached_p = fake.detached_n = 0;
 }
 
+/* One conversion through the buffer, on the host timer. */
+static void one_conversion(void)
+{
+	fake_convert();
+	tick();
+	shim_spi_complete_one();
+}
+
+static int event_config(int state)
+{
+	return shim_iio->info->write_event_config(shim_iio, &shim_iio->channels[0],
+						  IIO_EV_TYPE_FAULT,
+						  IIO_EV_DIR_FAULT_OPENWIRE, state);
+}
+
+static bool is_openwire(unsigned int i, int chan)
+{
+	const u64 c = shim_events[i].code;
+
+	return IIO_EVENT_CODE_EXTRACT_TYPE(c) == IIO_EV_TYPE_FAULT &&
+	       IIO_EVENT_CODE_EXTRACT_DIR(c) == IIO_EV_DIR_FAULT_OPENWIRE &&
+	       IIO_EVENT_CODE_EXTRACT_CHAN_TYPE(c) == IIO_VOLTAGE &&
+	       IIO_EVENT_CODE_EXTRACT_CHAN(c) == chan;
+}
+
+static void test_lead_off_word(void)
+{
+	section("palavra de lead-off por amostra: o canal no buffer");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(shim_iio->channels[8].type, IIO_VOLTAGE);
+	CHECK(shim_iio->channels[8].extend_name &&
+	      !strcmp(shim_iio->channels[8].extend_name, "lead_off"));
+	CHECK_EQ(shim_iio->channels[8].scan_index, 8);
+	CHECK_EQ(shim_iio->channels[8].scan_type.sign, 'u');
+	CHECK_EQ(shim_iio->channels[8].scan_type.realbits, 16);
+	CHECK_EQ(shim_iio->channels[8].scan_type.storagebits, 32);
+	CHECK(shim_iio->channels[8].ext_info == NULL);
+	CHECK_EQ(shim_iio->channels[8].num_event_specs, 0);
+	CHECK_EQ(shim_iio->channels[9].type, IIO_TIMESTAMP);
+
+	section("palavra de lead-off: só os bits monitorados, (P << 8) | N");
+	CHECK(ext_store(0, "lead_off_sense_p", "1") > 0);
+	CHECK(ext_store(1, "lead_off_sense_n", "1") > 0);
+	fake.detached_p = 0x03;		/* IN1P sensed, IN2P not */
+	fake.detached_n = 0x82;		/* IN2N sensed, IN8N not */
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_scan_count, 1);
+	CHECK_EQ(shim_scans[0].count, 9);
+	CHECK_EQ(shim_scans[0].value[8], (0x01 << 8) | 0x02);
+	CHECK_EQ(code24(shim_scans[0].value[0]), fake_code(0));	/* voltages in place */
+
+	/* Nothing sensed: nothing reported, whatever the comparators say. */
+	CHECK(ext_store(0, "lead_off_sense_p", "0") > 0);
+	CHECK(ext_store(1, "lead_off_sense_n", "0") > 0);
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_scans[shim_scan_count - 1].value[8], 0);
+
+	/* AC excitation: the comparators are not the sensing, the word is 0. */
+	CHECK(ext_store(0, "lead_off_sense_p", "1") > 0);
+	CHECK(store("lead_off_frequency", "ac_31.2") > 0);
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_scans[shim_scan_count - 1].value[8], 0);
+	CHECK(store("lead_off_frequency", "dc") > 0);
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_scans[shim_scan_count - 1].value[8], 0x01 << 8);
+	fake.detached_p = fake.detached_n = 0;
+}
+
+static void test_lead_off_event(void)
+{
+	section("evento de fio aberto: desligado por padrão");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(shim_iio->channels[0].num_event_specs, 1);
+	CHECK_EQ(shim_iio->channels[0].event_spec[0].type, IIO_EV_TYPE_FAULT);
+	CHECK_EQ(shim_iio->channels[0].event_spec[0].dir, IIO_EV_DIR_FAULT_OPENWIRE);
+	CHECK_EQ(shim_iio->info->read_event_config(shim_iio, &shim_iio->channels[0],
+						   IIO_EV_TYPE_FAULT,
+						   IIO_EV_DIR_FAULT_OPENWIRE), 0);
+	CHECK(ext_store(0, "lead_off_sense_p", "1") > 0);
+	CHECK(ext_store(1, "lead_off_sense_n", "1") > 0);
+	fake.detached_p = 0x01;
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_event_count, 0);
+
+	section("evento de fio aberto: um por eletrodo que sai, no instante da amostra");
+	CHECK_EQ(event_config(1), 0);
+	CHECK_EQ(shim_iio->info->read_event_config(shim_iio, &shim_iio->channels[3],
+						   IIO_EV_TYPE_FAULT,
+						   IIO_EV_DIR_FAULT_OPENWIRE), 1);
+	fake.detached_p = 0;
+	buffer_on();
+	one_conversion();			/* all attached: nothing */
+	CHECK_EQ(shim_event_count, 0);
+	fake.detached_p = 0x01;			/* IN1P off */
+	one_conversion();
+	CHECK_EQ(shim_event_count, 1);
+	CHECK(is_openwire(0, 0));
+	CHECK_EQ(shim_events[0].timestamp, shim_scans[shim_scan_count - 1].timestamp);
+	one_conversion();			/* still off: no new event */
+	CHECK_EQ(shim_event_count, 1);
+	fake.detached_n = 0x02;			/* IN2N off too */
+	one_conversion();
+	CHECK_EQ(shim_event_count, 2);
+	CHECK(is_openwire(1, 1));
+	fake.detached_p = 0;			/* IN1P back ... */
+	one_conversion();
+	CHECK_EQ(shim_event_count, 2);		/* ... raises nothing */
+	fake.detached_p = 0x01;			/* ... and off again */
+	one_conversion();
+	CHECK_EQ(shim_event_count, 3);
+	CHECK(is_openwire(2, 0));
+	fake.detached_p = 0x04;			/* IN3P: not sensed */
+	one_conversion();
+	CHECK_EQ(shim_event_count, 3);
+	buffer_off();
+
+	section("evento de fio aberto: de novo a cada buffer, e nunca em AC");
+	/* IN1P off through the end of one buffer and the start of the next:
+	 * the new acquisition still reports it, once. */
+	fake.detached_p = 0x01;
+	fake.detached_n = 0;
+	buffer_on();
+	one_conversion();
+	CHECK_EQ(shim_event_count, 4);
+	CHECK(is_openwire(3, 0));
+	buffer_off();
+	buffer_on();
+	one_conversion();			/* already off when the buffer started */
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_event_count, 5);
+	CHECK(is_openwire(4, 0));
+	CHECK(store("lead_off_frequency", "ac_7.8") > 0);
+	buffer_on();
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_event_count, 5);
+	CHECK(store("lead_off_frequency", "dc") > 0);
+
+	/* Only this event type is the driver's. */
+	CHECK_EQ(shim_iio->info->write_event_config(shim_iio, &shim_iio->channels[0],
+						    IIO_EV_TYPE_THRESH,
+						    IIO_EV_DIR_EITHER, 1), -EINVAL);
+	CHECK_EQ(event_config(0), 0);
+	fake.detached_p = 0;
+	buffer_on();
+	one_conversion();
+	fake.detached_p = 0x01;
+	one_conversion();
+	buffer_off();
+	CHECK_EQ(shim_event_count, 5);			/* disabled again */
+	fake.detached_p = 0;
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -707,6 +877,8 @@ int main(void)
 	test_bias_lead_off();
 	test_lead_off_fields();
 	test_lead_off_channels();
+	test_lead_off_word();
+	test_lead_off_event();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

@@ -104,7 +104,7 @@ static inline bool test_bit(unsigned int nr, const unsigned long *addr)
 	return (addr[nr / 64] >> (nr % 64)) & 1;
 }
 #define for_each_set_bit(bit, addr, size) \
-	for ((bit) = 0; (bit) < (int)(size); (bit)++) \
+	for ((bit) = 0; (long)(bit) < (long)(size); (bit)++) \
 		if (test_bit((unsigned int)(bit), (addr)))
 
 /* cleanup.h: a guard is the lock it names, and a lock is nothing here. */
@@ -413,9 +413,34 @@ struct iio_chan_spec_ext_info {
 			 const struct iio_chan_spec *, const char *buf, size_t len);
 	uintptr_t private;
 };
+enum iio_event_type { IIO_EV_TYPE_THRESH, IIO_EV_TYPE_FAULT = 8 };
+enum iio_event_direction { IIO_EV_DIR_EITHER, IIO_EV_DIR_FAULT_OPENWIRE = 6 };
+enum iio_event_info { IIO_EV_INFO_ENABLE, IIO_EV_INFO_VALUE };
+struct iio_event_spec {
+	enum iio_event_type type;
+	enum iio_event_direction dir;
+	unsigned long mask_separate;
+	unsigned long mask_shared_by_type;
+	unsigned long mask_shared_by_dir;
+	unsigned long mask_shared_by_all;
+};
+/* include/linux/iio/events.h, the same bit layout */
+#define IIO_EVENT_CODE(chan_type, diff, modifier, direction, type, chan, chan1, chan2) \
+	(((u64)(type) << 56) | ((u64)(diff) << 55) | ((u64)(direction) << 48) | \
+	 ((u64)(modifier) << 40) | ((u64)(chan_type) << 32) | \
+	 (((u16)(chan2)) << 16) | ((u16)(chan1)) | ((u16)(chan)))
+#define IIO_UNMOD_EVENT_CODE(chan_type, number, type, direction) \
+	IIO_EVENT_CODE(chan_type, 0, 0, direction, type, number, 0, 0)
+#define IIO_EVENT_CODE_EXTRACT_TYPE(ev)		((u8)(((ev) >> 56) & 0xff))
+#define IIO_EVENT_CODE_EXTRACT_DIR(ev)		((u8)(((ev) >> 48) & 0x7f))
+#define IIO_EVENT_CODE_EXTRACT_CHAN(ev)		((s16)((ev) & 0xffff))
+#define IIO_EVENT_CODE_EXTRACT_CHAN_TYPE(ev)	((u8)(((ev) >> 32) & 0xff))
+
 struct iio_chan_spec {
 	enum iio_chan_type type;
 	const struct iio_chan_spec_ext_info *ext_info;
+	const struct iio_event_spec *event_spec;
+	unsigned int num_event_specs;
 	int channel;
 	unsigned long address;
 	int scan_index;
@@ -482,6 +507,10 @@ struct iio_info {
 	int (*write_raw)(struct iio_dev *, struct iio_chan_spec const *, int, int, long);
 	int (*update_scan_mode)(struct iio_dev *, const unsigned long *);
 	int (*debugfs_reg_access)(struct iio_dev *, unsigned int, unsigned int, unsigned int *);
+	int (*read_event_config)(struct iio_dev *, const struct iio_chan_spec *,
+				 enum iio_event_type, enum iio_event_direction);
+	int (*write_event_config)(struct iio_dev *, const struct iio_chan_spec *,
+				  enum iio_event_type, enum iio_event_direction, int);
 };
 struct iio_buffer_setup_ops {
 	int (*postenable)(struct iio_dev *);
@@ -516,5 +545,11 @@ static inline int iio_device_claim_direct_mode(struct iio_dev *d)
 static inline void iio_device_release_direct_mode(struct iio_dev *d) { (void)d; }
 s64 iio_get_time_ns(const struct iio_dev *d);
 int iio_push_to_buffers_with_timestamp(struct iio_dev *d, void *data, s64 ts);
+/* Events the driver pushed, in order, for the tests to read. */
+struct shim_event { u64 code; s64 timestamp; };
+#define SHIM_MAX_EVENTS	64
+extern struct shim_event shim_events[SHIM_MAX_EVENTS];
+extern unsigned int shim_event_count;
+int iio_push_event(struct iio_dev *d, u64 ev_code, s64 timestamp);
 
 #endif /* ADS1299_TEST_KERNEL_SHIM_H */

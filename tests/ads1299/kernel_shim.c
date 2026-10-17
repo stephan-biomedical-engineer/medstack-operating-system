@@ -16,6 +16,8 @@ irq_handler_t shim_irq_handler;
 void *shim_irq_dev;
 struct iio_dev *shim_iio;
 struct shim_scan shim_scans[SHIM_MAX_SCANS];
+struct shim_event shim_events[SHIM_MAX_EVENTS];
+unsigned int shim_event_count;
 unsigned int shim_scan_count;
 unsigned int shim_cache_drops;
 unsigned int shim_spi_setups;
@@ -61,6 +63,7 @@ void shim_reset(void)
 	shim_irq_dev = NULL;
 	shim_iio = NULL;
 	shim_scan_count = 0;
+	shim_event_count = 0;
 	shim_cache_drops = 0;
 	shim_spi_setups = 0;
 	shim_spi_setup_rt = false;
@@ -436,6 +439,17 @@ int devm_iio_kfifo_buffer_setup(struct device *d, struct iio_dev *indio,
 {
 	(void)d;
 	indio->setup_ops = ops;
+	return 0;
+}
+
+int iio_push_event(struct iio_dev *d, u64 ev_code, s64 timestamp)
+{
+	(void)d;
+	if (shim_event_count >= SHIM_MAX_EVENTS)
+		return -EBUSY;
+	shim_events[shim_event_count].code = ev_code;
+	shim_events[shim_event_count].timestamp = timestamp;
+	shim_event_count++;
 	return 0;
 }
 
