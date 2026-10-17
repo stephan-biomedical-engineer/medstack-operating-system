@@ -25,7 +25,7 @@
 
 struct check_counters counters;
 
-enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_CH1SET = 0x05, R_CONFIG4 = 0x17 };
+enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_LOFF, R_CH1SET, R_CONFIG4 = 0x17 };
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
 
@@ -492,6 +492,76 @@ static void test_bias_lead_off(void)
 	fake.bias_detached = false;
 }
 
+/* Every name of one LOFF field, the bits it must write, the rest held. */
+static bool loff_sweep(const char *attr_name, const char * const *names,
+		       const u8 *bits, unsigned int n, u8 mask, u8 others)
+{
+	char value[32];
+	bool ok = true;
+
+	for (unsigned int i = 0; i < n; i++) {
+		snprintf(value, sizeof(value), "%s\n", names[i]);
+		ok = ok && store(attr_name, value) > 0;
+		ok = ok && fake.reg[R_LOFF] == (u8)((others & ~mask) | bits[i]);
+		ok = ok && !strcmp(show(attr_name), value);
+	}
+	return ok;
+}
+
+static void test_lead_off_fields(void)
+{
+	static const char * const th[] = { "95", "92.5", "90", "87.5", "85", "80", "75", "70" };
+	static const u8 th_bits[] = { 0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0, 0xe0 };
+	static const char * const cur[] = { "6", "24", "6000", "24000" };
+	static const u8 cur_bits[] = { 0x00, 0x04, 0x08, 0x0c };
+	static const char * const fr[] = { "dc", "ac_7.8", "ac_31.2", "ac_fdr_div_4" };
+	static const u8 fr_bits[] = { 0x00, 0x01, 0x02, 0x03 };
+
+	section("LOFF: escrito no probe com o valor de reset");
+	fresh();
+	fake.reg[0x04] = 0xff;		/* left by whatever ran before ... */
+	fake.reset_ignored = true;	/* ... on a part whose RESET did not take */
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_LOFF], 0x00);	/* 95% / 5%, 6 nA, DC */
+	CHECK(!strcmp(show("lead_off_threshold_percent"), "95\n"));
+	CHECK(!strcmp(show("lead_off_current_nanoamp"), "6\n"));
+	CHECK(!strcmp(show("lead_off_frequency"), "dc\n"));
+
+	section("LOFF: cada campo em todos os valores, os outros dois intocados");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	CHECK(!strcmp(show("lead_off_threshold_percent_available"),
+		      "95 92.5 90 87.5 85 80 75 70\n"));
+	CHECK(!strcmp(show("lead_off_current_nanoamp_available"), "6 24 6000 24000\n"));
+	CHECK(!strcmp(show("lead_off_frequency_available"),
+		      "dc ac_7.8 ac_31.2 ac_fdr_div_4\n"));
+	/* The other two at their last code, so a field that spills shows. */
+	CHECK(store("lead_off_current_nanoamp", "24000") > 0);
+	CHECK(store("lead_off_frequency", "ac_fdr_div_4") > 0);
+	CHECK(loff_sweep("lead_off_threshold_percent", th, th_bits, 8, 0xe0, 0x0f));
+	CHECK(store("lead_off_threshold_percent", "70") > 0);
+	CHECK(loff_sweep("lead_off_current_nanoamp", cur, cur_bits, 4, 0x0c, 0xe3));
+	CHECK(store("lead_off_current_nanoamp", "24000") > 0);
+	CHECK(loff_sweep("lead_off_frequency", fr, fr_bits, 4, 0x03, 0xec));
+	CHECK_EQ(fake.reg[R_LOFF] & 0x10, 0);	/* reserved bit 4 never set */
+
+	section("LOFF: recusas");
+	CHECK_EQ(store("lead_off_threshold_percent", "93"), -EINVAL);
+	CHECK_EQ(store("lead_off_threshold_percent", "95%"), -EINVAL);
+	CHECK_EQ(store("lead_off_current_nanoamp", "6uA"), -EINVAL);
+	CHECK_EQ(store("lead_off_frequency", "ac"), -EINVAL);
+	CHECK_EQ(fake.reg[R_LOFF], 0xef);
+	buffer_on();
+	CHECK_EQ(store("lead_off_threshold_percent", "95"), -EBUSY);
+	CHECK_EQ(store("lead_off_current_nanoamp", "6"), -EBUSY);
+	CHECK_EQ(store("lead_off_frequency", "dc"), -EBUSY);
+	CHECK_EQ(fake.reg[R_LOFF], 0xef);
+	CHECK(!strcmp(show("lead_off_frequency"), "ac_fdr_div_4\n"));
+	buffer_off();
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -504,6 +574,7 @@ int main(void)
 	test_bias_measurement();
 	test_biasref();
 	test_bias_lead_off();
+	test_lead_off_fields();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"

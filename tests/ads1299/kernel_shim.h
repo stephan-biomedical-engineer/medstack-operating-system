@@ -434,6 +434,12 @@ struct iio_dev_attr { struct device_attribute dev_attr; u64 address; };
 		.dev_attr = { .attr = { .name = #_name, .mode = 0644 },	\
 			      .show = _name##_show, .store = _name##_store },	\
 		.address = (_addr) }
+#define IIO_DEVICE_ATTR(_name, _mode, _show, _store, _addr)		\
+	struct iio_dev_attr iio_dev_attr_##_name = {			\
+		.dev_attr = { .attr = { .name = #_name, .mode = _mode },	\
+			      .show = _show, .store = _store },		\
+		.address = (_addr) }
+#define to_iio_dev_attr(_dev_attr)	container_of(_dev_attr, struct iio_dev_attr, dev_attr)
 #define IIO_DEVICE_ATTR_RO(_name, _addr)					\
 	struct iio_dev_attr iio_dev_attr_##_name = {			\
 		.dev_attr = { .attr = { .name = #_name, .mode = 0444 },	\
