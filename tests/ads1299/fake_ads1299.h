@@ -51,6 +51,7 @@ struct fake_ads1299 {
 	double chain_input_uv[FAKE_MAX_CHIPS][FAKE_CHANNELS]; /* devices 2 on */
 	s32 offset_codes;		/* added to every code: the part's offset */
 	u8 detached_p, detached_n;	/* electrodes off, per input */
+	bool bias_detached;		/* the bias electrode off */
 
 	/* Faults the tests inject. */
 	bool id_wrong;			/* the part answers a foreign ID */

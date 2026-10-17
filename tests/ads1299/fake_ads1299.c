@@ -169,6 +169,8 @@ static void write_reg(unsigned int r, u8 v)
 	fake.reg_writes[r]++;
 	if (r == R_ID || r == R_LOFF_STATP || r == R_LOFF_STATN)
 		return;			/* read only */
+	if (r == R_CONFIG3)
+		v &= (u8)~0x01;		/* BIAS_STAT is read only */
 	if ((int)r == fake.stuck_reg)
 		v = (u8)((v & ~fake.stuck_mask) | (fake.reg[r] & fake.stuck_mask));
 	fake.reg[r] = v;
@@ -209,6 +211,15 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 				if (rx)
 					rx[2 + i] = fake.id_wrong && first + i == R_ID ? 0x00
 										: fake.reg[first + i];
+				/* BIAS_STAT follows the electrode while BIAS_LOFF_SENS
+				 * and the comparators are on, and reads 0 otherwise.
+				 * The two ways the part senses it - the lead-off
+				 * current with the bias drive off, the amplifier's
+				 * output with it on - are not modelled apart. */
+				if (rx && first + i == R_CONFIG3 &&
+				    (fake.reg[R_CONFIG3] & 0x02) &&
+				    (fake.reg[R_CONFIG4] & 0x02) && fake.bias_detached)
+					rx[2 + i] |= 0x01;
 			}
 		}
 		return 0;
@@ -232,6 +243,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			unsigned int step = fake.out_of_step;
 			s32 off = fake.offset_codes;
 			u8 dp = fake.detached_p, dn = fake.detached_n;
+			bool bias_off = fake.bias_detached;
 
 			memcpy(in, fake.input_uv, sizeof(in));
 			memcpy(chain_in, fake.chain_input_uv, sizeof(chain_in));
@@ -249,6 +261,7 @@ int fake_transfer(const u8 *tx, u8 *rx, unsigned int len)
 			fake.offset_codes = off;
 			fake.detached_p = dp;
 			fake.detached_n = dn;
+			fake.bias_detached = bias_off;
 		}
 		break;
 	case 0x08:			/* START */

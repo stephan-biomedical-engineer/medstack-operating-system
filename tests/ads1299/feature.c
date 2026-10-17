@@ -25,7 +25,7 @@
 
 struct check_counters counters;
 
-enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_CH1SET = 0x05 };
+enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_CH1SET = 0x05, R_CONFIG4 = 0x17 };
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
 
@@ -433,6 +433,65 @@ static void test_biasref(void)
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x0c, 0);
 }
 
+static void test_bias_lead_off(void)
+{
+	section("lead-off do eletrodo de bias: BIAS_LOFF_SENS e BIAS_STAT");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(!strcmp(show("bias_lead_off"), "off\n"));
+	CHECK(!strcmp(show("bias_lead_off_status"), "disabled\n"));
+	/* Detached but not sensed: the bit means nothing, so it says so. */
+	fake.bias_detached = true;
+	CHECK(!strcmp(show("bias_lead_off_status"), "disabled\n"));
+	fake.bias_detached = false;
+
+	CHECK(store("bias_lead_off", "on") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x02, 0x02);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0x02);	/* comparators on */
+	CHECK(!strcmp(show("bias_lead_off"), "on\n"));
+	CHECK(!strcmp(show("bias_lead_off_status"), "connected\n"));
+
+	section("BIAS_STAT lido do conversor, não do cache (D3)");
+	/* The electrode comes off after the last read: a cached CONFIG3 would
+	 * go on saying "connected". */
+	fake.bias_detached = true;
+	CHECK(!strcmp(show("bias_lead_off_status"), "disconnected\n"));
+	fake.bias_detached = false;
+	CHECK(!strcmp(show("bias_lead_off_status"), "connected\n"));
+
+	section("BIAS_LOFF_SENS: o resto do CONFIG3 intocado, e recusas");
+	CHECK(store("bias_drive", "derived") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x0c | 0x02);
+	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x0c | 0x02);
+	CHECK(store("input_mux", "normal") > 0);
+	CHECK(store("bias_drive", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x02);
+	/* Comparators off by whatever came before: sensing turns them on. */
+	CHECK(store("bias_lead_off", "off") > 0);
+	CHECK_EQ(regmap_update_bits(priv()->regmap, ADS1299_REG_CONFIG4,
+				    ADS1299_MASK_CONFIG4_PD_LOFF_COMP, 0), 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0);
+	CHECK(store("bias_lead_off", "on") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0x02);
+
+	CHECK_EQ(store("bias_lead_off", "maybe"), -EINVAL);
+	buffer_on();
+	CHECK_EQ(store("bias_lead_off", "off"), -EBUSY);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x02, 0x02);
+	/* The status is read while running. */
+	CHECK(!strcmp(show("bias_lead_off_status"), "connected\n"));
+	buffer_off();
+
+	CHECK(store("bias_lead_off", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0);
+	fake.bias_detached = true;
+	CHECK(!strcmp(show("bias_lead_off_status"), "disabled\n"));
+	fake.bias_detached = false;
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -444,6 +503,7 @@ int main(void)
 	test_test_input_needs_generator();
 	test_bias_measurement();
 	test_biasref();
+	test_bias_lead_off();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
