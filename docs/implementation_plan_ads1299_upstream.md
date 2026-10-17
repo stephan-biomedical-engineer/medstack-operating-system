@@ -437,26 +437,30 @@ funcionalidades" e não "todos os registradores":
 #### 3.1.1 Temperatura e alimentação: um campo de MUX, dois mecanismos de leitura
 
 MUX=100 (sensor de temperatura) e MUX=011 (MVDD) são valores do MUX de um canal físico, e não canais
-próprios. O IIO tem canal padrão para os dois (`IIO_TEMP` com `_raw`/`_scale`/`_offset`, e uma tensão
-de alimentação), e o caminho padrão é:
+próprios. Desde 2026-10-17 (`7ec1691e0ed2`, só host) os dois mecanismos existem na feature:
 
-- **leitura direta** de `in_temp_raw` e da tensão de alimentação: o driver troca o MUX de um canal,
-  faz uma conversão single-shot e devolve o MUX. É mecanismo padrão, e é o que um mantenedor espera.
-  A conversão para °C fica em `_scale`/`_offset`, e as constantes vêm do datasheet: 145.300 µV a
-  25 °C e 490 µV/°C, **marcadas `[SBAS499?]`**. Elas estão em §9.3.1, fora das tabelas que
-  `Register_Map_ADS1299.md` transcreveu, e entram na Fase 0 do plano de bancada como dívida. A
-  plataforma converte hoje no *build* (`implementation_plan_hmi_desktop.md` §12.8), e as duas
-  conversões têm de concordar, ou uma das duas está errada.
-- **no buffer**, um canal dedicado ao sensor por toda a sessão: é o `temperature_channel` da
-  `board/medplatform-afe`, que a plataforma usa, e continua customizado. Ele expressa o
-  `in_voltageN_input_mux = temperature` com o ganho limitado a 12, que é a parte que vale guardar.
-  Quando o MUX virar por canal (3.1), esse atributo vira redundante e **sai**, e o limite de ganho
-  passa a ser recusado com `-EINVAL` quando o MUX daquele canal é o sensor e o ganho passa de 12.
-  Um campo, um mecanismo.
+- **leitura direta**: `in_temp_raw`/`_scale`/`_offset` e `in_voltage_mvdd_analog`/`mvdd_digital`
+  `_raw`/`_scale`. O driver toma um canal emprestado (o 1 para a temperatura e o MVDD analógico, o
+  3 para o digital), guarda o CHnSET, põe o MUX com **ganho 1**, descarta as duas conversões que
+  carregam a troca, lê uma e devolve o CHnSET byte a byte; com o buffer ligado, `-EBUSY`.
+- **no buffer**: `in_voltageN_input_mux = temperature` num canal, que o MUX por canal (3.1) já dá.
+  Era isso que o `temperature_channel` da board expressava, e por isso ele não entra na feature.
 
-Para o MVDD, o que cada canal mede é diferente: (AVDD − AVSS)/2 nos canais 1, 2 e 5–8, DVDD/4 nos 3
-e 4. **`[SBAS499?]`, e a confirmar antes de escrever o `_scale`.** É o tipo de constante que, errada,
-sai como bug em kernel estável.
+**As constantes da temperatura estão conferidas** (SBAS499 §9.3.1.1.3, Equação 3): 145.300 µV a
+25 °C e 490 µV/°C, com a leitura convertida para µV antes. Deixaram de ser `[SBAS499?]`. A
+plataforma converte hoje no *build* (`implementation_plan_hmi_desktop.md` §12.8), e as duas
+conversões têm de concordar, ou uma das duas está errada.
+
+**O limite de ganho 12 no canal do sensor não virou regra.** A conta que o justificava na board não
+fecha: 145 mV cabem nos ±187,5 mV do ganho 24, e a saturação medida em silício (−79 °C a 24, 43 °C
+até 12) não tem causa entendida. A leitura direta não depende disso, porque usa ganho 1; quem puser
+o sensor no buffer escolhe o ganho, e o comportamento a 24 continua sendo uma pergunta de bancada.
+
+**Para o MVDD, o texto do datasheet diz "mais"** (§9.3.1.1.4): **0,5 × (AVDD + AVSS)** nos canais 1,
+2 e 5–8, e DVDD/4 nos 3 e 4, com ganho 1. Este plano tinha escrito (AVDD − AVSS)/2. Com AVSS = 0
+as duas leituras coincidem; numa alimentação simétrica "mais" daria zero, o que sugere erro de
+impressão. **Por isso os canais reportam a tensão medida e não inferem alimentação nenhuma**, e o
+`_scale` é o de ganho 1. Fica para a bancada: com a alimentação conhecida, comparar o que o canal lê.
 
 #### 3.1.2 Status de lead-off: evento e palavra por amostra não são duplicação
 
@@ -900,7 +904,7 @@ que converte o atraso do módulo em progresso, em vez de espera.
 | Funções sem silício nesta bancada (SRB2, GPIO, saída de clock, lead-off AC, PM) | registradas como "testado no host", nunca como "validado"; a daisy-chain já saiu do `v1` (§5.6) |
 | `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | **resolvido em 2026-10-17**: existe na mainline; a feature carrega o *backport* `66874e950a96`, que sai na submissão, e o `write_event_config` passa de `int` para `bool` lá |
 | O driver expõe ILEAD_OFF de 6 e 24 µA, e em DC isso passa do limite de corrente auxiliar de paciente da IEC 60601-1 para corrente contínua (10 µA, citado de memória; conferir na norma) | política fora do kernel (§3): o driver é genérico e expõe o campo inteiro, e a tradução por ligação (`do_derive_device_options`) não oferece esses valores em DC - hoje não oferece nenhum valor de corrente, e uma linha nova de opções tem de respeitar isso |
-| Constantes fora das tabelas transcritas (temperatura, MVDD) | `[SBAS499?]` até a Fase 0 do plano de bancada; nenhum `_scale`/`_offset` é submetido com elas pendentes |
+| Constantes fora das tabelas transcritas (temperatura, MVDD) | **temperatura resolvida em 2026-10-17**: Equação 3 do SBAS499 conferida. O MVDD analógico depende de o texto estar certo sobre "AVDD + AVSS"; o driver reporta a tensão medida e não infere a alimentação (§3.1.1), e a placa responde |
 
 ---
 
@@ -940,7 +944,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3 | auditoria campo a campo (§3.1): PR 6 ✅ / 5 ⚙️ / 7 ⚠️ / 15 ❌; board 9 / 10 / 5 / 9, de 33 | **medido**, 7 defeitos (§3.2) | 2026-10-16 |
 | 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
 | 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`ad3a2ec3641b`), entrada de teste nunca sem o gerador (`17eccf84c5d6`), `BIAS_MEAS` seguindo o MUX e D1 (`89bed0807417`), MUX por canal (`e749f79fd717`). **Só host** | **feito**, 2026-10-17 |
-| 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | ganho por canal (`c880fb1f02f6`; só host). `in_temp_*`, alimentação e as constantes em aberto: dependem do MUX por canal (3.1) e da Fase 0 do plano de bancada | 2026-10-17 |
+| 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | ganho por canal (`c880fb1f02f6`); `in_temp` e os dois MVDD por leitura direta, constantes da Equação 3 conferidas, injeção do plano (offset trocado) vista (`7ec1691e0ed2`). **Só host**. O sinal de AVSS no MVDD analógico fica para a bancada | **feito**, 2026-10-17 |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`11a174bc5f1f`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`); derivação por canal e `bias_drive` = `off`/`on` (`8c0d40ff063a`); a política do referencial saiu do kernel com o `montage` (`11a174bc5f1f`). **Só host** | **feito**, 2026-10-17 |
 | 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 (`308e6166ef98`); evento `fault`/`openwire` com o *backport* `66874e950a96`, e a palavra por amostra (`8b545d83bad2`). **Só host** | **feito**, 2026-10-17 |
