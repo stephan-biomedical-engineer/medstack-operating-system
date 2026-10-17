@@ -426,11 +426,11 @@ funcionalidades" e não "todos os registradores":
 
 | Funcionalidade | Hoje (as duas) | Alvo | Tipo | Sub |
 |---|---|---|---|---|
-| Pino START | só o comando `START` | `start-gpios` opcional no DT. Com ele, o início é pelo pino, que é o que sincroniza vários chips. **Em aberto**: no modo *cascaded* cada chip é um dispositivo IIO, e um pino de START compartilhado precisa de um dono que nenhum dos drivers é (§5.6) | DT | 3.8 |
+| Pino START | só o comando `START` | `start-gpios` opcional no DT. Com ele, o início é pelo pino, que é o que sincroniza vários chips. **Adiado, junto com o uso de vários chips** (2026-10-17): o desenho e o custo estão na §5.7 | DT | 3.8 |
 | Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend*; no *resume* os registradores são tratados como perdidos (o datasheet não diz o que guardam): 150 ms, *reset*, SDATAC, `regcache_sync`, CONFIG3 e GPIO à mão. **Feito** (`59511f846e67`, `bf05f4d465d5`) | DT + PM | 3.7 |
 | Pino CLKSEL | inferido da presença de `clocks` | idem, documentado no *binding* | DT | 3.8 |
 | `STANDBY` / `WAKEUP` | definidos, sem uso | *system sleep* (`DEFINE_SIMPLE_DEV_PM_OPS`, `pm_sleep_ptr`): STANDBY/WAKEUP sem pino PWDN. **Feito** (`bf05f4d465d5`). **Sem runtime PM, por decisão**: suspender ocioso derrubaria o bias no paciente e o clock que este chip dá a outros, e cada leitura avulsa pagaria 150 ms de partida da referência | padrão (PM) | 3.7 |
-| `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número. **Em aberto: é medida de bancada** | — | 3.7 |
+| `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número. **Pelo USB a pergunta não se aplica**: o MCP2210 é HID *full-speed*, uma troca leva pelo menos um quadro de 1 ms e um `RDATA` leva duas, o teto medido é 250 amostras/s (`BRINGUP_AFE.md` §6); e o `RDATAC` não ajuda, porque cada quadro ainda tem de ser lido entre dois DRDY, 62,5 µs a 16 kSPS. **Mede-se pelo SPI nativo, no *header* do STM32MP257, no fim da série** | — | 3.7 |
 | `RREG`/`WREG` de vários registradores | sempre um | não muda a cobertura; fica como está | — | — |
 | Bits GPIO[7:4] da *status word* em cada amostra | descartados | opcional: canal de varredura. Não é exigido para cobrir GPIOD, que o `gpiochip` já cobre | custom | 3.6 |
 
@@ -722,6 +722,27 @@ por comando, chip a chip, e a defasagem entre eles fica constante (o clock é co
 pino de START compartilhado entre dispositivos IIO separados precisa de um dono, e esse é o ponto em
 aberto da 3.8.
 
+### 5.7 Modo *cascaded*: o que custa
+
+Avaliado em 2026-10-17, e **adiado junto com qualquer uso de vários chips**. Um CS por chip, cada chip
+um nó e um dispositivo IIO; é o modo que o datasheet chama de adequado à maioria das aplicações
+(§10.1.4.1).
+
+- **No driver, quase tudo já existe**: a configuração inteira por canal, o clock de um chip para os
+  outros (`#clock-cells` e `clocks`, `ceaa3f09e909`), e o bias ligado em um só, como a Figura 39 pede
+  para vários chips. Falta o **início simultâneo**: um nó é dono do pino START (`start-gpios`), os
+  outros declaram que o START deles vem de fora (propriedade nova, a nomear) e não mandam o comando;
+  o pino sobe quando o buffer do dono liga, e os outros ligam antes. Algumas dezenas de linhas e uma
+  propriedade de *binding*.
+- **No hardware**, por chip a mais: um CS, uma linha de DRDY (ou seguir o do primeiro), o clock do
+  primeiro para os outros com CLKSEL baixo nestes, e o fio de START comum.
+- **Na plataforma está o custo de verdade.** O driver `iio` do framework lê **um** dispositivo IIO; ler
+  N buffers e alinhá-los amostra a amostra, cada um com o seu carimbo, é trabalho novo. E a tradução
+  por ligação, o registro clínico e a mensagem do `amp` assumem 8 canais; a mensagem de controle do
+  `amp` já está cheia.
+- **Pelo USB não é viável**: com um chip o MCP2210 já entrega 250 amostras/s sem margem, e dois chips
+  pedem duas leituras por período, o que não fecha nem a 250. Pelo SPI nativo do STM32MP257 é.
+
 ---
 
 ## 6. Pré-requisitos não negociáveis
@@ -951,6 +972,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.6 | `gpiochip` (só host) | binding (`85b99dffb49e`) e `gpiochip` (`263f1a3f9860`); injeção do plano (GPIOC invertido) vista, e a de leitura-modificação-escrita, a primeira versão do próprio driver. **Só host** | **feito**, 2026-10-17 |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | binding (`59511f846e67`) e *suspend*/*resume*, PWDN, DVDD (`bf05f4d465d5`); injeção do plano (sem `regcache_sync`) vista, e um defeito achado pelo teste (níveis do GPIO perdidos no *resume*). Sem runtime PM, por decisão. **Só host**. A medida do `RDATAC` a 16 kSPS e o que o PWDN guarda ficam para a bancada | **feito no host**, 2026-10-17 |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
+| 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`2204c67ec03d`; só host) | **feito** | 2026-10-17 |
 | 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | — | — |
 | 4 | autoteste passa com tolerância medida | — | — |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
