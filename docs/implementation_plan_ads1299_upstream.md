@@ -8,9 +8,10 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **12 / 5 / 6 / 10** (CLK_EN, CAL_FREQ, BIAS_MEAS,
-> BIASREF_INT, BIAS_LOFF_SENS e BIAS_STAT fechados; DAISY_EN passou a ser escrito, sem opção). Só testado no host. A coluna **PR**
-> da §3.1 acompanha a feature; a auditoria acima fica como foi medida.
+> **Atualização (2026-10-17)**: a feature chegou a **15 / 5 / 6 / 7** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT e os três campos do LOFF fechados; DAISY_EN passou a ser
+> escrito, sem opção). Só testado no host. A coluna **PR** da §3.1 acompanha a feature; a auditoria
+> acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -393,9 +394,9 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | CONFIG3 | PD_BIAS | ✅ | ✅ | `bias_drive` passa a ser `off`/`on` e só isso (ver BIAS_SENS) | custom | 3.4 |
 | CONFIG3 | BIAS_LOFF_SENS | ✅ `b27cb88553d0` | ❌ | atributo `bias_lead_off` (`off`/`on`), que liga também os comparadores; `-EBUSY` com o buffer ligado | custom | 3.5 |
 | CONFIG3 | BIAS_STAT | ✅ `b27cb88553d0` | ❌ | lido **sem cache** (CONFIG3 volátil, D3): `bias_lead_off_status` = `disabled`/`connected`/`disconnected`. Ele não vem na *status word*, então o registrador é o único caminho; se o lead-off ganhar evento na 3.5, este bit vai junto | custom | 3.5 |
-| LOFF | COMP_TH | ❌ | ⚙️ 95/5 % | `lead_off_threshold` + `_available` (8 pares, 95/5 % … 70/30 %) | custom | 3.5 |
-| LOFF | ILEAD_OFF | ❌ | ⚙️ 6 nA | `lead_off_current` + `_available` (6 nA, 24 nA, 6 µA, 24 µA) | custom | 3.5 |
-| LOFF | FLEAD_OFF | ❌ | ⚙️ DC | `lead_off_frequency` + `_available` (DC, 7,8 Hz, 31,2 Hz, f_DR/4) | custom | 3.5 |
+| LOFF | COMP_TH | ✅ `a6edbf1cfde1` | ⚙️ 95/5 % | `lead_off_threshold_percent` + `_available` (8 pares; o valor é o lado positivo, 95 = 95/5 % … 70 = 70/30 %) | custom | 3.5 |
+| LOFF | ILEAD_OFF | ✅ `a6edbf1cfde1` | ⚙️ 6 nA | `lead_off_current_nanoamp` + `_available` (6, 24, 6000, 24000). 6 e 24 µA em DC passam do limite da IEC 60601-1: é a plataforma que não os oferece (§11), não o driver | custom | 3.5 |
+| LOFF | FLEAD_OFF | ✅ `a6edbf1cfde1` | ⚙️ DC | `lead_off_frequency` + `_available` (`dc`, `ac_7.8`, `ac_31.2`, `ac_fdr_div_4`; Hz do clock interno de 2,048 MHz). O significado do LOFF_STAT em AC segue sem confirmação (§3.1.2) | custom | 3.5 |
 | CHnSET | PD | ✅ | ✅ | já fechado (máscara de varredura) | padrão | — |
 | CHnSET | PGA | ⚠️ um para todos | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`). Ganho igual para todos vira política da plataforma | padrão | 3.2 |
 | CHnSET | SRB2 | ❌ | ❌ | `in_voltageN_srb2` por canal | custom | 3.3 |
@@ -889,6 +890,7 @@ que converte o atraso do módulo em progresso, em vez de espera.
 | A ABI nova quebra a plataforma (§3.3) | a troca na tradução por ligação entra no mesmo `SRCREV`; `tests/derive` e `make check` são o portão |
 | Funções sem silício nesta bancada (SRB2, GPIO, saída de clock, lead-off AC, PM) | registradas como "testado no host", nunca como "validado"; a daisy-chain já saiu do `v1` (§5.6) |
 | `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | conferir na mainline-alvo antes da 3.5; o custo do *backport* ou do `#ifdef` é declarado, não descoberto |
+| O driver expõe ILEAD_OFF de 6 e 24 µA, e em DC isso passa do limite de corrente auxiliar de paciente da IEC 60601-1 para corrente contínua (10 µA, citado de memória; conferir na norma) | política fora do kernel (§3): o driver é genérico e expõe o campo inteiro, e a tradução por ligação (`do_derive_device_options`) não oferece esses valores em DC - hoje não oferece nenhum valor de corrente, e uma linha nova de opções tem de respeitar isso |
 | Constantes fora das tabelas transcritas (temperatura, MVDD) | `[SBAS499?]` até a Fase 0 do plano de bancada; nenhum `_scale`/`_offset` é submetido com elas pendentes |
 
 ---
@@ -932,7 +934,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
-| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 corrigido (`b27cb88553d0`; só host). Limiar, corrente, frequência, *sense* por canal e evento em aberto | 2026-10-17 |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 corrigido (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); só host. *Sense* por canal, FLIP, LOFF_STAT em AC e evento em aberto | 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | — | — |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
