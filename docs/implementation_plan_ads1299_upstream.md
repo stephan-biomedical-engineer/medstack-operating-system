@@ -8,8 +8,8 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **10 / 5 / 6 / 12** (CLK_EN, CAL_FREQ, BIAS_MEAS e
-> BIASREF_INT fechados; DAISY_EN passou a ser escrito, sem opção). Só testado no host. A coluna **PR**
+> **Atualização (2026-10-17)**: a feature chegou a **12 / 5 / 6 / 10** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> BIASREF_INT, BIAS_LOFF_SENS e BIAS_STAT fechados; DAISY_EN passou a ser escrito, sem opção). Só testado no host. A coluna **PR**
 > da §3.1 acompanha a feature; a auditoria acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
@@ -391,8 +391,8 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | CONFIG3 | BIAS_MEAS | ✅ `89bed0807417` | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
 | CONFIG3 | BIASREF_INT | ✅ `89bed0807417` | ⚙️ | `biasref-supply` no DT (`b82dc6df6759`): com ela a placa alimenta o pino e o bit fica 0; sem ela, o CI gera (AVDD + AVSS) / 2 | DT (padrão) | 3.4 |
 | CONFIG3 | PD_BIAS | ✅ | ✅ | `bias_drive` passa a ser `off`/`on` e só isso (ver BIAS_SENS) | custom | 3.4 |
-| CONFIG3 | BIAS_LOFF_SENS | ❌ | ❌ | atributo `bias_lead_off` (`off`/`on`) | custom | 3.5 |
-| CONFIG3 | BIAS_STAT | ❌ | ❌ | lido **sem cache** e entregue pelo mesmo mecanismo do status de lead-off (D3) | evento | 3.5 |
+| CONFIG3 | BIAS_LOFF_SENS | ✅ `b27cb88553d0` | ❌ | atributo `bias_lead_off` (`off`/`on`), que liga também os comparadores; `-EBUSY` com o buffer ligado | custom | 3.5 |
+| CONFIG3 | BIAS_STAT | ✅ `b27cb88553d0` | ❌ | lido **sem cache** (CONFIG3 volátil, D3): `bias_lead_off_status` = `disabled`/`connected`/`disconnected`. Ele não vem na *status word*, então o registrador é o único caminho; se o lead-off ganhar evento na 3.5, este bit vai junto | custom | 3.5 |
 | LOFF | COMP_TH | ❌ | ⚙️ 95/5 % | `lead_off_threshold` + `_available` (8 pares, 95/5 % … 70/30 %) | custom | 3.5 |
 | LOFF | ILEAD_OFF | ❌ | ⚙️ 6 nA | `lead_off_current` + `_available` (6 nA, 24 nA, 6 µA, 24 µA) | custom | 3.5 |
 | LOFF | FLEAD_OFF | ❌ | ⚙️ DC | `lead_off_frequency` + `_available` (DC, 7,8 Hz, 31,2 Hz, f_DR/4) | custom | 3.5 |
@@ -487,7 +487,7 @@ cobertura nova sobre um mecanismo quebrado só multiplica o defeito.
 |---|---|---|---|---|
 | D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1). **Corrigido na feature** (`89bed0807417`) | 3.1 |
 | D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3) | 3.0 |
-| D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso | 3.5 |
+| D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso. **Corrigido na feature** (`b27cb88553d0`: CONFIG3 volátil) | 3.5 |
 | D4 | board | o comentário acima de `ADS1299_REG_LOFF_SENSP` ainda abre com "this driver never writes either of them", e o próprio bloco diz depois que `ads1299_set_lead_off()` os grava | reescrever o comentário | 3.0 |
 | D5 | as duas | `ads1299_read_one()` limpa o `PD` do canal lido e nunca o devolve, então uma leitura direta deixa um canal ligado contra a máscara de varredura | restaurar o `PD` ao fim da leitura | 3.0 |
 | D6 | PR | `input_mux = temperature`/`supply` devolve a escala de tensão, sem conversão | §3.1.1 | 3.2 |
@@ -932,7 +932,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | — | — |
 | 3.3 | SRB1, SRB2 (SRB2: só host) | — | — |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`; só host). Bias por campo em aberto | 2026-10-17 |
-| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | — | — |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | lead-off do eletrodo de bias e D3 corrigido (`b27cb88553d0`; só host). Limiar, corrente, frequência, *sense* por canal e evento em aberto | 2026-10-17 |
 | 3.6 | `gpiochip` (só host) | — | — |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
