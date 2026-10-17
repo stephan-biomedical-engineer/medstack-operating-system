@@ -8,11 +8,12 @@
 > chega a 9/10/5/9, e **nenhuma das duas cobre o CI**. A Fase 3 (§8) foi reescrita em subfases para
 > fechar os 33.
 >
-> **Atualização (2026-10-17)**: a feature chegou a **26 / 5 / 0 / 2** (CLK_EN, CAL_FREQ, BIAS_MEAS,
+> **Atualização (2026-10-17)**: a feature chegou a **28 / 5 / 0 / 0** (CLK_EN, CAL_FREQ, BIAS_MEAS,
 > BIASREF_INT, BIAS_LOFF_SENS, BIAS_STAT, os três campos do LOFF, LOFF_SENSP, LOFF_SENSN, LOFF_FLIP,
-> LOFF_STATP, LOFF_STATN, SRB1, SRB2, BIAS_SENSP, BIAS_SENSN o PGA e o MUX fechados; DAISY_EN passou a
-> ser escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host. A coluna **PR** da
-> §3.1 acompanha a feature; a auditoria acima fica como foi medida.
+> LOFF_STATP, LOFF_STATN, SRB1, SRB2, BIAS_SENSP, BIAS_SENSN, o PGA, o MUX, GPIOD e GPIOC fechados;
+> DAISY_EN passou a ser escrito, sem opção; PD_LOFF_COMP passou a ser derivado). Só testado no host.
+> **Os 33 campos têm caminho no driver do PR.** A coluna **PR** da §3.1 acompanha a feature; a
+> auditoria acima fica como foi medida.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -409,8 +410,8 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 | LOFF_FLIP | canal 1…8 | ✅ `308e6166ef98` | ❌ | `in_voltageN_lead_off_flip` por canal (0/1, `ext_info`) | custom | 3.5 |
 | LOFF_STATP | canal 1…8 | ✅ `8b545d83bad2` | ✅ | evento `fault`/`openwire` por canal **e** a palavra por amostra `in_voltage8_lead_off` no buffer (§3.1.2); `lead_off_status` para leitura avulsa | padrão + custom | 3.5 |
 | LOFF_STATN | canal 1…8 | ✅ `8b545d83bad2` | ✅ | idem | padrão + custom | 3.5 |
-| GPIO | GPIOD[4:1] | ❌ | ❌ | **`gpiochip`** de 4 linhas, registrador volátil | padrão | 3.6 |
-| GPIO | GPIOC[4:1] | ❌ | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
+| GPIO | GPIOD[4:1] | ✅ `263f1a3f9860` | ❌ | **`gpiochip`** de 4 linhas, só com `gpio-controller` no DT (`85b99dffb49e`); registrador volátil para a leitura; escritas a partir de uma cópia, nunca lendo e devolvendo, porque a leitura dá o pino e não o nível escrito | padrão | 3.6 |
+| GPIO | GPIOC[4:1] | ✅ `263f1a3f9860` | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
 | MISC1 | SRB1 | ✅ `11a174bc5f1f` | ✅ `montage` | `montage` (`bipolar`/`referential`), o nome e os valores da board, mas **só a chave**: a regra do referencial (BIAS_SENSN = 0, um bit no LOFF_SENSN) sai do kernel e vai para a tradução da plataforma (§3.3). O nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
 | CONFIG4 | SINGLE_SHOT | ⚙️ | ⚙️ | segue o modo, single-shot na leitura direta e contínuo no buffer | — (fica ⚙️) | — |
 | CONFIG4 | PD_LOFF_COMP | ⚙️ derivado (`308e6166ef98`) | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
@@ -555,7 +556,7 @@ mora no sysfs. Um `ti,lead-off-current-na` no *binding* é pedido de reescrita g
 
 | Propriedade | Por quê | Sub |
 |---|---|---|
-| `gpio-controller`, `#gpio-cells = <2>` | o `gpiochip` dos GPIO1–4 | 3.6 |
+| `gpio-controller`, `#gpio-cells = <2>`, `gpio-line-names` | o `gpiochip` dos GPIO1–4; sem ele os pinos são tomados como ligados ao DGND e nenhum chip é registrado. **Feito** (`85b99dffb49e`) | 3.6 |
 | `#clock-cells = <0>` | o CI como provedor de clock (CLK_EN) quando roda do oscilador interno. **Feito** (`8c3d602693f1`), com `clock-output-names` | 3.8 |
 | `start-gpios` | o pino START, que sincroniza chips em cascata | 3.8 |
 | `powerdown-gpios` | o pino PWDN | 3.7 |
@@ -943,7 +944,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`11a174bc5f1f`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
 | 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`b82dc6df6759`, `89bed0807417`); derivação por canal e `bias_drive` = `off`/`on` (`8c0d40ff063a`); a política do referencial saiu do kernel com o `montage` (`11a174bc5f1f`). **Só host** | **feito**, 2026-10-17 |
 | 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`b27cb88553d0`); limiar, corrente e frequência (`a6edbf1cfde1`); *sense* e FLIP por canal, comparadores derivados, D2 (`308e6166ef98`); evento `fault`/`openwire` com o *backport* `66874e950a96`, e a palavra por amostra (`8b545d83bad2`). **Só host** | **feito**, 2026-10-17 |
-| 3.6 | `gpiochip` (só host) | — | — |
+| 3.6 | `gpiochip` (só host) | binding (`85b99dffb49e`) e `gpiochip` (`263f1a3f9860`); injeção do plano (GPIOC invertido) vista, e a de leitura-modificação-escrita, a primeira versão do próprio driver. **Só host** | **feito**, 2026-10-17 |
 | 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | — | — |
 | 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8c3d602693f1`, `ceaa3f09e909`, `ed48db8df4c8`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
 | 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | — | — |
