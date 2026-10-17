@@ -401,8 +401,21 @@ struct iio_scan_type {
 	u8 shift;
 	enum iio_endian endianness;
 };
+struct iio_dev;
+struct iio_chan_spec;
+enum iio_shared_by { IIO_SEPARATE, IIO_SHARED_BY_TYPE, IIO_SHARED_BY_DIR, IIO_SHARED_BY_ALL };
+struct iio_chan_spec_ext_info {
+	const char *name;
+	enum iio_shared_by shared;
+	ssize_t (*read)(struct iio_dev *, uintptr_t private,
+			const struct iio_chan_spec *, char *buf);
+	ssize_t (*write)(struct iio_dev *, uintptr_t private,
+			 const struct iio_chan_spec *, const char *buf, size_t len);
+	uintptr_t private;
+};
 struct iio_chan_spec {
 	enum iio_chan_type type;
+	const struct iio_chan_spec_ext_info *ext_info;
 	int channel;
 	unsigned long address;
 	int scan_index;
@@ -454,6 +467,8 @@ bool sysfs_streq(const char *s1, const char *s2);
 /* The kernel's: base 10 here, an optional '+', one trailing newline, nothing
  * else; -EINVAL for anything that is not a number, -ERANGE past UINT_MAX. */
 int kstrtouint(const char *s, unsigned int base, unsigned int *res);
+/* The kernel's: the first character, y/t/1 or n/f/0, or on/off. */
+int kstrtobool(const char *s, bool *res);
 #ifndef UINT_MAX
 #define UINT_MAX	(~0U)
 #endif

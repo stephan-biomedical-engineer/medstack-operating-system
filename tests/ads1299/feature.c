@@ -25,7 +25,10 @@
 
 struct check_counters counters;
 
-enum { R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_LOFF, R_CH1SET, R_CONFIG4 = 0x17 };
+enum {
+	R_CONFIG1 = 0x01, R_CONFIG2, R_CONFIG3, R_LOFF, R_CH1SET,
+	R_LOFF_SENSP = 0x0f, R_LOFF_SENSN, R_LOFF_FLIP, R_CONFIG4 = 0x17,
+};
 #define CONFIG1_DAISY_EN	0x40
 #define CONFIG1_CLK_EN		0x20
 
@@ -562,6 +565,134 @@ static void test_lead_off_fields(void)
 	buffer_off();
 }
 
+/* A channel's ext_info attribute, as sysfs would reach it. */
+static const struct iio_chan_spec_ext_info *ext(int chan, const char *name)
+{
+	const struct iio_chan_spec_ext_info *e = shim_iio->channels[chan].ext_info;
+
+	for (; e && e->name; e++)
+		if (!strcmp(e->name, name))
+			return e;
+	return NULL;
+}
+
+static ssize_t ext_store(int chan, const char *name, const char *value)
+{
+	const struct iio_chan_spec_ext_info *e = ext(chan, name);
+
+	if (!e || !e->write)
+		return -ENOENT;
+	return e->write(shim_iio, e->private, &shim_iio->channels[chan], value,
+			strlen(value));
+}
+
+static const char *ext_show(int chan, const char *name)
+{
+	static char buf[64];
+	const struct iio_chan_spec_ext_info *e = ext(chan, name);
+	ssize_t n;
+
+	if (!e || !e->read)
+		return "<no attribute>";
+	n = e->read(shim_iio, e->private, &shim_iio->channels[chan], buf);
+	if (n < 0)
+		snprintf(buf, sizeof(buf), "<error %zd>", n);
+	return buf;
+}
+
+static void test_lead_off_channels(void)
+{
+	static const char * const names[] = {
+		"lead_off_sense_p", "lead_off_sense_n", "lead_off_flip",
+	};
+	static const int regs[] = { R_LOFF_SENSP, R_LOFF_SENSN, R_LOFF_FLIP };
+	bool ok;
+
+	section("lead-off por canal: gravado zero no probe, comparadores desligados (D2)");
+	fresh();
+	fake.reg[R_LOFF_SENSP] = 0xff;
+	fake.reg[R_LOFF_SENSN] = 0xff;
+	fake.reg[R_LOFF_FLIP] = 0xff;
+	fake.reg[R_CONFIG4] = 0x02;
+	fake.reset_ignored = true;
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK_EQ(fake.reg[R_LOFF_SENSP], 0);
+	CHECK_EQ(fake.reg[R_LOFF_SENSN], 0);
+	CHECK_EQ(fake.reg[R_LOFF_FLIP], 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0);	/* nothing sensed: off */
+	CHECK(!strcmp(show("lead_off_status"), "disabled\n"));
+
+	section("lead-off por canal: cada atributo, cada canal, só o seu bit");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	for (unsigned int a = 0; a < 3; a++) {
+		ok = true;
+		for (int c = 0; c < 8; c++) {
+			ok = ok && ext_store(c, names[a], "1\n") > 0;
+			ok = ok && fake.reg[regs[a]] == (1u << c);
+			ok = ok && !strcmp(ext_show(c, names[a]), "1\n");
+			ok = ok && !strcmp(ext_show((c + 1) % 8, names[a]), "0\n");
+			/* Comparators follow sensing; the flip is not sensing. */
+			ok = ok && (fake.reg[R_CONFIG4] & 0x02) == (a < 2 ? 0x02 : 0);
+			ok = ok && ext_store(c, names[a], "0\n") > 0;
+			ok = ok && fake.reg[regs[a]] == 0;
+			ok = ok && (fake.reg[R_CONFIG4] & 0x02) == 0;
+		}
+		CHECK_MSG(ok, names[a]);
+	}
+
+	section("lead-off por canal: os comparadores enquanto algo é monitorado");
+	CHECK(ext_store(0, "lead_off_sense_p", "1") > 0);
+	CHECK(ext_store(7, "lead_off_sense_n", "1") > 0);
+	CHECK_EQ(fake.reg[R_LOFF_SENSP], 0x01);
+	CHECK_EQ(fake.reg[R_LOFF_SENSN], 0x80);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0x02);
+	CHECK(ext_store(0, "lead_off_sense_p", "0") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0x02);	/* IN8N still sensed */
+	CHECK(store("bias_lead_off", "on") > 0);
+	CHECK(ext_store(7, "lead_off_sense_n", "0") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0x02);	/* the bias electrode is */
+	CHECK(store("bias_lead_off", "off") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG4] & 0x02, 0);
+
+	section("lead-off por canal: valores e recusas");
+	CHECK(ext_store(2, "lead_off_flip", "y") > 0);
+	CHECK(ext_store(2, "lead_off_flip", "off") > 0);
+	CHECK(ext_store(2, "lead_off_flip", "on") > 0);
+	CHECK_EQ(fake.reg[R_LOFF_FLIP], 0x04);
+	CHECK_EQ(ext_store(2, "lead_off_flip", "maybe"), -EINVAL);
+	CHECK_EQ(ext_store(2, "lead_off_flip", "2"), -EINVAL);
+	CHECK_EQ(fake.reg[R_LOFF_FLIP], 0x04);
+	buffer_on();
+	CHECK_EQ(ext_store(2, "lead_off_flip", "0"), -EBUSY);
+	CHECK_EQ(ext_store(3, "lead_off_sense_p", "1"), -EBUSY);
+	CHECK_EQ(fake.reg[R_LOFF_FLIP], 0x04);
+	CHECK_EQ(fake.reg[R_LOFF_SENSP], 0);
+	CHECK(!strcmp(ext_show(2, "lead_off_flip"), "1\n"));	/* read while running */
+	buffer_off();
+	CHECK(ext_store(2, "lead_off_flip", "0") > 0);
+
+	section("lead_off_status: alcançável, só os bits monitorados, e 'ac' em AC");
+	CHECK(ext_store(0, "lead_off_sense_p", "1") > 0);
+	fake_convert();
+	CHECK(!strcmp(show("lead_off_status"), "00 00\n"));
+	fake.detached_p = 0x03;			/* IN1P and IN2P off, IN1P sensed */
+	fake_convert();
+	CHECK(!strcmp(show("lead_off_status"), "01 00\n"));
+	CHECK(ext_store(1, "lead_off_sense_n", "1") > 0);
+	fake.detached_n = 0x02;
+	fake_convert();
+	CHECK(!strcmp(show("lead_off_status"), "01 02\n"));
+	/* AC excitation: the comparators are not its sensing. */
+	CHECK(store("lead_off_frequency", "ac_7.8") > 0);
+	CHECK(!strcmp(show("lead_off_status"), "ac\n"));
+	CHECK(store("lead_off_frequency", "dc") > 0);
+	CHECK(!strcmp(show("lead_off_status"), "01 02\n"));
+	fake.detached_p = fake.detached_n = 0;
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -575,6 +706,7 @@ int main(void)
 	test_biasref();
 	test_bias_lead_off();
 	test_lead_off_fields();
+	test_lead_off_channels();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
