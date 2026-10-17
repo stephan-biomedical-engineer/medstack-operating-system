@@ -87,6 +87,51 @@ static ssize_t store(const char *name, const char *value)
 	return a->store(&shim_iio->dev, a, value, strlen(value));
 }
 
+/* A channel's ext_info attribute, as sysfs would reach it. */
+static const struct iio_chan_spec_ext_info *ext(int chan, const char *name)
+{
+	const struct iio_chan_spec_ext_info *e = shim_iio->channels[chan].ext_info;
+
+	for (; e && e->name; e++)
+		if (!strcmp(e->name, name))
+			return e;
+	return NULL;
+}
+
+static ssize_t ext_store(int chan, const char *name, const char *value)
+{
+	const struct iio_chan_spec_ext_info *e = ext(chan, name);
+
+	if (!e || !e->write)
+		return -ENOENT;
+	return e->write(shim_iio, e->private, &shim_iio->channels[chan], value,
+			strlen(value));
+}
+
+static const char *ext_show(int chan, const char *name)
+{
+	static char buf[4096];			/* a sysfs page, as the core gives */
+	const struct iio_chan_spec_ext_info *e = ext(chan, name);
+	ssize_t n;
+
+	if (!e || !e->read)
+		return "<no attribute>";
+	n = e->read(shim_iio, e->private, &shim_iio->channels[chan], buf);
+	if (n < 0)
+		snprintf(buf, sizeof(buf), "<error %zd>", n);
+	return buf;
+}
+
+/* Every channel's input_mux to one value: the first refusal, or > 0. */
+static ssize_t mux_all(const char *value)
+{
+	ssize_t ret = 1;
+
+	for (int c = 0; c < 8 && ret > 0; c++)
+		ret = ext_store(c, "input_mux", value);
+	return ret;
+}
+
 static void buffer_on_mask(unsigned long mask)
 {
 	shim_iio->scan_mask_storage[0] = mask;
@@ -289,7 +334,7 @@ static void test_test_signal(void)
 	}
 
 	section("sinal de teste: em DC, a leitura é o nível do gerador");
-	CHECK(store("input_mux", "test_signal") > 0);
+	CHECK(mux_all("test_signal") > 0);
 	CHECK(store("test_signal", "1x_dc") > 0);
 	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_RAW, &val, &val2), IIO_VAL_INT);
 	CHECK_EQ(val, fake_code(0));
@@ -298,7 +343,7 @@ static void test_test_signal(void)
 	CHECK_EQ(read_raw_chan(0, IIO_CHAN_INFO_RAW, &val2, &val2), IIO_VAL_INT);
 	CHECK_EQ(val2, fake_code(0));
 	CHECK(val2 > val + val / 2);			/* twice, give or take rounding */
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("normal") > 0);
 
 	section("sinal de teste: recusas");
 	CHECK_EQ(store("test_signal", "loud"), -EINVAL);
@@ -336,15 +381,15 @@ static void test_test_input_needs_generator(void)
 	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);			/* generator off */
 
 	/* The test input with nothing driving it: refused, MUX untouched. */
-	CHECK_EQ(store("input_mux", "test_signal"), -EINVAL);
+	CHECK_EQ(mux_all("test_signal"), -EINVAL);
 	for (all = true, c = 0; c < 8; c++)
 		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 0;
 	CHECK(all);
-	CHECK(!strcmp(show("input_mux"), "normal\n"));
+	CHECK(!strcmp(ext_show(0, "input_mux"), "normal\n"));
 
 	/* Generator on first, then the test input. */
 	CHECK(store("test_signal", "1x_slow") > 0);
-	CHECK(store("input_mux", "test_signal") > 0);
+	CHECK(mux_all("test_signal") > 0);
 	for (all = true, c = 0; c < 8; c++)
 		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 5;
 	CHECK(all);
@@ -357,19 +402,19 @@ static void test_test_input_needs_generator(void)
 	CHECK_EQ(fake.reg[R_CONFIG2], 0xd5);
 
 	/* The electrodes back first, then the generator off. */
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("normal") > 0);
 	CHECK(store("test_signal", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);
 
 	section("entrada de teste: input_mux também recusa com o buffer ligado");
 	buffer_on();
-	CHECK_EQ(store("input_mux", "shorted"), -EBUSY);
+	CHECK_EQ(mux_all("shorted"), -EBUSY);
 	for (all = true, c = 0; c < 8; c++)
 		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 0;
 	CHECK(all);
 	buffer_off();
-	CHECK(store("input_mux", "shorted") > 0);
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("shorted") > 0);
+	CHECK(mux_all("normal") > 0);
 }
 
 static void test_bias_measurement(void)
@@ -384,7 +429,7 @@ static void test_bias_measurement(void)
 		return;
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);	/* off after probe */
 
-	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK(mux_all("bias_measurement") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0x10);
 	for (all = true, c = 0; c < 8; c++)
 		all = all && (fake.reg[R_CH1SET + c] & 0x07) == 2;
@@ -392,19 +437,19 @@ static void test_bias_measurement(void)
 	/* Only BIAS_MEAS moved: reference buffer on, reserved 11, bias off. */
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10);
 
-	CHECK(store("input_mux", "shorted") > 0);
+	CHECK(mux_all("shorted") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);
-	CHECK(store("input_mux", "bias_measurement") > 0);
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("bias_measurement") > 0);
+	CHECK(mux_all("normal") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0);
 
 	/* The bias drive does not touch it, and it does not touch the bias. */
-	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK(mux_all("bias_measurement") > 0);
 	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x08 | 0x04);
 	CHECK(store("bias_drive", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10);
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("normal") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0);
 }
 
@@ -464,9 +509,9 @@ static void test_bias_lead_off(void)
 	section("BIAS_LOFF_SENS: o resto do CONFIG3 intocado, e recusas");
 	CHECK(store("bias_drive", "on") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x0c | 0x02);
-	CHECK(store("input_mux", "bias_measurement") > 0);
+	CHECK(mux_all("bias_measurement") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x10 | 0x0c | 0x02);
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("normal") > 0);
 	CHECK(store("bias_drive", "off") > 0);
 	CHECK_EQ(fake.reg[R_CONFIG3], 0xe0 | 0x02);
 	/* Comparators off by whatever came before: sensing turns them on. */
@@ -560,41 +605,6 @@ static void test_lead_off_fields(void)
 	CHECK_EQ(fake.reg[R_LOFF], 0xef);
 	CHECK(!strcmp(show("lead_off_frequency"), "ac_fdr_div_4\n"));
 	buffer_off();
-}
-
-/* A channel's ext_info attribute, as sysfs would reach it. */
-static const struct iio_chan_spec_ext_info *ext(int chan, const char *name)
-{
-	const struct iio_chan_spec_ext_info *e = shim_iio->channels[chan].ext_info;
-
-	for (; e && e->name; e++)
-		if (!strcmp(e->name, name))
-			return e;
-	return NULL;
-}
-
-static ssize_t ext_store(int chan, const char *name, const char *value)
-{
-	const struct iio_chan_spec_ext_info *e = ext(chan, name);
-
-	if (!e || !e->write)
-		return -ENOENT;
-	return e->write(shim_iio, e->private, &shim_iio->channels[chan], value,
-			strlen(value));
-}
-
-static const char *ext_show(int chan, const char *name)
-{
-	static char buf[64];
-	const struct iio_chan_spec_ext_info *e = ext(chan, name);
-	ssize_t n;
-
-	if (!e || !e->read)
-		return "<no attribute>";
-	n = e->read(shim_iio, e->private, &shim_iio->channels[chan], buf);
-	if (n < 0)
-		snprintf(buf, sizeof(buf), "<error %zd>", n);
-	return buf;
 }
 
 static void test_lead_off_channels(void)
@@ -900,9 +910,9 @@ static void test_srb(void)
 	CHECK_EQ(shim_iio->info->write_raw(shim_iio, &shim_iio->channels[3], 4, 0,
 					   IIO_CHAN_INFO_HARDWAREGAIN), 0);
 	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x28);		/* gain 4, SRB2, MUX 0 */
-	CHECK(store("input_mux", "shorted") > 0);
+	CHECK(mux_all("shorted") > 0);
 	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x29);
-	CHECK(store("input_mux", "normal") > 0);
+	CHECK(mux_all("normal") > 0);
 	CHECK(ext_store(3, "srb2", "0") > 0);
 	CHECK_EQ(fake.reg[R_CH1SET + 3], 0x20);
 
@@ -1125,6 +1135,96 @@ static void test_gain_per_channel(void)
 	CHECK(strstr(shim_error_log, "channel 0 test signal") != NULL);
 }
 
+static u8 mux_of(int c)
+{
+	return fake.reg[R_CH1SET + c] & 0x07;
+}
+
+static void test_mux_per_channel(void)
+{
+	bool ok;
+
+	section("MUX por canal: in_voltageN_input_mux, o global saiu");
+	fresh();
+	CHECK_EQ(probe(0), 0);
+	if (!shim_iio || !shim_iio->registered)
+		return;
+	CHECK(attr("input_mux") == NULL);
+	CHECK(attr("input_mux_available") == NULL);
+	CHECK(!strcmp(ext_show(0, "input_mux_available"),
+		      "normal shorted bias_measurement supply temperature test_signal bias_drive_p bias_drive_n\n"));
+	{
+		char first[4096];
+
+		snprintf(first, sizeof(first), "%s", ext_show(0, "input_mux_available"));
+		CHECK(!strcmp(ext_show(7, "input_mux_available"), first));
+	}
+	{
+		const struct iio_chan_spec_ext_info *e = ext(0, "input_mux_available");
+
+		CHECK(e && e->shared == IIO_SHARED_BY_TYPE && !e->write);
+	}
+	/* After the probe's self test, every channel back on its electrodes. */
+	ok = true;
+	for (int c = 0; c < 8; c++)
+		ok = ok && mux_of(c) == 0 && !strcmp(ext_show(c, "input_mux"), "normal\n");
+	CHECK(ok);
+	CHECK_EQ(fake.reg[R_CONFIG2], 0xc0);		/* generator off after it */
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);	/* BIAS_MEAS off */
+
+	section("MUX por canal: cada canal, cada posição, só o seu MUX");
+	CHECK(store("test_signal", "1x_dc") > 0);	/* so the test input is allowed */
+	ok = true;
+	for (int c = 0; c < 8; c++) {
+		for (unsigned int m = 0; m < 8; m++) {
+			static const char * const names[] = {
+				"normal", "shorted", "bias_measurement", "supply",
+				"temperature", "test_signal", "bias_drive_p", "bias_drive_n",
+			};
+			char value[32];
+
+			snprintf(value, sizeof(value), "%s\n", names[m]);
+			ok = ok && ext_store(c, "input_mux", value) > 0;
+			for (int o = 0; o < 8; o++)
+				ok = ok && mux_of(o) == (o == c ? m : 0u);
+			ok = ok && (fake.reg[R_CH1SET + c] & 0xf8) == 0x60;	/* PGA, SRB2 */
+			ok = ok && !strcmp(ext_show(c, "input_mux"), value);
+		}
+		ok = ok && ext_store(c, "input_mux", "normal") > 0;
+	}
+	CHECK(ok);
+	CHECK(store("test_signal", "off") > 0);
+
+	section("MUX por canal: BIAS_MEAS enquanto algum canal mede o BIASIN");
+	CHECK(ext_store(2, "input_mux", "bias_measurement") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0x10);
+	CHECK(ext_store(5, "input_mux", "bias_measurement") > 0);
+	CHECK(ext_store(2, "input_mux", "normal") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0x10);	/* channel 6 still there */
+	CHECK(ext_store(5, "input_mux", "shorted") > 0);
+	CHECK_EQ(fake.reg[R_CONFIG3] & 0x10, 0);	/* the last one left */
+	CHECK(ext_store(5, "input_mux", "normal") > 0);
+
+	section("MUX por canal: a entrada de teste e o gerador, canal a canal");
+	CHECK_EQ(ext_store(4, "input_mux", "test_signal"), -EINVAL);
+	CHECK_EQ(mux_of(4), 0);
+	CHECK(store("test_signal", "1x_slow") > 0);
+	CHECK(ext_store(4, "input_mux", "test_signal") > 0);
+	CHECK_EQ(mux_of(4), 5);
+	CHECK_EQ(mux_of(3), 0);
+	CHECK_EQ(store("test_signal", "off"), -EINVAL);	/* channel 5 is on it */
+	CHECK(ext_store(4, "input_mux", "normal") > 0);
+	CHECK(store("test_signal", "off") > 0);
+
+	section("MUX por canal: recusas");
+	CHECK_EQ(ext_store(1, "input_mux", "electrode"), -EINVAL);
+	buffer_on();
+	CHECK_EQ(ext_store(1, "input_mux", "shorted"), -EBUSY);
+	CHECK_EQ(mux_of(1), 0);
+	CHECK(!strcmp(ext_show(1, "input_mux"), "normal\n"));	/* read while running */
+	buffer_off();
+}
+
 int main(void)
 {
 	printf("ti-ads1299 (branch do PR) - verificações de host\n");
@@ -1144,6 +1244,7 @@ int main(void)
 	test_srb();
 	test_bias_derivation();
 	test_gain_per_channel();
+	test_mux_per_channel();
 
 	printf("\nNão coberto por esta suíte:\n"
 	       "  - silício: a bancada tem um conversor, então a saída de clock\n"
