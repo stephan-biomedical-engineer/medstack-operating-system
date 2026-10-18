@@ -22,9 +22,11 @@
 > campo, e o cache do driver com o silício (25/0). A tolerância do autoteste foi medida, e as duas
 > constantes ficam: ±20 % no gerador está 47 vezes acima do pior erro desta peça e abaixo do defeito
 > procurado, e 10 µV no ruído só 1,8 vez acima do pior *probe* logo depois de ligar a placa. Isto é
-> "visto no silício pelo USB": o caminho por
-> DRDY, o evento `openwire`, a saída de clock, o `gpiochip`, o PWDN e o `RDATAC` ainda são só host,
-> e esperam a placa (Fase 4).
+> "visto no silício pelo USB". Ainda só host, e o que cada um espera: o evento `openwire`, o
+> kernel da placa (o 6.8 do PC não tem o tipo; o evento sai da palavra de status, então roda até
+> no link `usb`); DRDY e `RDATAC` a 16 kSPS, o link `spi`; PWDN, saída de clock e `gpiochip`, o link
+> `spi` com o *overlay* declarando `powerdown-gpios`, `#clock-cells` e `gpio-controller`, que hoje
+> ele não declara (Fase 4). As conclusões estão em `BRINGUP_AFE.md` §6.15.
 >
 > **Decisão reafirmada em 2026-10-16**: o driver cobre **todas** as funcionalidades do CI, **inclusive
 > as que a placa deste projeto não usa nem pode usar** (GPIO, SRB2, saída de clock, lead-off AC). A
@@ -878,9 +880,11 @@ autoteste não vê um VREF de valor errado. 10 µV no ruído é 11,5 vezes o pio
 e só 1,8 vez o pior a frio (244): os *probes* logo depois de ligar ficaram todos acima do pior a
 quente, e um teto de 1 µV, que todo *probe* a quente passa, recusaria os 11. Os critérios de silício da Fase 4 que o USB
 alcança estão cumpridos; a dispersão entre peças espera o datasheet transcrito, e o resto, a
-placa. O caminho por DRDY, o evento `openwire`, a saída de clock, o
-`gpiochip`, o PWDN e o `RDATAC` precisam da placa. Até isso fechar, a frase é "visto no silício
-pelo USB", não "validado em silício".
+placa. O que falta, e de que depende: o evento `openwire`, de um kernel com o tipo (o da placa;
+roda no link `usb`); DRDY e `RDATAC`, do link `spi`; PWDN, saída de clock e `gpiochip`, do link
+`spi` com o *overlay* declarando os três, o que ele hoje não faz. Nesta placa o CLK está sem conexão
+e GPIO1–4 só têm pull-down. Até isso fechar, a frase é "visto no silício pelo USB", não "validado
+em silício". Conclusões: `BRINGUP_AFE.md` §6.15.
 
 ### Fase 5 — revisão privada antes da pública
 

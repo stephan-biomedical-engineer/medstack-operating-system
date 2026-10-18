@@ -1569,6 +1569,136 @@ e a deriva com a temperatura são do datasheet, que falta transcrever (precisão
 deriva de ganho, ruído referido à entrada a 250 SPS e ganho 24). O pico a pico de 10 leituras não é
 o ruído do datasheet, que é medido em outra banda e duração; a comparação é de ordem de grandeza.
 
+### 6.15 Conclusões das §6.12 a §6.14 · **2026-10-17**
+
+**Resumo**: o driver que vai para a mainline funcionou no conversor real em tudo o que dá para
+testar pelo USB do PC. Nenhum teste do driver falhou, e a placa e a ponte saíram intactas. Ainda
+falta testar na placa STM32MP257 o que o PC não tem: o evento de eletrodo solto (que falta ao
+kernel do PC, não ao USB) e o que só o link `spi` tem.
+
+Unidades: **código** é o número cru que o conversor devolve (no ganho 24, 1 código ≈ 0,022 µV);
+**SPS** é amostras por segundo; **CH1 a CH8** são os oito canais.
+
+#### Antes de ligar: dava para estragar algo?
+
+| Pergunta | Resposta | Por quê |
+|---|---|---|
+| O driver pode danificar o hardware desta placa? | **Não** | Cada pino que o driver mexe foi conferido no esquemático. Os pinos sem uso ficam como estão, e os GPIOs, como entrada |
+| Pode "brickar" o ADS1299? | **Não** | Ele não tem memória permanente. Um RESET ou desplugar apaga tudo |
+| Pode "brickar" a ponte MCP2210? | **Não** | O driver nunca envia o comando que grava a memória permanente dela (NVRAM) |
+| A NVRAM ficou intacta, de fato? | **Sim, medido três vezes** | Uma cópia foi tirada antes e comparada depois de cada sessão: idêntica nos campos documentados |
+
+O único risco que existe nesta placa: seis pinos da ponte estão ligados direto ao terra, e forçar 1
+neles por comando manual (`gpioset`) daria curto. Nem o driver nem os roteiros tocam neles.
+
+#### O driver faz o que promete? (§6.12)
+
+| Teste | Esperado | Medido | Conclusão |
+|---|---|---|---|
+| Sinal de teste interno | 1,875 mV | 1,869 mV (**−0,33 %**) | Amplitude certa. Os −0,33 % são do próprio chip e já estavam medidos (§4.3: −0,34 %) |
+| O mesmo sinal, nos 7 ganhos (1 a 24) | igual em todos | variação de **0,06 %** entre ganhos | Cada ganho escala corretamente |
+| Canais independentes | mudar o CH2 não afeta o CH1 | CH1 parado: −794 → −795 códigos enquanto o CH2 mudava | Cada canal tem sua própria configuração |
+| Temperatura do chip | plausível (15–60 °C) | 30,8 °C e 35,8 °C | Funciona. A diferença entre as rodadas é provavelmente o chip aquecendo (não medido) |
+| Alimentação analógica (metade de AVDD) | ~2,5 V | 2,498 V | AVDD ≈ 5,00 V, como projetado |
+| Alimentação digital (DVDD/4) | ~0,825 V | 0,818 V | DVDD ≈ 3,27 V. Bate com os 3,3 V do regulador; falta conferir no multímetro |
+| Detecção de eletrodo solto | só aparecem os canais monitorados | só o bit do CH1 apareceu | O driver não inventa alarme em canal desligado |
+| Pedidos inválidos devem ser recusados | 12 recusas | **12 de 12** | Ganho inexistente, taxa inexistente, mudar configuração com aquisição rodando: tudo recusado como documentado |
+| Aquisição de 10 s a 250 SPS | ~2498 amostras | 2495 + 4 perdidas = 2499; na 2ª rodada 2499 + 0 | Nenhuma amostra some sem ser contada |
+| Sinal de teste durante a aquisição | 3,750 mV pico a pico | 3,740 mV (**−0,28 %**) | O caminho de aquisição contínua entrega o sinal certo |
+
+**Resultado: 42 de 42.** A primeira rodada deu 38 de 42, e as quatro falhas eram do roteiro: ele
+esperava o sinal invertido e pedia ao sysfs mais casas decimais do que ele publica. Corrigido o
+roteiro, 42/0 (regra 15).
+
+#### Cada configuração vai para o bit certo do chip? (§6.13)
+
+O driver configura o chip, depois é descarregado, e um programa independente (o oráculo, que fala
+com o chip sem passar pelo driver) lê os 24 registradores. Cada bit lido é comparado com o que o
+datasheet diz que deveria estar lá.
+
+| Pergunta | Medido | Conclusão |
+|---|---|---|
+| Quantas configurações foram testadas? | 9 padrões, cobrindo **todas** as opções de taxa (7), ganho (7), entrada (8), sinal de teste (7) e lead-off (8 + 4 + 4) | Nenhuma opção ficou sem teste |
+| Os bits bateram com o datasheet? | **216 de 216** registradores (9 padrões × 24), fora os bits de status | Cada ajuste escreve exatamente o campo certo, e nada além dele |
+| O que o driver acha que escreveu é o que está no chip? | sim, em todos | O driver não guarda informação desatualizada sobre o chip |
+| O teste é capaz de reprovar? | as 2 falhas plantadas de propósito foram pegas | Sem isso, um "tudo passou" não valeria nada |
+
+#### O autoteste do driver é confiável? (§6.14)
+
+Toda vez que o driver carrega, ele testa o chip antes de liberá-lo. São duas perguntas, cada uma
+com uma faixa de aceitação.
+
+**O sinal de teste chega com o tamanho certo?** No ganho 24 o esperado é **83 886 códigos**, e o
+driver aceita ±20 %:
+
+```
+   defeito: ganho preso      limite                esta peça         limite
+   em 12 em vez de 24       inferior                                 superior
+         41 943 ............ 67 109 ............. ~83 540 ........... 100 663
+           (−50 %)           (−20 %)            (−0,06 a −0,42 %)     (+20 %)
+           FALHA               |<------------- ACEITA ------------->|
+```
+
+A peça usa só **2 %** da margem: nunca vai falhar por acaso. Um defeito real, como um ganho
+errado, lê metade do esperado e cai longe, fora da faixa. **O limite de 20 % está certo.**
+
+**O canal fica quieto com a entrada em curto?** O limite é **447 códigos** (10 µV) de oscilação:
+
+| Situação | Pior oscilação | Quanto da margem usou |
+|---|---|---|
+| Placa ligada há tempo | 39 códigos (0,87 µV) | **9 %** |
+| Teste logo depois de plugar | 244 códigos (5,5 µV) | **55 %** |
+
+Logo depois de plugar, o ruído foi sempre maior (11 de 11 vezes); a causa provável é a alimentação
+da placa ainda estabilizando. **O limite de 10 µV está certo e não pode baixar**: com 1 µV, a placa
+ligada passaria sempre, mas o driver recusaria um chip bom em todo boot.
+
+**Em cerca de 55 testes na sessão, nenhum falhou.**
+
+#### O que se descobriu sem estar procurando
+
+1. **O autoteste não percebe uma tensão de referência errada.** O sinal de teste e a régua do
+   conversor vêm da mesma referência, então o erro de um cancela o do outro. Ele só pega uma
+   referência ausente. Não é defeito; é um limite do método, e fica escrito.
+2. **Cada canal tem seu próprio pequeno erro de ganho**, de −0,07 % (CH7) a −0,42 % (CH5), e cada
+   um é muito estável (repete a ±0,004 %). Para EEG, 0,4 % de amplitude é irrelevante; se um dia
+   importar, dá para calibrar por canal.
+3. **O chip é mais ruidoso logo depois de ligar a placa.** Provavelmente é da placa, não do chip
+   nem do driver. Não está medido.
+4. **No PC com Secure Boot não se lê o chip através do driver**: o kernel bloqueia. Isso forçou o
+   método do oráculo, que acabou sendo o mais confiável (regra 16).
+
+#### O que estes testes não garantem
+
+| Limitação | Por quê | O que resolve |
+|---|---|---|
+| Uma peça só, num dia, à temperatura ambiente | outras peças e outras temperaturas variam | os valores do datasheet (falta transcrever) |
+| Se a transcrição do datasheet estiver errada, o driver erra junto e o teste não vê | os dois vêm da mesma leitura | parcialmente coberto: os sinais analógicos bateram |
+| O **evento** de eletrodo solto (a notificação do kernel) | o kernel 6.8 do Ubuntu não tem esse tipo de evento, e o build do host o tira. **Não é o USB**: o evento sai da palavra de status de cada conversão, que o caminho USB lê | o kernel da placa (6.6 com o *backport*), em qualquer link, inclusive o `usb` |
+| Interrupção de dado pronto (DRDY) e `RDATAC` a 16 kSPS | a ponte MCP2210 não entrega interrupção ao host | o link `spi` da placa (header, SPI6) |
+| Desligamento (PWDN), saída de clock, GPIOs do conversor | precisam de um devicetree que os declare (`powerdown-gpios`, `#clock-cells`, `gpio-controller`); o dispositivo que a ponte cria não tem nenhum, e o *overlay* do link `spi` ainda não os declara | o link `spi` com o *overlay* completado. Nesta placa o pino CLK está sem conexão (a saída só se vê com ponta de prova no pino) e GPIO1–4 só têm pull-down (testáveis dirigindo uma saída e relendo); o PWDN chega ao header (pino 29) |
+| Aquisição longa | só janelas de 10 s | uma sessão de 30 min |
+
+#### O que se pode escrever no TCC hoje
+
+> "O driver submetido foi testado no silício pelo USB de um PC. Sua interface se comportou como
+> documentado, cada configuração escreve o campo na posição do datasheet e nenhum outro, e a
+> tolerância do autoteste foi medida, não presumida. A validação do caminho de produto aguarda a
+> placa."
+
+Não escrever: "validado em silício", "testado em várias peças", nem que o autoteste detecta erro de
+referência.
+
+#### Próximos passos, do mais barato ao mais caro
+
+1. **Transcrever do datasheet**: precisão do sinal de teste, erro de ganho e ruído no ganho 24 a
+   250 SPS. Isso justifica os limites do autoteste para qualquer peça.
+2. **Gravar o primeiro teste após ligar a placa, leitura por leitura**, para separar ruído de
+   alimentação estabilizando.
+3. **Uma aquisição de 30 min com o driver da série.**
+4. **Placa STM32MP257**: o evento de eletrodo solto já no link `usb`, com o kernel dela; DRDY e
+   `RDATAC` no link `spi`; PWDN, clock e GPIOs no link `spi`, depois de declarados no *overlay*.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
