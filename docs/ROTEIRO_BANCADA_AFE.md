@@ -19,7 +19,8 @@
 Executado até a Fase 4 em 2026-10-05: Ubuntu 24.04, kernel `6.8.0-146-generic`, `linux-med` em
 `board/medplatform-afe` (`b8dbcb083402`), ponte serial `0002589022`. A Fase 5 foi rodada assim em
 2026-10-04 (§6.3). O `afe-phase1.sh` foi ajustado depois da sessão de 2026-10-05 (SKIP no critério
-5 e restauração do módulo), e essa versão ainda não rodou contra a peça.
+5 e restauração do módulo), e essa versão ainda não rodou contra a peça. O driver da série
+(`feature/ads1299-mcp2210-driver`) rodou em 2026-10-17 pela §5.10, kernel `6.8.0-147-generic`.
 
 ---
 
@@ -128,6 +129,9 @@ modinfo -F signer hid_mcp2210        # MedPlatform bench module key
 modinfo -F signer ti_ads1299         # MedPlatform bench module key
 ```
 
+- Sem variáveis, os dois drivers saem da árvore de trabalho do `linux-med`, na branch em que ela
+  estiver. `MCP2210_REF=<commit>` e `ADS1299_REF=<commit>` tiram cada um de um commit, sem mexer
+  na árvore; a §5.10 usa isso.
 - O `clean` não é opcional. Assinar um `.ko` já assinado empilha uma segunda assinatura.
 - Os caminhos são relativos à raiz do repositório. Fora dela, o `sign-file` falha com
   `No such file or directory`.
@@ -325,6 +329,58 @@ journalctl -k -b 0 | grep -iE 'BUG|Oops|WARNING' | grep -v 'Wi-Fi 7\|ACPI Warnin
   veredito é só sobre os campos documentados; diferença em *don't care* aparece e não conta.
 - A busca no journal tem de voltar vazia. Em 2026-10-03 um `kernel BUG` ficou gravado doze minutos
   antes de qualquer sintoma (§2.4).
+
+### 5.10 O driver da série (a branch que vai para a mainline)
+
+O `ti-ads1299` da `feature/ads1299-mcp2210-driver` tem outra ABI: MUX e ganho **por canal**
+(`in_voltageN_input_mux`, `in_voltageN_hardwaregain`), `in_temp_*` e os dois
+`in_voltage_mvdd_*`, lead-off por canal. Os `afe-phase4.py`/`afe-phase5-long.py` são da board e
+não servem para ele; o roteiro dele é `scripts/afe-feature-abi.py`. A ponte continua a da board,
+que foi feita para esta placa: os dois drivers não se conhecem.
+
+**Antes de plugar**: nada no DB25 (nem pessoa, nem gerador: o roteiro liga o bias e a corrente de
+lead-off), chave SRB1 em **GNDA**, nada no header do Raspberry. Depois, a §4 com as duas variáveis:
+
+```bash
+make -C scripts/oot-modules clean && make -C scripts/oot-modules \
+  MCP2210_REF=board/medplatform-afe ADS1299_REF=feature/ads1299-mcp2210-driver
+```
+
+Contra um kernel sem `IIO_EV_TYPE_FAULT` (o 6.8 do Ubuntu) a construção avisa
+`ti-ads1299 built without the lead-off event`. É esperado: o evento `openwire` fica fora só da
+cópia compilada no host (`BRINGUP_AFE.md` §6.12). Assine e instale como na §4.
+
+**Depois de plugar**: o autoload pode carregar os drivers sozinho, e é inofensivo (a ponte nunca
+grava a NVRAM, e os pinos aterrados nascem como entrada). A linha de base precisa do `hid-generic`:
+
+```bash
+sudo modprobe -r ti_ads1299 hid_mcp2210
+sudo python3 scripts/mcp2210-nvram-snapshot.py -o ~/nvram-antes.txt   # sha256-documented 4cad3871…
+sudo modprobe hid_mcp2210 spi_chip_select=4 led_gpio=6
+sudo dmesg | grep -E 'mcp2210|ads1299' | tail -6
+sudo python3 scripts/afe-feature-abi.py
+```
+
+O `dmesg` tem de terminar em
+`self test passed: 8 channels at their gains, shorted-input noise up to N codes`, com N perto de
+28; espere essa linha antes do roteiro. Fechar pela §5.9: o `--compare` contra `~/nvram-antes.txt`
+é o que prova que a sessão não gravou a NVRAM.
+
+| Saída do `afe-feature-abi.py` | Esperado | Fonte |
+|---|---|---|
+| gerador `1x_dc` / `2x_dc`, nível − offset | **negativo**, ~−1,869 / −3,738 mV, dispersão entre ganhos < 1 % | §6.12 |
+| CH2 no gerador, ganho 6 | ~−1,873 mV, com o CH1 em curto parado | §6.12 |
+| `in_temp` | 15 a 60 °C (30,8 °C na sessão) | §6.12 |
+| `mvdd_analog` | ~2,498 V | §5.3, §6.12 |
+| buffer 10 s a 250 SPS | entregues + `lost_samples` = devidas, ±3 | §6.2, §6.12 |
+| `1x_slow` pelo buffer, pico a pico | ~3,74 mV | §6.12 |
+| recusas | 4 `-EINVAL` e 8 `-EBUSY` | §6.12 |
+| fim | `# restaurado`, sem `MENOS` | |
+
+O roteiro deixa o dispositivo como encontrou e devolve código de saída 1 se algum PASS faltar.
+**Nunca** use o `gpiochip` da ponte para dirigir 1 em GP0–GP3, GP7 ou GP8: estão ligados direto ao
+terra (`BRINGUP_AFE.md` §2.3). Para voltar aos módulos da board, refaça a §4 sem as variáveis com o
+`linux-med` na `board/medplatform-afe`.
 
 ---
 

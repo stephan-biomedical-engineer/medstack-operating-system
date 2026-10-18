@@ -1340,6 +1340,93 @@ clique a trouxe de volta (1937 s); com ela aberta, um pedido foi atendido e ela 
 (1257 s, a mesma instância de 1171 s a 1845 s). A causa - nada religar a HMI quando o compositor
 volta - continua **aberta**.
 
+### 6.12 O driver da série no silício, pelo USB do PC · **2026-10-17, host**
+
+Primeira vez que o `ti-ads1299` da `feature/ads1299-mcp2210-driver` (`993b702cf8f9`, o que vai
+para a mainline) falou com o conversor. Até aqui ele só tinha rodado contra o fake de
+`tests/ads1299`. A ponte é a da `board/medplatform-afe` (`217d6ef47749`), feita para esta placa;
+os dois drivers não se conhecem, e o par funciona porque a ponte cria o filho como `ads1299`, com
+`irq = 0` e sem propriedades, que é exatamente o caminho por timer do driver da série. Ubuntu
+24.04, kernel `6.8.0-147-generic`, ponte `0002589022`, chave SRB1 em GNDA, nada no DB25.
+
+**Antes de ligar: a placa contra o que o driver escreve.** Lido no `schematic.pdf` e no código,
+não suposto:
+
+| Pino | Na placa | O que o driver faz sem devicetree |
+|---|---|---|
+| BIASREF, CLK | sem conexão | `BIASREF_INT` ligado; `CLK_EN` zerado, e a saída de clock só existe com `#clock-cells` |
+| CLKSEL | +3V3_ISO (oscilador interno) | nada |
+| DAISY_IN | GNDD | `DAISY_EN = 0`; lê-se um dispositivo, 27 bytes |
+| SRB2 | GNDA | fechar a chave liga INxP a GNDA, dentro da alimentação |
+| VREFP/VREFN | 10 µF + 100 nF, VREFN em GNDA | `PWR_REFBUF` ligado (sem `vref-supply`) |
+| GPIO1–4, START | 10 kΩ a GNDD | GPIOs escritos como entrada no *probe*; `gpiochip` só com `gpio-controller` |
+
+O conversor não tem memória não volátil: tudo o que o driver escreve sai com RESET (SW1) ou
+desplugando. Na ponte, o driver da board nunca envia `SET_NVRAM` nem `SEND_PASSWORD` (o código do
+primeiro só aparece no casamento de respostas), e os pinos aterrados nascem como entrada com saída
+padrão 0 (§2.3). O risco residual da §2.3 continua: o `gpiochip` da ponte oferece GP0–GP3, GP7 e
+GP8, e um `gpioset` com 1 neles é curto ao terra. Nem o driver nem o roteiro tocam neles.
+
+**O que precisou mudar no host.** O driver da série usa `IIO_EV_TYPE_FAULT` /
+`IIO_EV_DIR_FAULT_OPENWIRE`, que a mainline acrescentou depois do 6.8 e que a árvore 6.6 tem por
+*backport*. Contra os cabeçalhos do Ubuntu foi o único erro de compilação. O
+`scripts/oot-modules` agora tira, **só da cópia**, as duas linhas que penduram o evento nos canais
+quando os cabeçalhos não têm o tipo; o arquivo do `linux-med` não muda. Definir os dois nomes à mão
+não bastaria: o núcleo nomeia o arquivo do evento por uma tabela indexada pelo tipo, e um tipo que
+ele não conhece lê além do fim dela. O mesmo `Makefile` ganhou `MCP2210_REF`/`ADS1299_REF`, que
+tiram cada driver de um commit.
+
+**Probe**: `self test passed: 8 channels at their gains, shorted-input noise up to 28 codes`,
+2,4 s depois de anexado. Pela ABI da série, `scripts/afe-feature-abi.py` (canais numerados como no
+datasheet: CHn é `in_voltage(n-1)`):
+
+| Medida | Valor | Referência |
+|---|---|---|
+| gerador `1x_dc`, nível − offset, 7 ganhos | **−1,8650 a −1,8690 mV**, dispersão 0,21 % | VREF/2400 = 1,875 mV: −0,33 % (§4.3: −0,34 %) |
+| gerador `2x_dc`, idem | **−3,7368 a −3,7390 mV**, dispersão 0,06 % | 3,75 mV: −0,31 % |
+| offset em curto, ganho 1 → 24 | −1003 → −800 códigos | |
+| CH2 no gerador a ganho 6, CH1 em curto a ganho 24 | −1,8729 mV; CH1 parado (−794 → −795) com o gerador indo a 2x | MUX e ganho independentes por canal |
+| `in_temp` | **30,77 °C** | §5.3: ~34 °C, pela tensão |
+| `in_voltage_mvdd_analog` | **2,4984 V** | §5.3: 2,4972 V (+0,05 %) |
+| `in_voltage_mvdd_digital` | **0,8182 V** → DVDD = 3,273 V se for DVDD/4 | primeira leitura; multímetro não conferido |
+| buffer, 250 SPS, 10 s | 2495 entregues + **4** em `lost_samples` = 2499, devidas ~2498 | §6.2: ≤ 0,04 %; aqui 0,16 % |
+| `1x_slow` pelo buffer, pico a pico | **3,7395 mV** | 3,75 mV: −0,28 % |
+| palavra de lead-off no buffer, só CH1 P monitorado | sempre `0x100` | só o bit do CH1 P pode aparecer |
+
+Recusas, todas vistas: `-EINVAL` para a entrada de teste com o gerador desligado, para desligar o
+gerador com um canal nele, ganho 3 e taxa 300; `-EBUSY` com o buffer ligado em `hardwaregain`,
+`input_mux`, `test_signal`, `sampling_frequency`, `montage`, `lead_off_sense_p` e nas leituras de
+`in_voltage_mvdd_analog_raw` e `in_temp_raw`. Os canais emprestados (CH1 e CH3, `in_voltage0` e `in_voltage2`) voltaram como estavam.
+`montage`, `srb2`, `bias_drive`, limiar, corrente e frequência de lead-off: escritos e
+relidos (SRB2 só no CH4); `lead_off_status` = `disabled` sem nada monitorado, `ac` com excitação AC.
+
+**38 PASS e 4 FAIL, e os quatro eram do roteiro.** Dois esperavam o nível DC do gerador **acima**
+do offset: em `_dc` ele fica no nível baixo, o que o próprio autoteste do driver usa e a §4.3 já
+registrava (−84384 contra +82908, offset −780). O terceiro é a mesma inversão no CH2. O quarto
+pedia `scale` do CH2 / `scale` do CH1 = 4 a 1e-6, e o sysfs dá nove casas: 0,000089406 /
+0,000022351 = 4,000089, o arredondamento da regra 13, não erro. O roteiro foi corrigido (sinal;
+tolerância de 2e-4 na razão) e rodou de novo na mesma sessão: **42 PASS, 0 FAIL**. Na segunda
+rodada: gerador −0,33 % (`1x_dc`) e −0,30 % (`2x_dc`), dispersão entre ganhos 0,06 % e 0,05 %;
+CH2 a ganho 6 −1,8724 mV; `in_temp` 35,78 °C; `mvdd_analog` 2,4979 V, `mvdd_digital` 0,8184 V;
+buffer **2499 entregues + 0 perdidas**, devidas ~2498; `1x_slow` 3,7396 mV pico a pico.
+
+**Duas observações, não medidas.** Com CH1 P e N monitorados e o FLIP ligado, o N não apareceu
+fora 0,1 s depois; com 6 nA num nó de 4,7 nF a tensão anda ~1,3 V/s, e 0,1 s pode não cruzar o
+limiar - hipótese. E a perda em 10 s foi 4 na primeira rodada e 0 na segunda: janelas de 10 s não
+separam isso de variação, e a taxa da série nunca foi medida numa sessão longa.
+
+**Não medido nesta sessão**: o evento `openwire` (o 6.8 não tem o tipo, e o build do host o tira);
+DRDY como interrupção, saída de clock, `gpiochip`, PWDN e *suspend*, que o PC não tem; `RDATAC`;
+taxas acima de 250.
+
+**A NVRAM depois da sessão**: `--compare ~/nvram-antes.txt` (`ROTEIRO` §5.9) deu **PASS, campos
+documentados idênticos**, `sha256-documented 4cad3871…aafe45` antes e depois, VID, PID, produto e
+fabricante conferidos contra a enumeração. Diferiram só bytes *don't care*: 42 em `0x10` e em
+`0x20` (índices 21 a 63) e 1 em `0x30` (índice 63). As caudas de `0x10` e `0x20` passaram a
+conter o fim da string do fabricante, o que se lê como o firmware da ponte reaproveitando o buffer
+de resposta - leitura, não medida, e fora do que a NVRAM guarda. O teste negativo "a aquisição
+nunca escreve a NVRAM" vale também para o par ponte da board + conversor da série.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
@@ -1789,3 +1876,8 @@ rootfs cujos módulos o kernel em execução recusa. A próxima entrega para a p
     era "não medido" no `usb` havia uma semana, com 30 min de aquisição contínua registrados no
     mesmo link. O defeito estava no único passo que essas medidas não davam: derivar o arquivo.
     (§6.8)
+15. **Um valor esperado se copia do registro, com sinal e resolução.** O roteiro da série foi
+    escrito a partir da magnitude do datasheet e reprovou quatro vezes um silício certo: o sinal do
+    nível DC já estava na §4.3 e na constante do autoteste, e a tolerância pedia ao sysfs mais
+    algarismos do que ele tem. Um critério que nunca leu a medida anterior testa quem o escreveu.
+    (§6.12)

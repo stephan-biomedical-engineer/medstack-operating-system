@@ -855,6 +855,13 @@ ambiguidade da amplitude.
 passando com a tolerância **medida** e não presumida; um registro de amostras com o sinal de teste
 interno reconhecível.
 **Registro**: `BRINGUP_AFE.md`, e é o material que vai na carta de apresentação.
+**Estado em 2026-10-17** (`BRINGUP_AFE.md` §6.12): o driver da série rodou no silício pela
+primeira vez, pelo USB de um PC com a ponte da board. Atendidos: `dmesg` do *probe* limpo, e o
+sinal de teste interno reconhecível pelo buffer (`1x_slow`, 3,74 mV pico a pico, −0,28 %). Faltam
+a varredura de registradores com este driver e a tolerância do autoteste **medida**: ele passou,
+mas com a tolerância de hoje. O caminho por DRDY, o evento `openwire`, a saída de clock, o
+`gpiochip`, o PWDN e o `RDATAC` precisam da placa. Até isso fechar, a frase é "visto no silício
+pelo USB", não "validado em silício".
 
 ### Fase 5 — revisão privada antes da pública
 
@@ -977,6 +984,7 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`ebd0d855efc5`; só host) | **feito** | 2026-10-17 |
 | 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | **feito no host**: 28 ✅ / 5 ⚙️, e `sysfs-bus-iio-adc-ti-ads1299` com todos os atributos próprios, o evento `fault_openwire` incluído (`1e902b7494d8`). O `KernelVersion` está em 6.6, a versão desta árvore, e passa à da mainline-alvo na submissão | 2026-10-17 |
 | 3 | comentários enxugados de 490 para 290 linhas (16% → 10%, arquivo 3070 → 2870), um só `MODULE_AUTHOR` (`993b702cf8f9`). Código objeto idêntico ao anterior; `feature.c` 590/0; `W=1` arm64 limpo; `checkpatch --strict` 0/0/0 no patch. A versão comentada, para estudo, fica fora dos repositórios (`~/Documents/TCC/drivers-comentados`, de `eb2b8851cf01`) | **feito** | 2026-10-17 |
+| 4 | primeira vez no silício: o driver da série (`993b702cf8f9`) com a ponte da board, pelo USB de um PC (kernel 6.8, o evento `openwire` fora só da cópia do host). Autoteste passa (ruído em curto até 28 códigos); gerador a −0,33 % de VREF/2400 nos 7 ganhos, MUX e ganho independentes por canal, `in_temp` 30,8 °C, `mvdd_analog` 2,498 V, lead-off só nas entradas monitoradas, as 4 recusas `-EINVAL` e as 8 `-EBUSY`, 10 s de buffer com entregues + perdidas = devidas. **42/0** no `afe-feature-abi.py`, depois de uma primeira rodada 38/4 cujos 4 eram do próprio roteiro (sinal do nível DC, tolerância abaixo da resolução do sysfs). NVRAM da ponte idêntica antes e depois nos campos documentados (`BRINGUP_AFE.md` §6.12) | **visto no silício, pelo USB** | 2026-10-17 |
 | 4 | autoteste passa com tolerância medida | — | — |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
 | 6 | série na lore, Message-ID | — | — |
