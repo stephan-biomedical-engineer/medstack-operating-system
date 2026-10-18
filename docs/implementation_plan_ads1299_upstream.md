@@ -879,8 +879,9 @@ defeito procurado (um ganho preso em 12 lê −50 %); o código esperado não de
 autoteste não vê um VREF de valor errado. 10 µV no ruído é 11,5 vezes o pior a quente (39 códigos)
 e só 1,8 vez o pior a frio (244): os *probes* logo depois de ligar ficaram todos acima do pior a
 quente, e um teto de 1 µV, que todo *probe* a quente passa, recusaria os 11. Os critérios de silício da Fase 4 que o USB
-alcança estão cumpridos; a dispersão entre peças espera o datasheet transcrito, e o resto, a
-placa. O que falta, e de que depende: o evento `openwire`, de um kernel com o tipo (o da placa;
+alcança estão cumpridos; a dispersão entre peças está no datasheet, transcrito em
+`BRINGUP_AFE.md` §6.16 (±20 % é 8 vezes o pior caso, ±0,5 % de ganho e ±2 % *típicos* no gerador;
+10 µV é 6,25 vezes o máximo garantido de 1,6 µVpp), e o resto espera a placa. O que falta, e de que depende: o evento `openwire`, de um kernel com o tipo (o da placa;
 roda no link `usb`); DRDY e `RDATAC`, do link `spi`; PWDN, saída de clock e `gpiochip`, do link
 `spi` com o *overlay* declarando os três, o que ele hoje não faz. Nesta placa o CLK está sem conexão
 e GPIO1–4 só têm pull-down. Até isso fechar, a frase é "visto no silício pelo USB", não "validado

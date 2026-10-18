@@ -1388,7 +1388,7 @@ datasheet: CHn é `in_voltage(n-1)`):
 | CH2 no gerador a ganho 6, CH1 em curto a ganho 24 | −1,8729 mV; CH1 parado (−794 → −795) com o gerador indo a 2x | MUX e ganho independentes por canal |
 | `in_temp` | **30,77 °C** | §5.3: ~34 °C, pela tensão |
 | `in_voltage_mvdd_analog` | **2,4984 V** | §5.3: 2,4972 V (+0,05 %) |
-| `in_voltage_mvdd_digital` | **0,8182 V** → DVDD = 3,273 V se for DVDD/4 | primeira leitura; multímetro não conferido |
+| `in_voltage_mvdd_digital` | **0,8182 V** → DVDD = 3,273 V se for DVDD/4 | primeira leitura; multímetro: **3,28 V** (−0,2 %, §6.16) |
 | buffer, 250 SPS, 10 s | 2495 entregues + **4** em `lost_samples` = 2499, devidas ~2498 | §6.2: ≤ 0,04 %; aqui 0,16 % |
 | `1x_slow` pelo buffer, pico a pico | **3,7395 mV** | 3,75 mV: −0,28 % |
 | palavra de lead-off no buffer, só CH1 P monitorado | sempre `0x100` | só o bit do CH1 P pode aparecer |
@@ -1600,7 +1600,7 @@ neles por comando manual (`gpioset`) daria curto. Nem o driver nem os roteiros t
 | Canais independentes | mudar o CH2 não afeta o CH1 | CH1 parado: −794 → −795 códigos enquanto o CH2 mudava | Cada canal tem sua própria configuração |
 | Temperatura do chip | plausível (15–60 °C) | 30,8 °C e 35,8 °C | Funciona. A diferença entre as rodadas é provavelmente o chip aquecendo (não medido) |
 | Alimentação analógica (metade de AVDD) | ~2,5 V | 2,498 V | AVDD ≈ 5,00 V, como projetado |
-| Alimentação digital (DVDD/4) | ~0,825 V | 0,818 V | DVDD ≈ 3,27 V. Bate com os 3,3 V do regulador; falta conferir no multímetro |
+| Alimentação digital (DVDD/4) | ~0,825 V | 0,818 V | DVDD ≈ 3,27 V, e o multímetro deu 3,28 V: −0,2 % |
 | Detecção de eletrodo solto | só aparecem os canais monitorados | só o bit do CH1 apareceu | O driver não inventa alarme em canal desligado |
 | Pedidos inválidos devem ser recusados | 12 recusas | **12 de 12** | Ganho inexistente, taxa inexistente, mudar configuração com aquisição rodando: tudo recusado como documentado |
 | Aquisição de 10 s a 250 SPS | ~2498 amostras | 2495 + 4 perdidas = 2499; na 2ª rodada 2499 + 0 | Nenhuma amostra some sem ser contada |
@@ -1672,7 +1672,7 @@ ligada passaria sempre, mas o driver recusaria um chip bom em todo boot.
 
 | Limitação | Por quê | O que resolve |
 |---|---|---|
-| Uma peça só, num dia, à temperatura ambiente | outras peças e outras temperaturas variam | os valores do datasheet (falta transcrever) |
+| Uma peça só, num dia, à temperatura ambiente | outras peças e outras temperaturas variam | os valores do datasheet: transcritos na §6.16, com os dois limites justificados para qualquer peça (a precisão do gerador é só típica) |
 | Se a transcrição do datasheet estiver errada, o driver erra junto e o teste não vê | os dois vêm da mesma leitura | parcialmente coberto: os sinais analógicos bateram |
 | O **evento** de eletrodo solto (a notificação do kernel) | o kernel 6.8 do Ubuntu não tem esse tipo de evento, e o build do host o tira. **Não é o USB**: o evento sai da palavra de status de cada conversão, que o caminho USB lê | o kernel da placa (6.6 com o *backport*), em qualquer link, inclusive o `usb` |
 | Interrupção de dado pronto (DRDY) e `RDATAC` a 16 kSPS | a ponte MCP2210 não entrega interrupção ao host | o link `spi` da placa (header, SPI6) |
@@ -1691,13 +1691,111 @@ referência.
 
 #### Próximos passos, do mais barato ao mais caro
 
-1. **Transcrever do datasheet**: precisão do sinal de teste, erro de ganho e ruído no ganho 24 a
-   250 SPS. Isso justifica os limites do autoteste para qualquer peça.
+1. ~~**Transcrever do datasheet**~~ **feito** (§6.16): o observado contra o datasheet, item por item.
+   O ruído em regime e o ganho estão dentro; o ruído logo depois de plugar, não. Os dois limites
+   do autoteste ficam, com margem de 8 e 6,25 vezes.
 2. **Gravar o primeiro teste após ligar a placa, leitura por leitura**, para separar ruído de
    alimentação estabilizando.
 3. **Uma aquisição de 30 min com o driver da série.**
 4. **Placa STM32MP257**: o evento de eletrodo solto já no link `usb`, com o kernel dela; DRDY e
    `RDATAC` no link `spi`; PWDN, clock e GPIOs no link `spi`, depois de declarados no *overlay*.
+
+### 6.16 O observado contra o datasheet · **2026-10-17, sem hardware**
+
+O passo 1 da §6.15: comparar com o datasheet tudo o que esta peça mostrou nas §4 a §6.14, e com
+isso dizer se os limites do autoteste valem para **qualquer** peça. Os números do datasheet são de
+SBAS499C, transcritos em `Register_Map_ADS1299.md` §7.5, com a coluna (MIN/TYP/MAX) de cada um
+conferida no PDF. Nada foi medido aqui: é a tabela contra as medidas já registradas.
+
+Duas regras de leitura. **Um valor típico não é limite**: uma medida acima do típico não está fora
+de especificação, e só um MIN/MAX reprova. E **as condições não são as mesmas**: o datasheet mede
+no ganho 12 (salvo indicação), com ≥1000 conversões consecutivas, e a média de várias peças; as
+medidas daqui são uma peça, à temperatura da bancada, e poucas conversões avulsas. Em códigos, a
+ganho 24 e VREF = 4,5 V, 1 código = 0,02235 µV.
+
+#### Item por item
+
+| Grandeza | Datasheet | Observado nesta peça | Onde | Veredito |
+|---|---|---|---|---|
+| Ruído em curto, ganho 24, 250 SPS | 0,14 µVrms, 0,98 µVpp típ. (Table 4); **1,35 µVpp máx.** a 25 °C (250 pontos) | 0,130 µVrms (40 leituras); pp de 10 leituras: mediana 18–21,5 cód. (0,40–0,48 µV), pior 39 (0,87 µV) | §5.2, §6.14 | **dentro**; RMS −7 % do típico |
+| Ruído nos outros ganhos, 250 SPS | Table 1–3, típicos | RMS de −19 % a +8 % do típico nos 7 ganhos (tabela abaixo) | §5.2 | **concorda** com o típico |
+| Ruído no *probe* logo depois de plugar | mesmo máximo, 1,35 / 1,6 µVpp | 47 a 244 cód.; **5 de 11 acima de 1,6 µV** (71,6 cód.), 6 acima de 1,35 | §6.13, §6.14 | **fora** do que a tabela descreve (ver abaixo) |
+| Sinal de teste + ganho, ganho 24 | ±2 % típ. (gerador) e ±0,5 % máx. (ganho): ±2,5 % | −0,06 a −0,42 % por canal, ±0,004 % de repetição | §6.14 | **dentro** |
+| O mesmo nos 7 ganhos | ganho: ±0,5 % máx., cada um | 1x_dc: −0,33 %, dispersão de 0,06 a 0,21 % entre ganhos (série); +0,46 % no ganho 1 a −0,26 % no 24 (driver da board) | §6.12, §5.1 | **dentro**, com uma discrepância entre sessões (abaixo) |
+| Casamento de ganho entre canais | 0,2 % típ., sem máximo | 0,34 ponto (CH7 −0,07 %, CH5 −0,42 %) | §6.14 | **acima do típico**, não fora de especificação |
+| Polaridade do gerador em DC | −(VREFP − VREFN)/2400 (Table 14) | nível DC negativo, −84 378 cód. | §4.3 | **confirmada** |
+| Frequência do gerador | fCLK/2²¹ e fCLK/2²⁰, clock interno ±0,5 % a 25 °C | 0,9766 e 1,9522 Hz (−0,00 e −0,05 %) | §5.5 | **dentro**, até a resolução de 5 s de janela |
+| Offset em curto | 60 µV típ. (no ganho 12) | −17 µV no ganho 24, −538 µV no ganho 1; constante em **códigos** (−1002 → −780) | §4.3, §5.1, §6.12 | **sem veredito**: o datasheet só dá o típico, e só no ganho 12, que não foi medido |
+| AVDD pelo MVDD (CH1 = (AVDD+AVSS)/2) | erro de leitura 2 % típ. | 2,4972 a 2,4984 V → AVDD 4,994–4,997 V; multímetro 5,00 V: −0,06 a −0,11 % | §5.3, §6.12 | **dentro** |
+| DVDD pelo MVDD (CH3 = DVDD/4) | erro de leitura 2 % típ. | 0,8182–0,8184 V → DVDD 3,273–3,274 V; multímetro **3,28 V**: −0,2 % | §6.12 | **dentro** |
+| Temperatura | 145 300 µV a 25 °C, 490 µV/°C (Equation 3); **nenhuma precisão especificada**; o autoaquecimento lê acima da placa | 149 813 µV → 34,2 °C; 30,8 e 35,8 °C pelo driver da série | §5.3, §6.12 | **sem veredito**: o datasheet não dá tolerância, e não houve termômetro |
+| Corrente e limiar de lead-off | ±20 % e ±30 mV | não medidos | — | **não comparável** |
+| Taxa de amostragem | DR = fCLK/…, clock interno ±0,5 % | 2499 em 10 s pelo timer do host | §6.12 | **não comparável**: no link `usb` quem marca o tempo é o host; o clock do conversor está medido pelo gerador, acima |
+
+O mapa de MVDD por canal (CH1, 2, 5–8: (AVDD+AVSS)/2; CH3 e 4: DVDD/4, §9.3.1.1.4) e a Equation 3
+eram as duas suposições da §5.3 e da §6.12 ("se for DVDD/4", "fórmula lida de memória"). As duas
+estão confirmadas, e o driver da série usa as mesmas constantes (`ti-ads1299.c:217-229`).
+
+**O ruído por ganho** (§5.2, RMS de 40 conversões avulsas a ~10/s, contra Table 1–4, 250 SPS):
+
+| Ganho | 1 | 2 | 4 | 6 | 8 | 12 | 24 |
+|---|---|---|---|---|---|---|---|
+| Datasheet, µVrms típ. | 1,08 | 0,57 | 0,31 | 0,23 | 0,20 | 0,16 | 0,14 |
+| Observado, µVrms | 1,109 | 0,461 | 0,275 | 0,218 | 0,217 | 0,131 | 0,130 |
+| Diferença | +3 % | −19 % | −11 % | −5 % | +8 % | −18 % | −7 % |
+
+Com 40 amostras, o desvio padrão estimado tem incerteza de ~11 % (1/√(2·39)), então diferenças de
+até ~20 % são o que se espera de uma estimativa dessas. Os pico a pico da §5.2 não se comparam com
+os da tabela: o pp cresce com o número de amostras (40 contra ≥1000). O que se pode dizer: **o piso
+de ruído desta peça, nesta placa, é o do datasheet em todos os ganhos**.
+
+E o pico a pico de 10 leituras que o autoteste vê **tem o tamanho previsto**: 6,26 códigos RMS vezes
+3,08 (o pp esperado de 10 amostras gaussianas, a constante d₂) dá **19,3 códigos**, e as medianas da
+§6.14 foram de 18 a 21,5. Ordem de grandeza bem acertada, não medida do ruído: as leituras estão a
+50 ms uma da outra, e o datasheet é média de peças.
+
+#### O que não bate
+
+**O ruído logo depois de plugar.** Metade dos *probes* a frio passa do máximo **garantido**, coisa
+que um conversor assentado e dentro do datasheet não faz. Então o que esses *probes* veem não é o
+ruído do conversor em regime. Isso reforça a hipótese da §6.13 (trilhos e referência assentando:
+AVDD pelo ADM7150, VREF com 10 µF), mas **não a prova**: um conversor que ainda não assentou também
+está fora do que a tabela descreve, e o datasheet só dá 150 ms de partida para a referência interna,
+que o driver já espera. O passo 2 da §6.15 é o que separa as duas.
+
+**O ganho 1 entre as duas sessões.** Pelo driver da board (§5.1, 2026-10-04, gerador AC preso na
+fase alta) o ganho 1 lia +0,46 % e o 24, −0,26 %: 0,72 ponto. Pelo driver da série (§6.12,
+2026-10-17, gerador em `_dc`, nível baixo) a dispersão entre os sete ganhos foi 0,06 a 0,21 %. As
+duas cabem em ±0,5 % por ganho se o gerador estiver entre −0,04 e +0,24 % do nominal, então
+**nenhuma está fora de especificação**. Mas as duas não são a mesma medida (nível alto contra nível
+baixo, outro driver, outro dia), e a diferença **não está explicada**. Não muda nada no autoteste,
+que roda só no ganho 24.
+
+**O casamento entre canais.** 0,34 ponto contra 0,2 % típico. Como o gerador é um só para os oito
+canais, essa dispersão é do ganho de cada canal. Acima do típico, sem máximo para reprovar.
+
+#### O que isto significa para o autoteste
+
+| Passo | Pior caso de uma peça dentro do datasheet | Esta peça | Defeito procurado | Limite no driver |
+|---|---|---|---|---|
+| Gerador − offset, ganho 24 | ±2,5 % (±2 % típ. + ±0,5 % máx.) | −0,42 % | ganho preso em 12: −50 % | ±20 %: **8 vezes** o pior caso |
+| Ruído em curto, pp | 1,6 µVpp (máx., −40 a 85 °C, 250 pontos) | 0,87 µV a quente, 5,5 µV a frio | caminho analógico quebrado | 10 µV: **6,25 vezes** o máximo |
+
+O código esperado do gerador, gain · 2²³ / 2400, não depende de VREF (§6.14), então a precisão da
+referência (±0,2 %) sai da conta. A deriva de ganho, 3 ppm/°C, dá 0,02 % em 60 °C. **Os dois
+limites ficam, agora justificados para qualquer peça**, com a ressalva que é do datasheet: a
+precisão do gerador é só **típica**. Um gerador até 19,5 pontos fora do típico passa mesmo somado ao
+pior ganho; além disso, a peça pode ser recusada. O datasheet não diz que essa peça não existe, diz
+só que não é o normal. E o limite de ruído tem que ficar folgado por causa do que **não** bate: a
+frio, esta peça chega a 3,4 vezes o máximo do datasheet (§6.14 mostrou por que 1 ou 2 µV recusariam
+o *probe* a frio).
+
+**O que isto não diz**: a transcrição foi conferida contra o PDF, não por uma segunda pessoa, e o
+driver e o teste continuam vindo da mesma leitura do datasheet (§6.15). É uma peça, num dia.
+
+**O comentário do driver** (`ti-ads1299.c:207`, "wider than any reference tolerance") ainda dá o
+motivo antigo. A referência cancela; o motivo certo é o do gerador e do ganho. Fica para a próxima
+revisão da série, não foi alterado aqui.
 
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**

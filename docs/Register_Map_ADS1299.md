@@ -455,3 +455,55 @@ This register configures the conversion mode and enables the lead-off comparator
 | 2 | Reserved | R/W | 0h | **Reserved**<br><br>Always write 0h |
 | 1 | PD_LOFF_COMP | R/W | 0h | **Lead-off comparator power-down**<br><br>This bit powers down the lead-off comparators.<br><br>0 : Lead-off comparators disabled<br><br>1 : Lead-off comparators enabled |
 | 0 | Reserved | R/W | 0h | **Reserved**<br><br>Always write 0h |
+## 7.5 Electrical Characteristics — os parâmetros do autoteste
+
+Transcrito de **SBAS499C** (julho de 2012, revisado em janeiro de 2017), §7.5 e §8.1, a partir do
+PDF da TI (`pdftotext -layout`), com a coluna de cada número conferida. Condições da tabela, salvo
+indicação: AVDD − AVSS = 5 V, DVDD = 3,3 V, VREF = 4,5 V, fCLK externo = 2,048 MHz, 250 SPS,
+**ganho 12**. Mínimo e máximo valem de −40 °C a +85 °C; o típico, a +25 °C.
+
+| Parâmetro | Condição | MIN | TYP | MAX | Unidade |
+|---|---|---|---|---|---|
+| Sinal de teste, tensão | ver Register Maps | | ±1, ±2 | | mV |
+| Sinal de teste, **precisão** | | | **±2 %** | | |
+| **Erro de ganho** | excluindo o erro da referência | | 0,1 | **±0,5** | % of FS |
+| Deriva de ganho | excluindo a deriva da referência | | 3 | | ppm/°C |
+| Casamento de ganho entre canais | | | 0,2 | | % of FS |
+| Precisão de VREF (interna) | | | ±0,2 % | | |
+| **Ruído referido à entrada** (0,01 a 70 Hz) | 10 s de dados, ganho 24 ⁽¹⁾ | | 1 | | µVpp |
+| | 250 pontos, 1 s, ganho 24, +25 °C | | 1 | **1,35** | µVpp |
+| | 250 pontos, 1 s, ganho 24, −40 a +85 °C | | 1 | **1,6** | µVpp |
+| Offset | | | 60 | | µV |
+| Tempo de partida da referência interna | | | 150 | | ms |
+
+⁽¹⁾ "Test not performed in production. Input-referred noise is calculated with the input shorted
+(without electrode resistance) over a 10-second interval."
+
+**Table 4** (§8.1), ganho 24, `DR = 110` (250 SPS), banda de −3 dB 65 Hz, 5 V e referência de 4,5 V:
+**0,14 µVrms, 0,98 µVpp**, 119,5 dB de faixa dinâmica, 18,54 bits livres de ruído, ENOB 19,85.
+São valores típicos a +25 °C, "the result of averaging the readings from multiple devices",
+entradas em curto, com no mínimo 1000 leituras consecutivas por valor.
+
+**Tables 1 a 4**, a mesma linha (250 SPS, 65 Hz), µVrms / µVpp típicos: ganho 1 **1,08 / 7,59**;
+2 **0,57 / 3,99**; 4 **0,31 / 2,16**; 6 **0,23 / 1,62**; 8 **0,20 / 1,38**; 12 **0,16 / 1,13**;
+24 **0,14 / 0,98**.
+
+Outros números usados na comparação com as medidas (`BRINGUP_AFE.md` §6.16):
+
+| Parâmetro | Valor | Coluna | Onde |
+|---|---|---|---|
+| Medida de alimentação, erro de leitura | 2 % (analógica e digital) | TYP | §7.5, System Monitors |
+| MVDDP − MVDDN | CH1, 2, 5, 6, 7, 8: 0,5 × (AVDD + AVSS); **CH3 e 4: DVDD / 4** | | §9.3.1.1.4 |
+| Sensor de temperatura | 145 mV a 25 °C, 490 µV/°C | TYP | §7.5 |
+| Equation 3 | T (°C) = (leitura em µV − 145 300 µV) / 490 µV/°C + 25 °C; "self-heating … causes a higher reading than the temperature of the surrounding PCB"; nenhuma precisão especificada | | §9.3.1.1.3 |
+| Clock interno, precisão | ±0,5 % a 25 °C; ±2,5 % de −40 a +85 °C | MAX | §7.5 |
+| Lead-off, precisão da corrente | ±20 % | TYP | §7.5 |
+| Lead-off, precisão do limiar do comparador | ±30 mV | TYP | §7.5 |
+
+Três leituras que a tabela pede e que são fáceis de errar:
+
+- A **precisão do sinal de teste está na coluna TYP**: o datasheet não garante limite para o gerador.
+- O **erro de ganho** é especificado no ganho 12 (condição geral da tabela); o ganho 24 não tem linha
+  própria.
+- O "±1, ±2 mV" do gerador é o valor arredondado de 1 × e 2 × VREF/2400 (Table 14, `CAL_AMP`):
+  com VREF = 4,5 V, 1,875 e 3,75 mV.
