@@ -378,6 +378,20 @@ O `dmesg` tem de terminar em
 | fim | `# restaurado`, sem `MENOS` | |
 
 O roteiro deixa o dispositivo como encontrou e devolve código de saída 1 se algum PASS faltar.
+
+**A varredura de registradores** (`BRINGUP_AFE.md` §6.13) carrega e descarrega os drivers sozinha,
+dez vezes, e lê o silício pelo oráculo com os drivers fora; ~1 min. Termina com o conversor
+resetado e a ponte no `hid-generic`, pronta para o `--compare`:
+
+```bash
+sudo python3 scripts/afe-feature-regs.py --inject     # 5 PASS: controle e as duas injeções vistas
+sudo python3 scripts/afe-feature-regs.py              # 25 PASS: 9 padrões e a cobertura
+sudo python3 scripts/mcp2210-nvram-snapshot.py --compare ~/nvram-antes.txt
+```
+
+Cada padrão imprime a linha do autoteste do seu *probe*; o ruído em curto deu 25 a 33 códigos
+(uma vez 244, logo depois de plugar). Para voltar a usar os drivers, `modprobe` com os parâmetros
+de sempre.
 **Nunca** use o `gpiochip` da ponte para dirigir 1 em GP0–GP3, GP7 ou GP8: estão ligados direto ao
 terra (`BRINGUP_AFE.md` §2.3). Para voltar aos módulos da board, refaça a §4 sem as variáveis com o
 `linux-med` na `board/medplatform-afe`.
@@ -404,4 +418,5 @@ terra (`BRINGUP_AFE.md` §2.3). Para voltar aos módulos da board, refaça a §4
 | `afe-phase4.py`: `nenhum iio:device com nome ads1299-*` | o conversor não está anexado (`nothing attached`), ou o autoteste ainda está rodando | conferir o `dmesg` da §5.4; esperar o `self test passed` |
 | um módulo recarregado não volta ao padrão | um módulo já carregado guarda os parâmetros do último `modprobe`, e replugar não muda isso | `modprobe -r` e carregar de novo com os parâmetros explícitos |
 | LED aceso fixo com o driver carregado e sem aquisição | carregado sem `led_gpio=6`, ou o driver recusou o pino (`dmesg \| grep 'status LED'`) | recarregar com `led_gpio=6`; a recusa nomeia o motivo (pino não é GPIO, ou é entrada na NVRAM) |
+| `PermissionError: … /sys/kernel/debug/regmap/…/cache_bypass` (ou `direct_reg_access`), como root | lockdown do Secure Boot (`cat /sys/kernel/security/lockdown` → `[integrity]`): o debugfs só abre arquivos somente leitura | ler o silício pelo oráculo com os drivers descarregados, como faz o `afe-feature-regs.py` (`BRINGUP_AFE.md` §6.13) |
 | `self test failed` com o sinal de teste "parado" em ~25–40 códigos | autoteste antigo, que media a oscilação em single-shot | conferir que o `linux-med` está em `e9f382da54ba` ou depois (§4.4) |

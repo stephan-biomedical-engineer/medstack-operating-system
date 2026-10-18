@@ -1427,6 +1427,81 @@ conter o fim da string do fabricante, o que se lê como o firmware da ponte reap
 de resposta - leitura, não medida, e fora do que a NVRAM guarda. O teste negativo "a aquisição
 nunca escreve a NVRAM" vale também para o par ponte da board + conversor da série.
 
+### 6.13 A varredura de registradores do driver da série · **2026-10-17, host**
+
+O critério da Fase 4 do `implementation_plan_ads1299_upstream.md` ("a varredura de registradores
+conferida"), com o driver da §6.12. Não é a comparação com os valores de reset: o *probe* deste
+driver programa o conversor, e a de reset o oráculo já fez (§4.2). É o que cada ajuste da ABI
+deixa no silício, bit a bit, contra a **transcrição** (`Register_Map_ADS1299.md`): as posições
+previstas em `scripts/afe-feature-regs.py` foram escritas da transcrição, não das macros do
+driver.
+
+**Ler o silício com o driver carregado não deu.** A leitura de registrador do driver é o regmap,
+e para um registrador não volátil ela devolve o **cache**: mede o que o driver acredita ter
+escrito. O caminho óbvio, `cache_bypass` no debugfs do regmap, deu `EPERM` como root. O Ubuntu com
+Secure Boot roda em lockdown (`/sys/kernel/security/lockdown`: `none [integrity] confidentiality`),
+e nesse modo o debugfs só abre arquivos somente leitura. `cache_bypass` (0600) e o
+`direct_reg_access` do IIO (0644) ficam fechados, e o `registers` do regmap (0400), que é o cache,
+fica aberto.
+
+**O método, então**, por padrão: carregar os drivers, aplicar um padrão pela ABI, ler o cache do
+driver (`registers`); descarregar - o driver não tem *remove*, e a única ação de desmontagem
+desliga o regulador fictício, então nada é escrito no conversor; ler o silício pelo oráculo (§4),
+por hidraw, com um `RREG` que não é o do driver; comparar **todo bit de todo registrador** com o
+que a transcrição prevê para o padrão, e o cache com o silício. O status (`CONFIG3` bit 0,
+`LOFF_STATP/N`) fica fora; o `PD` de cada canal e o `SINGLE_SHOT`, que o driver move por conta
+própria entre leitura direta e buffer, ficam fora da previsão e dentro da comparação cache ×
+silício. Cada padrão varia tudo de uma vez - os oito canais com ganhos e MUX diferentes, taxa,
+gerador, os três campos de LOFF, as cinco máscaras por canal, montagem, bias -, e nove padrões
+cobrem todo código de todo campo. Cada *probe* reseta o conversor, então um padrão não vaza para o
+seguinte. Corrente de 6 e 24 µA só com nenhuma entrada monitorada. Chave SRB1 em GNDA, nada no
+DB25.
+
+**Injeções, antes da varredura** (`--inject`, 5/0): o controle (padrão 0 sem injeção) passou; o
+oráculo gravou `LOFF_FLIP ^ 01` pelas costas do driver, e as duas comparações reprovaram nesse
+registrador (`4a`, previsto e em cache `4b`); o ganho previsto um bit abaixo (5:3) reprovou seis
+`CHnSET` - o CH1 e o CH8 estão no ganho 1, código 000, que a troca não muda, o que é a ressalva
+da §7 do plano de bancada dita de novo: uma verificação de posição só vê um campo cujo valor a troca
+altera.
+
+**A varredura: 25/0.** Nos nove padrões, o silício bateu com a transcrição em todo bit previsto, e
+o cache do driver bateu com o silício em todo registrador. Cobertos: 7 de 7 taxas, 7 de 7 ganhos,
+8 de 8 MUX, 7 de 7 ajustes do gerador (com o `off`), 8 de 8 limiares, 4 de 4 correntes, 4 de 4
+frequências. `ID = 0x3e`, `REV_ID = 1`. Os mapas lidos, `0x00` a `0x17`:
+
+| Padrão | Silício |
+|---|---|
+| 0 | `3e 90 d0 f0 00 00 19 22 3b 44 5d 66 0f 35 a6 19 62 4b 10 2f 0f 00 00 0a` |
+| 1 | `3e 91 d1 fe 25 19 22 3b 44 5d 66 0f 10 6a 4d 32 c4 96 02 95 0f 00 00 0a` |
+| 2 | `3e 92 d3 f0 4a 22 3b 44 5d 66 0f 10 29 d4 9a 00 00 2d 00 00 0f 20 00 08` |
+| 3 | `3e 93 d4 fc 6f 3b 44 5d 66 0f 10 29 32 a9 35 00 00 5a 00 00 0f 20 00 08` |
+| 4 | `3e 94 d5 f2 81 44 5d 66 0f 10 29 32 4b 53 6a 91 26 b4 10 b2 0f 00 00 0a` |
+| 5 | `3e 95 d7 fc a6 5d 66 0f 10 29 32 4b 54 a6 d4 23 4c 69 20 49 0f 00 00 0a` |
+| 6 | `3e 96 d0 f0 cb 66 0f 10 29 32 4b 54 6d 4d a9 00 00 d2 00 00 0f 20 00 08` |
+| 7 | `3e 90 d1 fc ec 0f 10 29 32 4b 54 6d 06 9a 53 00 00 a5 00 00 0f 20 00 08` |
+| 8 (partida) | `3e 96 c0 e0 00 60 60 60 60 60 60 60 60 00 00 00 00 00 00 00 0f 00 00 08` |
+
+Lidos além do previsto: o `GPIO` deu `0f` em todos (os quatro como entrada, os pinos em 0 pelos
+pull-downs de 10 kΩ); nenhum `PD` de canal ligado em repouso; `SINGLE_SHOT = 1` em repouso, que é o
+modo das leituras diretas.
+
+**O que isto prova e o que não prova.** Prova que cada atributo da ABI escreve o campo na posição da
+transcrição, que os reservados ficam nos valores da tabela, e que o cache do driver é o silício
+depois de cada padrão: a releitura de toda escrita que a `board/medplatform-afe` precisou
+(`df866328fcff`) não achou, aqui, nada a pegar. **Não** prova que a transcrição está certa: uma
+transcrição errada e um driver escrito dela concordam (regra 1). Isso é o sinal analógico, e a
+§6.12 o mediu nos campos que o mudam. E não exercita registrador nenhum com o buffer ligado.
+
+**O ruído do autoteste.** Nove *probes* da varredura deram 29, 29, 33, 29, 26, 27, 25, 25 e 28
+códigos; antes dela, 28 e 31 (§6.12). Uma vez deu **244**, no *probe* das 37339 s, logo depois de a
+ponte reenumerar (HID `.0005` → `.0009`, e a ponte anunciou "ready" depois do *probe* do conversor).
+O autoteste passou nas três. Hipótese, não medida: os trilhos analógicos (AVDD pelo ADM7150, o
+VREF com 10 µF) ainda assentando num *probe* que começa ~1 s depois de plugar. Um em treze não
+separa causa de acaso; a injeção natural é replugar e carregar várias vezes.
+
+NVRAM depois da sessão: `--compare` PASS, campos documentados idênticos; 18 bytes *don't care*
+diferentes em `0x10` e `0x20`.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
@@ -1881,3 +1956,6 @@ rootfs cujos módulos o kernel em execução recusa. A próxima entrega para a p
     nível DC já estava na §4.3 e na constante do autoteste, e a tolerância pedia ao sysfs mais
     algarismos do que ele tem. Um critério que nunca leu a medida anterior testa quem o escreveu.
     (§6.12)
+16. **Ler um registrador pelo driver mede o que o driver acredita.** Com cache, a leitura devolve a
+    escrita. O silício só responde a um leitor que não seja o driver - e o lockdown do Secure Boot
+    fecha o atalho do debugfs, então o leitor independente é também o único que funciona. (§6.13)
