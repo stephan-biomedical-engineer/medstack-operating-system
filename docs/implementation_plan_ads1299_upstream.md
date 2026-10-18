@@ -19,7 +19,10 @@
 > de um PC, com a ponte da `board/medplatform-afe` (`BRINGUP_AFE.md` §6.12-§6.13). A ABI deu 42/0
 > no `afe-feature-abi.py`; a varredura de registradores, com o silício lido pelo oráculo e os
 > drivers fora, bateu bit a bit com a transcrição em nove padrões que cobrem todo código de todo
-> campo, e o cache do driver com o silício (25/0). Isto é "visto no silício pelo USB": o caminho por
+> campo, e o cache do driver com o silício (25/0). A tolerância do autoteste foi medida, e as duas
+> constantes ficam: ±20 % no gerador está 47 vezes acima do pior erro desta peça e abaixo do defeito
+> procurado, e 10 µV no ruído só 1,8 vez acima do pior *probe* logo depois de ligar a placa. Isto é
+> "visto no silício pelo USB": o caminho por
 > DRDY, o evento `openwire`, a saída de clock, o `gpiochip`, o PWDN e o `RDATAC` ainda são só host,
 > e esperam a placa (Fase 4).
 >
@@ -868,8 +871,14 @@ primeira vez, pelo USB de um PC com a ponte da board. Atendidos: `dmesg` do *pro
 sinal de teste interno reconhecível pelo buffer (`1x_slow`, 3,74 mV pico a pico, −0,28 %), e a
 varredura de registradores (§6.13: nove padrões, todo código de todo campo, o silício lido pelo
 oráculo com os drivers fora bate bit a bit com a transcrição, e o cache do driver com o silício;
-25/0, injeções vistas). Falta a tolerância do autoteste **medida**: ele passou em treze *probes*,
-com ruído em curto de 25 a 33 códigos e uma vez 244, mas com a tolerância de hoje. O caminho por DRDY, o evento `openwire`, a saída de clock, o
+25/0, injeções vistas), e a tolerância do autoteste **medida** (§6.14): as duas constantes
+ficam. ±20 % no gerador é 47 vezes o pior erro desta peça (−0,42 %) e 2,5 vezes abaixo do menor
+defeito procurado (um ganho preso em 12 lê −50 %); o código esperado não depende de VREF, então o
+autoteste não vê um VREF de valor errado. 10 µV no ruído é 11,5 vezes o pior a quente (39 códigos)
+e só 1,8 vez o pior a frio (244): os *probes* logo depois de ligar ficaram todos acima do pior a
+quente, e um teto de 1 µV, que todo *probe* a quente passa, recusaria os 11. Os critérios de silício da Fase 4 que o USB
+alcança estão cumpridos; a dispersão entre peças espera o datasheet transcrito, e o resto, a
+placa. O caminho por DRDY, o evento `openwire`, a saída de clock, o
 `gpiochip`, o PWDN e o `RDATAC` precisam da placa. Até isso fechar, a frase é "visto no silício
 pelo USB", não "validado em silício".
 
@@ -996,6 +1005,6 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 3 | comentários enxugados de 490 para 290 linhas (16% → 10%, arquivo 3070 → 2870), um só `MODULE_AUTHOR` (`993b702cf8f9`). Código objeto idêntico ao anterior; `feature.c` 590/0; `W=1` arm64 limpo; `checkpatch --strict` 0/0/0 no patch. A versão comentada, para estudo, fica fora dos repositórios (`~/Documents/TCC/drivers-comentados`, de `eb2b8851cf01`) | **feito** | 2026-10-17 |
 | 4 | primeira vez no silício: o driver da série (`993b702cf8f9`) com a ponte da board, pelo USB de um PC (kernel 6.8, o evento `openwire` fora só da cópia do host). Autoteste passa (ruído em curto até 28 códigos); gerador a −0,33 % de VREF/2400 nos 7 ganhos, MUX e ganho independentes por canal, `in_temp` 30,8 °C, `mvdd_analog` 2,498 V, lead-off só nas entradas monitoradas, as 4 recusas `-EINVAL` e as 8 `-EBUSY`, 10 s de buffer com entregues + perdidas = devidas. **42/0** no `afe-feature-abi.py`, depois de uma primeira rodada 38/4 cujos 4 eram do próprio roteiro (sinal do nível DC, tolerância abaixo da resolução do sysfs). NVRAM da ponte idêntica antes e depois nos campos documentados (`BRINGUP_AFE.md` §6.12) | **visto no silício, pelo USB** | 2026-10-17 |
 | 4 | varredura de registradores do driver da série: nove padrões aplicados pela ABI, o silício lido pelo oráculo (hidraw, `RREG` próprio) com os drivers descarregados, contra a transcrição bit a bit, e o cache do driver contra o silício. 25/0, cobrindo todo código de taxa, ganho, MUX, gerador e dos três campos de LOFF; injeções (gravação pelas costas do driver, posição de campo errada) vistas, 5/0. O `cache_bypass` do debugfs não serve no PC: lockdown do Secure Boot (`BRINGUP_AFE.md` §6.13) | **feito, pelo USB** | 2026-10-17 |
-| 4 | autoteste passa com tolerância medida | — | — |
+| 4 | autoteste passa com tolerância medida: 100 rodadas replicadas (pior ruído 39 códigos = 0,87 µV; erro do gerador −0,06 % a −0,42 %, 0,34 ponto entre canais, ±0,004 % em cada), 30 recargas (24 a 38 códigos), 10 *probes* a frio (47 a 182, e o 244 da §6.13). **As duas constantes ficam**: 20 % por estar 47× acima desta peça e 2,5× abaixo do defeito; 10 µV por estar só 1,8× acima do pior a frio. Achado: o esperado não depende de VREF, então o autoteste não vê um VREF errado (`BRINGUP_AFE.md` §6.14) | **medido, pelo USB**; dispersão entre peças falta (datasheet) | 2026-10-17 |
 | 5 | cada divergência do irmão justificada por escrito | — | — |
 | 6 | série na lore, Message-ID | — | — |

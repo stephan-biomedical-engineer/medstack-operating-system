@@ -1502,6 +1502,73 @@ separa causa de acaso; a injeção natural é replugar e carregar várias vezes.
 NVRAM depois da sessão: `--compare` PASS, campos documentados idênticos; 18 bytes *don't care*
 diferentes em `0x10` e `0x20`.
 
+### 6.14 A tolerância do autoteste, medida · **2026-10-17, host**
+
+O último critério da Fase 4 do `implementation_plan_ads1299_upstream.md`: o autoteste "passando
+com a tolerância **medida** e não presumida". O autoteste do *probe* julga duas grandezas, no
+estado que o *probe* deixa (ganho 24 em todo canal, 250 SPS), cada uma sobre 10 conversões
+*single-shot* depois de descartar 2, a 50 ms uma da outra:
+
+| Passo | Limite no driver | A ganho 24 |
+|---|---|---|
+| entradas em curto, pico a pico | `ADS1299_SELF_TEST_NOISE_UV_PP` = 10 µV | 447 códigos |
+| gerador em DC menos o offset | gain · 2²³ / 2400, ± `ADS1299_SELF_TEST_TOLERANCE_PCT` = 20 % | 83886 ± 16777 códigos |
+
+O *probe* só imprime se passou e o maior ruído. `scripts/afe-selftest-tolerance.py` mede as duas
+grandezas de três jeitos. Chave SRB1 em GNDA, nada no DB25.
+
+**`replicate`, 100 rodadas** (13 min): os dois passos repetidos pelo caminho do próprio driver
+(`in_voltageN_raw` é o mesmo `read_one` *single-shot*). Diferença declarada: o autoteste tira os
+oito canais de uma conversão, aqui cada leitura é uma conversão de um canal.
+
+| Canal | Ruído pp, mediana / p99 / máx (códigos) | Erro do gerador, média ± desvio (%) | Faixa (%) |
+|---|---|---|---|
+| CH1 | 19 / 29 / 30 | −0,340 ± 0,004 | −0,351 a −0,328 |
+| CH2 | 20 / 32 / 33 | −0,240 ± 0,004 | −0,248 a −0,229 |
+| CH3 | 18 / 30 / 32 | −0,237 ± 0,004 | −0,248 a −0,230 |
+| CH4 | 20 / 32 / 35 | −0,348 ± 0,003 | −0,356 a −0,340 |
+| CH5 | 19 / 36 / 39 | −0,416 ± 0,004 | −0,424 a −0,407 |
+| CH6 | 21,5 / 37 / 38 | −0,172 ± 0,004 | −0,179 a −0,163 |
+| CH7 | 19 / 33 / 33 | −0,072 ± 0,004 | −0,082 a −0,064 |
+| CH8 | 20 / 32 / 38 | −0,310 ± 0,003 | −0,320 a −0,302 |
+
+Pior ruído 39 códigos = 0,87 µV; erro do gerador de −0,06 % a −0,42 %, com 0,34 ponto entre o
+canal mais longe e o mais perto, e cada canal estável a ±0,004 %. CSV em
+`~/selftest-replicate.csv`, fora do repositório.
+
+**`probes`, 30 recargas do `ti_ads1299`** com a ponte e a placa ligadas: 30 passaram, ruído 24 a
+38 códigos, mediana 27.
+
+**`replug`, 10 vezes**, o `hid_mcp2210` carregado com `spi_chip_select=4`, de modo que o *probe*
+roda logo que a placa liga: 10 passaram, ruído **47, 74, 54, 73, 47, 182, 97, 62, 55, 53** -
+mediana 67,5, todos acima do pior a quente. Com o 244 da §6.13, que foi o mesmo caso, **11 de 11
+*probes* a frio ficaram acima de 39**.
+
+**A amplitude: os 20 % ficam, e agora pelo motivo certo.** O gerador vale VREF/2400 e o passo do
+conversor VREF/2²³, então o código esperado, gain · 2²³ / 2400, **não depende de VREF**: o erro da
+referência cancela. O que sobra é o ganho de cada canal e o divisor do gerador - por isso os canais
+diferem entre si (0,34 ponto) e cada um é estável. Duas consequências. O autoteste **não vê um VREF
+de valor errado**, só um ausente (que zera tudo). E a tolerância separa o que a peça faz do defeito
+que o teste procura: um estágio morto ou um ganho errado. No *probe* todo canal está em 24, e um
+ganho preso em 12 lê −50 %. 20 % é **47 vezes** o pior erro desta peça e **2,5 vezes** abaixo do
+menor defeito. A dispersão entre peças é do datasheet (erro de ganho, precisão do gerador), que não
+está transcrito; ela teria de passar de ±20 % para mudar a decisão.
+
+**O ruído: os 10 µV ficam, e não podem baixar.** A quente o pior é 39 códigos (11,5 vezes abaixo do
+teto); a frio, 244 (1,8 vez). Um teto de 1 µV (45 códigos), que todo *probe* a quente passaria
+(pior 39), reprovaria **os 11** *probes* a frio, e um de 2 µV (89 códigos), 3 deles - um driver que
+recusa o conversor bom no boot. Um *probe* que começa logo
+que a placa liga vê algo maior que o ruído do conversor: a hipótese da §6.13 (os trilhos e a
+referência assentando - AVDD pelo ADM7150, o VREF com 10 µF) está de pé na direção, e **não está
+medida**: o *probe* só reporta o máximo, e não dá para separar ruído de rampa. Medir pediria as
+leituras do primeiro *probe* a frio, uma a uma. E o tempo de assentamento é da placa, não do
+conversor: o driver espera os 150 ms do datasheet para a referência, e não tem como saber o resto.
+
+**O que não está medido**: uma peça só, num dia, à temperatura da bancada. A dispersão entre peças
+e a deriva com a temperatura são do datasheet, que falta transcrever (precisão do gerador, erro e
+deriva de ganho, ruído referido à entrada a 250 SPS e ganho 24). O pico a pico de 10 leituras não é
+o ruído do datasheet, que é medido em outra banda e duração; a comparação é de ordem de grandeza.
+
 ## 7. Fase 6 — framework, aplicação e suíte · **não executada**
 ## 8. Fase 7 — as duas ligações lado a lado · **não executada**
 ## 9. Fase 8-A — varredura do datasheet do conversor · **não executada**
@@ -1959,3 +2026,7 @@ rootfs cujos módulos o kernel em execução recusa. A próxima entrega para a p
 16. **Ler um registrador pelo driver mede o que o driver acredita.** Com cache, a leitura devolve a
     escrita. O silício só responde a um leitor que não seja o driver - e o lockdown do Secure Boot
     fecha o atalho do debugfs, então o leitor independente é também o único que funciona. (§6.13)
+17. **Uma tolerância de autoteste se mede contra o defeito, e a frio.** O erro desta peça diz quanto
+    a tolerância sobra; o defeito procurado diz até onde ela pode ir; e o caso que quase reprova é
+    o *probe* logo depois de ligar, que nenhuma recarga a quente reproduz. Um teto apertado pela
+    medida a quente recusaria o conversor bom no boot. (§6.14)

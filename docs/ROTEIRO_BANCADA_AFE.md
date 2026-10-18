@@ -390,7 +390,18 @@ sudo python3 scripts/mcp2210-nvram-snapshot.py --compare ~/nvram-antes.txt
 ```
 
 Cada padrão imprime a linha do autoteste do seu *probe*; o ruído em curto deu 25 a 33 códigos
-(uma vez 244, logo depois de plugar). Para voltar a usar os drivers, `modprobe` com os parâmetros
+(uma vez 244, logo depois de plugar).
+
+**A tolerância do autoteste** (`BRINGUP_AFE.md` §6.14), com os drivers carregados:
+
+```bash
+sudo python3 scripts/afe-selftest-tolerance.py replicate --runs 100 --csv ~/selftest-replicate.csv  # ~13 min
+sudo python3 scripts/afe-selftest-tolerance.py probes --runs 30                                     # ~2 min
+sudo python3 scripts/afe-selftest-tolerance.py replug --runs 10      # interativo: desplugar e plugar
+```
+
+Esperado: ruído a quente até ~40 códigos, a frio (`replug`) 47 a 244; erro do gerador entre −0,1 %
+e −0,45 % por canal. O `replug` precisa do `hid_mcp2210` já carregado com `spi_chip_select=4`. Para voltar a usar os drivers, `modprobe` com os parâmetros
 de sempre.
 **Nunca** use o `gpiochip` da ponte para dirigir 1 em GP0–GP3, GP7 ou GP8: estão ligados direto ao
 terra (`BRINGUP_AFE.md` §2.3). Para voltar aos módulos da board, refaça a §4 sem as variáveis com o
