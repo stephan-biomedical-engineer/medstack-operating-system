@@ -84,7 +84,7 @@ desde 6.9). Três consequências práticas:
 1. **A estrutura já é idioma mainline** — `regmap` com `.reg_read`/`.reg_write`, `REGCACHE_MAPLE`,  `devm_iio_kfifo_buffer_setup`, `dev_err_probe`. Metade do que uma revisão normalmente exige reescrever já está no formato certo porque o original passou por essa revisão.
 2. **O *copyright* do autor original tem de permanecer**, e permanece. É obra derivada de arquivo
    GPL-2.0; apagar a linha seria fatal para a aceitação, além de errado. O que saiu foi o
-   `MODULE_AUTHOR` dele (`993b702cf8f9`): essa macro nomeia quem responde pelo driver, e o
+   `MODULE_AUTHOR` dele (`bec53c0e6365`): essa macro nomeia quem responde pelo driver, e o
    *copyright* e o "Based on ti-ads1298.c by Mike Looijmans" continuam no cabeçalho.
 3. **O revisor vai fazer o `diff` com o irmão** e perguntar o motivo de cada divergência. Isso é
    bom: as divergências reais estão documentadas no cabeçalho do arquivo (tabela de ganhos, VREF de 4,5 V, ausência do bit HR/LP, reset de `CHnSET`, layout do registrador de ID) e cada uma tem justificativa de datasheet. **O que não estiver justificado será pedido de volta.**
@@ -399,37 +399,37 @@ auditoria leva o símbolo de agora e o commit que o fechou. A coluna **Board** �
 |---|---|---|---|---|---|---|
 | ID | Device ID | ⚙️ | ⚙️ | confere a família no *probe*; `REV_ID` vai para o `dmesg` | — (fica ⚙️) | 3.0 |
 | ID | Nº de canais | ✅ | ✅ | já fechado | — | — |
-| CONFIG1 | DAISY_EN | ⚙️ `b18610b58e84` | ❌ | gravado 0 no *probe*: é o modo daisy-chain, em que um chip só lê igual; a cadeia é recusada (§5.6) | — (fica ⚙️) | 3.8 |
-| CONFIG1 | CLK_EN | ✅ `c2d0410e18b2` | ❌ | **provedor de clock** (`#clock-cells = <0>`), ligado por `clk_prepare_enable` de quem consome | padrão (clk) | 3.8 |
+| CONFIG1 | DAISY_EN | ⚙️ `59e2f61a7e66` | ❌ | gravado 0 no *probe*: é o modo daisy-chain, em que um chip só lê igual; a cadeia é recusada (§5.6) | — (fica ⚙️) | 3.8 |
+| CONFIG1 | CLK_EN | ✅ `67ad7ebdd6e3` | ❌ | **provedor de clock** (`#clock-cells = <0>`), ligado por `clk_prepare_enable` de quem consome | padrão (clk) | 3.8 |
 | CONFIG1 | DR | ✅ | ✅ | já fechado | padrão | — |
 | CONFIG2 | INT_CAL | ✅ | ✅ | já fechado | custom | — |
 | CONFIG2 | CAL_AMP | ✅ | ✅ | já fechado | custom | — |
-| CONFIG2 | CAL_FREQ | ✅ `c797fbc8324b` | ⚠️ sem DC | `test_signal` com `1x_dc` e `2x_dc` (o código 10 não é usado), `test_signal_available`, `-EBUSY` com o buffer ligado; a entrada de teste nunca fica sem o gerador (`6bd29f6b17ee`) | custom | 3.1 |
+| CONFIG2 | CAL_FREQ | ✅ `71d6dc5a8b90` | ⚠️ sem DC | `test_signal` com `1x_dc` e `2x_dc` (o código 10 não é usado), `test_signal_available`, `-EBUSY` com o buffer ligado; a entrada de teste nunca fica sem o gerador (`facb5b681f47`) | custom | 3.1 |
 | CONFIG3 | PD_REFBUF | ⚙️ | ⚙️ | segue o `vref-supply` (fiação) | — (fica ⚙️) | — |
-| CONFIG3 | BIAS_MEAS | ✅ `af57c59032b2` | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
-| CONFIG3 | BIASREF_INT | ✅ `af57c59032b2` | ⚙️ | `biasref-supply` no DT (`d536f740caa0`): com ela a placa alimenta o pino e o bit fica 0; sem ela, o CI gera (AVDD + AVSS) / 2 | DT (padrão) | 3.4 |
-| CONFIG3 | PD_BIAS | ✅ `76ab0eb81369` | ✅ | `bias_drive` = `off`/`on` e só isso; `reference` e `derived` viraram combinações com o BIAS_SENS | custom | 3.4 |
-| CONFIG3 | BIAS_LOFF_SENS | ✅ `a77a4a5b85c7` | ❌ | atributo `bias_lead_off` (`off`/`on`), que liga também os comparadores; `-EBUSY` com o buffer ligado | custom | 3.5 |
-| CONFIG3 | BIAS_STAT | ✅ `a77a4a5b85c7` | ❌ | lido **sem cache** (CONFIG3 volátil, D3): `bias_lead_off_status` = `disabled`/`connected`/`disconnected`. Ele não vem na *status word*, então o registrador é o único caminho; se o lead-off ganhar evento na 3.5, este bit vai junto | custom | 3.5 |
-| LOFF | COMP_TH | ✅ `79996faac302` | ⚙️ 95/5 % | `lead_off_threshold_percent` + `_available` (8 pares; o valor é o lado positivo, 95 = 95/5 % … 70 = 70/30 %) | custom | 3.5 |
-| LOFF | ILEAD_OFF | ✅ `79996faac302` | ⚙️ 6 nA | `lead_off_current_nanoamp` + `_available` (6, 24, 6000, 24000). 6 e 24 µA em DC passam do limite da IEC 60601-1: é a plataforma que não os oferece (§11), não o driver | custom | 3.5 |
-| LOFF | FLEAD_OFF | ✅ `79996faac302` | ⚙️ DC | `lead_off_frequency` + `_available` (`dc`, `ac_7.8`, `ac_31.2`, `ac_fdr_div_4`; Hz do clock interno de 2,048 MHz). O significado do LOFF_STAT em AC segue sem confirmação (§3.1.2) | custom | 3.5 |
+| CONFIG3 | BIAS_MEAS | ✅ `4dd3dce3a356` | ❌ | ligado sempre que algum canal tem MUX=010, desligado quando nenhum tem (conserta D1) | via MUX | 3.1 |
+| CONFIG3 | BIASREF_INT | ✅ `4dd3dce3a356` | ⚙️ | `biasref-supply` no DT (`4926987eccaf`): com ela a placa alimenta o pino e o bit fica 0; sem ela, o CI gera (AVDD + AVSS) / 2 | DT (padrão) | 3.4 |
+| CONFIG3 | PD_BIAS | ✅ `12af163d6fd6` | ✅ | `bias_drive` = `off`/`on` e só isso; `reference` e `derived` viraram combinações com o BIAS_SENS | custom | 3.4 |
+| CONFIG3 | BIAS_LOFF_SENS | ✅ `f2f3f43e0886` | ❌ | atributo `bias_lead_off` (`off`/`on`), que liga também os comparadores; `-EBUSY` com o buffer ligado | custom | 3.5 |
+| CONFIG3 | BIAS_STAT | ✅ `f2f3f43e0886` | ❌ | lido **sem cache** (CONFIG3 volátil, D3): `bias_lead_off_status` = `disabled`/`connected`/`disconnected`. Ele não vem na *status word*, então o registrador é o único caminho; se o lead-off ganhar evento na 3.5, este bit vai junto | custom | 3.5 |
+| LOFF | COMP_TH | ✅ `dfb2b4c1aa1e` | ⚙️ 95/5 % | `lead_off_threshold_percent` + `_available` (8 pares; o valor é o lado positivo, 95 = 95/5 % … 70 = 70/30 %) | custom | 3.5 |
+| LOFF | ILEAD_OFF | ✅ `dfb2b4c1aa1e` | ⚙️ 6 nA | `lead_off_current_nanoamp` + `_available` (6, 24, 6000, 24000). 6 e 24 µA em DC passam do limite da IEC 60601-1: é a plataforma que não os oferece (§11), não o driver | custom | 3.5 |
+| LOFF | FLEAD_OFF | ✅ `dfb2b4c1aa1e` | ⚙️ DC | `lead_off_frequency` + `_available` (`dc`, `ac_7.8`, `ac_31.2`, `ac_fdr_div_4`; Hz do clock interno de 2,048 MHz). O significado do LOFF_STAT em AC segue sem confirmação (§3.1.2) | custom | 3.5 |
 | CHnSET | PD | ✅ | ✅ | já fechado (máscara de varredura) | padrão | — |
-| CHnSET | PGA | ✅ `c7617d7880f4` | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`, com `_available`), `-EBUSY` com o buffer ligado; o autoteste julga cada canal pelo seu ganho. Ganho igual para todos vira política da plataforma | padrão | 3.2 |
-| CHnSET | SRB2 | ✅ `b4bfb9b1fe4d` | ❌ | `in_voltageN_srb2` por canal (0/1, `ext_info`) | custom | 3.3 |
-| CHnSET | MUX | ✅ `6f7282c9aebb` | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, um `_available` por tipo; BIAS_MEAS e a entrada de teste valem para "algum canal". Os canais de temperatura e alimentação da §3.1.1 seguem em aberto (3.2) | custom | 3.1, 3.2 |
-| BIAS_SENSP | IN1P…IN8P | ✅ `76ab0eb81369` | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal (0/1, `ext_info`) | custom | 3.4 |
-| BIAS_SENSN | IN1N…IN8N | ✅ `76ab0eb81369` | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal (0/1, `ext_info`); o 0 em referencial vai para a tradução da plataforma | custom | 3.4 |
-| LOFF_SENSP | IN1P…IN8P | ✅ `a4ec768155ba` | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal (0/1, `ext_info`) | custom | 3.5 |
-| LOFF_SENSN | IN1N…IN8N | ✅ `a4ec768155ba` | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal (0/1, `ext_info`); a política do referencial fica na plataforma | custom | 3.5 |
-| LOFF_FLIP | canal 1…8 | ✅ `a4ec768155ba` | ❌ | `in_voltageN_lead_off_flip` por canal (0/1, `ext_info`) | custom | 3.5 |
-| LOFF_STATP | canal 1…8 | ✅ `e8beadc22afd` | ✅ | evento `fault`/`openwire` por canal **e** a palavra por amostra `in_voltage8_lead_off` no buffer (§3.1.2); `lead_off_status` para leitura avulsa | padrão + custom | 3.5 |
-| LOFF_STATN | canal 1…8 | ✅ `e8beadc22afd` | ✅ | idem | padrão + custom | 3.5 |
-| GPIO | GPIOD[4:1] | ✅ `0956fdcc4e0b` | ❌ | **`gpiochip`** de 4 linhas, só com `gpio-controller` no DT (`4c43365dce94`); registrador volátil para a leitura; escritas a partir de uma cópia, nunca lendo e devolvendo, porque a leitura dá o pino e não o nível escrito | padrão | 3.6 |
-| GPIO | GPIOC[4:1] | ✅ `0956fdcc4e0b` | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
-| MISC1 | SRB1 | ✅ `b4bfb9b1fe4d` | ✅ `montage` | `montage` (`bipolar`/`referential`), o nome e os valores da board, mas **só a chave**: a regra do referencial (BIAS_SENSN = 0, um bit no LOFF_SENSN) sai do kernel e vai para a tradução da plataforma (§3.3). O nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
+| CHnSET | PGA | ✅ `5a24ed3524d4` | ⚠️ idem, + limite no canal de temperatura | `hardwaregain` **por canal** (`info_mask_separate`, com `_available`), `-EBUSY` com o buffer ligado; o autoteste julga cada canal pelo seu ganho. Ganho igual para todos vira política da plataforma | padrão | 3.2 |
+| CHnSET | SRB2 | ✅ `ba69650c53c1` | ❌ | `in_voltageN_srb2` por canal (0/1, `ext_info`) | custom | 3.3 |
+| CHnSET | MUX | ✅ `82023bca3376` | ⚠️ idem, + `temperature_channel` | `in_voltageN_input_mux` por canal, um `_available` por tipo; BIAS_MEAS e a entrada de teste valem para "algum canal". Os canais de temperatura e alimentação da §3.1.1 seguem em aberto (3.2) | custom | 3.1, 3.2 |
+| BIAS_SENSP | IN1P…IN8P | ✅ `12af163d6fd6` | ⚠️ tudo ou nada, menos o sensor | `in_voltageN_bias_sense_p` por canal (0/1, `ext_info`) | custom | 3.4 |
+| BIAS_SENSN | IN1N…IN8N | ✅ `12af163d6fd6` | ⚠️ idem, 0 em referencial (política) | `in_voltageN_bias_sense_n` por canal (0/1, `ext_info`); o 0 em referencial vai para a tradução da plataforma | custom | 3.4 |
+| LOFF_SENSP | IN1P…IN8P | ✅ `9f171d081e99` | ⚙️ todos com `lead_off=dc` | `in_voltageN_lead_off_sense_p` por canal (0/1, `ext_info`) | custom | 3.5 |
+| LOFF_SENSN | IN1N…IN8N | ✅ `9f171d081e99` | ⚙️ todos, ou um bit em referencial (política) | `in_voltageN_lead_off_sense_n` por canal (0/1, `ext_info`); a política do referencial fica na plataforma | custom | 3.5 |
+| LOFF_FLIP | canal 1…8 | ✅ `9f171d081e99` | ❌ | `in_voltageN_lead_off_flip` por canal (0/1, `ext_info`) | custom | 3.5 |
+| LOFF_STATP | canal 1…8 | ✅ `5d785b807628` | ✅ | evento `fault`/`openwire` por canal **e** a palavra por amostra `in_voltage8_lead_off` no buffer (§3.1.2); `lead_off_status` para leitura avulsa | padrão + custom | 3.5 |
+| LOFF_STATN | canal 1…8 | ✅ `5d785b807628` | ✅ | idem | padrão + custom | 3.5 |
+| GPIO | GPIOD[4:1] | ✅ `ccb981c3c4ee` | ❌ | **`gpiochip`** de 4 linhas, só com `gpio-controller` no DT (`203d62366756`); registrador volátil para a leitura; escritas a partir de uma cópia, nunca lendo e devolvendo, porque a leitura dá o pino e não o nível escrito | padrão | 3.6 |
+| GPIO | GPIOC[4:1] | ✅ `ccb981c3c4ee` | ❌ | direção do mesmo `gpiochip` | padrão | 3.6 |
+| MISC1 | SRB1 | ✅ `ba69650c53c1` | ✅ `montage` | `montage` (`bipolar`/`referential`), o nome e os valores da board, mas **só a chave**: a regra do referencial (BIAS_SENSN = 0, um bit no LOFF_SENSN) sai do kernel e vai para a tradução da plataforma (§3.3). O nome vai para a pergunta de ABI da §5.4 | custom | 3.3 |
 | CONFIG4 | SINGLE_SHOT | ⚙️ | ⚙️ | segue o modo, single-shot na leitura direta e contínuo no buffer | — (fica ⚙️) | — |
-| CONFIG4 | PD_LOFF_COMP | ⚙️ derivado (`a4ec768155ba`) | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
+| CONFIG4 | PD_LOFF_COMP | ⚙️ derivado (`9f171d081e99`) | ⚙️ segue `lead_off` | ligado se e só se algum bit de `LOFF_SENS*` ou o `BIAS_LOFF_SENS` estiver ligado | — (fica ⚙️) | 3.5 |
 
 **Saldo do alvo**: 5 campos ficam ⚙️ **por desenho**, porque cada um é função da fiação ou de outro
 mecanismo e não tem valor que o usuário possa querer escolher à parte: Device ID, PD_REFBUF,
@@ -442,9 +442,9 @@ funcionalidades" e não "todos os registradores":
 | Funcionalidade | Hoje (as duas) | Alvo | Tipo | Sub |
 |---|---|---|---|---|
 | Pino START | só o comando `START` | `start-gpios` opcional no DT. Com ele, o início é pelo pino, que é o que sincroniza vários chips. **Adiado, junto com o uso de vários chips** (2026-10-17): o desenho e o custo estão na §5.7 | DT | 3.8 |
-| Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend*; no *resume* os registradores são tratados como perdidos (o datasheet não diz o que guardam): 150 ms, *reset*, SDATAC, `regcache_sync`, CONFIG3 e GPIO à mão. **Feito** (`d7ba633bc6f4`, `7606957f8b73`) | DT + PM | 3.7 |
+| Pino PWDN | não descrito | `powerdown-gpios` opcional, usado no *suspend*; no *resume* os registradores são tratados como perdidos (o datasheet não diz o que guardam): 150 ms, *reset*, SDATAC, `regcache_sync`, CONFIG3 e GPIO à mão. **Feito** (`772cc96d7eb5`, `a8401a6abde8`) | DT + PM | 3.7 |
 | Pino CLKSEL | inferido da presença de `clocks` | idem, documentado no *binding* | DT | 3.8 |
-| `STANDBY` / `WAKEUP` | definidos, sem uso | *system sleep* (`DEFINE_SIMPLE_DEV_PM_OPS`, `pm_sleep_ptr`): STANDBY/WAKEUP sem pino PWDN. **Feito** (`7606957f8b73`). **Sem runtime PM, por decisão**: suspender ocioso derrubaria o bias no paciente e o clock que este chip dá a outros, e cada leitura avulsa pagaria 150 ms de partida da referência | padrão (PM) | 3.7 |
+| `STANDBY` / `WAKEUP` | definidos, sem uso | *system sleep* (`DEFINE_SIMPLE_DEV_PM_OPS`, `pm_sleep_ptr`): STANDBY/WAKEUP sem pino PWDN. **Feito** (`a8401a6abde8`). **Sem runtime PM, por decisão**: suspender ocioso derrubaria o bias no paciente e o clock que este chip dá a outros, e cada leitura avulsa pagaria 150 ms de partida da referência | padrão (PM) | 3.7 |
 | `RDATAC` | sem uso (`RDATA` por amostra) | **decisão de projeto**: mede-se a 16 kSPS se `RDATA` por amostra fecha a janela; se fechar, fica registrado como não necessário, com o número. **Pelo USB a pergunta não se aplica**: o MCP2210 é HID *full-speed*, uma troca leva pelo menos um quadro de 1 ms e um `RDATA` leva duas, o teto medido é 250 amostras/s (`BRINGUP_AFE.md` §6); e o `RDATAC` não ajuda, porque cada quadro ainda tem de ser lido entre dois DRDY, 62,5 µs a 16 kSPS. **Mede-se pelo SPI nativo, no *header* do STM32MP257, no fim da série** | — | 3.7 |
 | `RREG`/`WREG` de vários registradores | sempre um | não muda a cobertura; fica como está | — | — |
 | Bits GPIO[7:4] da *status word* em cada amostra | descartados | opcional: canal de varredura. Não é exigido para cobrir GPIOD, que o `gpiochip` já cobre | custom | 3.6 |
@@ -452,7 +452,7 @@ funcionalidades" e não "todos os registradores":
 #### 3.1.1 Temperatura e alimentação: um campo de MUX, dois mecanismos de leitura
 
 MUX=100 (sensor de temperatura) e MUX=011 (MVDD) são valores do MUX de um canal físico, e não canais
-próprios. Desde 2026-10-17 (`a938edce4d13`, só host) os dois mecanismos existem na feature:
+próprios. Desde 2026-10-17 (`634edcb6da46`, só host) os dois mecanismos existem na feature:
 
 - **leitura direta**: `in_temp_raw`/`_scale`/`_offset` e `in_voltage_mvdd_analog`/`mvdd_digital`
   `_raw`/`_scale`. O driver toma um canal emprestado (o 1 para a temperatura e o MVDD analógico, o
@@ -490,9 +490,9 @@ declarado.** É o `IIO_EV_TYPE_FAULT` com `IIO_EV_DIR_FAULT_OPENWIRE`, que **exi
 em 2025 com a detecção de fio aberto do AD4111 no `ad7173` (commit de núcleo `34934d79965518548d33c0513a9572ae936d8c29`,
 "iio: introduce the FAULT event type", revisado no IIO), e o `ad7173` é o modelo seguido - um evento por
 canal, uma habilitação para todos. No 6.6 da placa ele não existia; a feature carrega o **backport** desse
-commit (`ce492eee75fd`, autor original, marca `[ Upstream commit ... ]`), que **sai da série na submissão**. A
+commit (`0af609ee8b4a`, autor original, marca `[ Upstream commit ... ]`), que **sai da série na submissão**. A
 segunda diferença entre as bases é a assinatura: o `write_event_config` recebe `int state` no 6.6 e
-`bool` na mainline atual, e o driver muda isso ao ir para lá. Implementado em `e8beadc22afd`: o evento sai na
+`bool` na mainline atual, e o driver muda isso ao ir para lá. Implementado em `5d785b807628`: o evento sai na
 transição para "fora", uma vez, com o carimbo da amostra; só com o buffer ligado, porque o estado vem
 na *status word*; e de novo se o eletrodo ainda estiver fora quando o buffer religa. O canal
 `in_voltageN_lead_off`, de tipo `IIO_VOLTAGE` sem ser tensão, foi trazido igual ao da board, para a
@@ -504,7 +504,7 @@ são o método DC (SBAS499 §9.3.2.4.3.1: "if dc lead-off is not used, the lead-
 powered down"). Em AC (§9.3.2.4.3.2), a excitação é **dentro** da banda (7,8 Hz e 31,2 Hz, e não fora,
 como esta seção dizia), passa pelo canal, e o eletrodo se mede nos dados, pela amplitude na
 frequência da excitação; o `LOFF_STAT*` não é o status dele. Por isso o `lead_off_status` responde
-`ac` nesse modo (`a4ec768155ba`), e o evento, quando existir, é suprimido em AC. Medir a amplitude é trabalho
+`ac` nesse modo (`9f171d081e99`), e o evento, quando existir, é suprimido em AC. Medir a amplitude é trabalho
 de quem lê os dados, não do driver.
 
 ### 3.2 Defeitos achados pela auditoria
@@ -514,13 +514,13 @@ cobertura nova sobre um mecanismo quebrado só multiplica o defeito.
 
 | # | Onde | Defeito | Conserto | Sub |
 |---|---|---|---|---|
-| D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1). **Corrigido na feature** (`af57c59032b2`) | 3.1 |
-| D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3). **Corrigido na feature** (`a4ec768155ba`): *sense* por canal e comparadores só com algo monitorado | 3.0 |
-| D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso. **Corrigido na feature** (`a77a4a5b85c7`: CONFIG3 volátil) | 3.5 |
+| D1 | as duas | `input_mux = bias_measurement` grava MUX=010 sem `BIAS_MEAS`. O datasheet diz que 010 é "usado em conjunto com o bit `BIAS_MEAS`" (`Register_Map_ADS1299.md`, CHnSET), então a opção está exposta e não mede o BIAS | `BIAS_MEAS` segue o MUX (§3.1). **Corrigido na feature** (`4dd3dce3a356`) | 3.1 |
+| D2 | PR | o `LOFF_SENSP/N` nunca é gravado, então `lead_off_status` responde sempre `disabled`: o código existe e nunca é alcançado. E os comparadores são ligados no *probe* sem nenhum canal sensível | trazer o lead-off da board (§3.3). **Corrigido na feature** (`9f171d081e99`): *sense* por canal e comparadores só com algo monitorado | 3.0 |
+| D3 | as duas | o `BIAS_STAT` é bit de status num registrador em cache, então uma leitura devolveria sempre "conectado". A board só o mascara na releitura | leitura sem cache desse bit, ou CONFIG3 volátil com a releitura ciente disso. **Corrigido na feature** (`f2f3f43e0886`: CONFIG3 volátil) | 3.5 |
 | D4 | board | o comentário acima de `ADS1299_REG_LOFF_SENSP` ainda abre com "this driver never writes either of them", e o próprio bloco diz depois que `ads1299_set_lead_off()` os grava | reescrever o comentário | 3.0 |
 | D5 | as duas | `ads1299_read_one()` limpa o `PD` do canal lido e nunca o devolve, então uma leitura direta deixa um canal ligado contra a máscara de varredura | restaurar o `PD` ao fim da leitura | 3.0 |
 | D6 | PR | `input_mux = temperature`/`supply` devolve a escala de tensão, sem conversão | §3.1.1 | 3.2 |
-| D7 | *binding* | `interrupts` é obrigatório, mas o driver tem um caminho sem IRQ. É coerente **só se** o caminho sem DRDY ficar fora do `v1` (§5.2), e o *binding* e o driver têm de dizer a mesma coisa na série | decidir junto com a §5.2. **Corrigido na feature** (`eb2b8851cf01`): `interrupts` opcional, e a descrição diz que sem ele as conversões são lidas pelo timer do host | 3.0 |
+| D7 | *binding* | `interrupts` é obrigatório, mas o driver tem um caminho sem IRQ. É coerente **só se** o caminho sem DRDY ficar fora do `v1` (§5.2), e o *binding* e o driver têm de dizer a mesma coisa na série | decidir junto com a §5.2. **Corrigido na feature** (`38ce25afa944`): `interrupts` opcional, e a descrição diz que sem ele as conversões são lidas pelo timer do host | 3.0 |
 
 ### 3.3 As duas branches, e para onde vai o trabalho
 
@@ -534,7 +534,7 @@ cobertura que a série precisa:
 | `763fa13369bd` | lead-off DC, `lead_off_monitored`, palavra por amostra | sobe **remodelado** pela §3.1: parâmetros de LOFF, *sense* por canal, sem a política de referencial |
 | `983c5cf63b54` | `montage` (SRB1), com a derivação do bias trocada junto | sobe **remodelado**: o SRB1 como atributo, sem mexer no `BIAS_SENS*` |
 | `efba42f1ee08` | canal de temperatura e todos os CHnSET derivados de um estado | sobe **o estado único**. O `temperature_channel` vira MUX por canal (§3.1.1) |
-| `2d1f7fb7efc1` | autoteste pelo nível DC | já está na feature como `e577cc080449` |
+| `2d1f7fb7efc1` | autoteste pelo nível DC | já está na feature como `b4f14f0d5102` |
 | `801dbf215569`, `c2291fd29166`, `643c0d757892` | *pump* de SPI em tempo real; driver da placa do MCP2210 | ficam na board: são da placa, não da cobertura |
 
 Depois disso a board é **rebaseada sobre a feature** e fica só com o que é da placa. É a regra da
@@ -575,13 +575,13 @@ mora no sysfs. Um `ti,lead-off-current-na` no *binding* é pedido de reescrita g
 
 | Propriedade | Por quê | Sub |
 |---|---|---|
-| `gpio-controller`, `#gpio-cells = <2>`, `gpio-line-names` | o `gpiochip` dos GPIO1–4; sem ele os pinos são tomados como ligados ao DGND e nenhum chip é registrado. **Feito** (`4c43365dce94`) | 3.6 |
-| `#clock-cells = <0>` | o CI como provedor de clock (CLK_EN) quando roda do oscilador interno. **Feito** (`8ea9357f8490`), com `clock-output-names` | 3.8 |
+| `gpio-controller`, `#gpio-cells = <2>`, `gpio-line-names` | o `gpiochip` dos GPIO1–4; sem ele os pinos são tomados como ligados ao DGND e nenhum chip é registrado. **Feito** (`203d62366756`) | 3.6 |
+| `#clock-cells = <0>` | o CI como provedor de clock (CLK_EN) quando roda do oscilador interno. **Feito** (`7d30d2922961`), com `clock-output-names` | 3.8 |
 | `start-gpios` | o pino START, que sincroniza chips em cascata | 3.8 |
-| `powerdown-gpios` | o pino PWDN. **Feito** (`d7ba633bc6f4`) | 3.7 |
-| `dvdd-supply` | a alimentação digital, que hoje não é descrita. **Feito** (`d7ba633bc6f4`) | 3.7 |
-| `biasref-supply` | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora. Uma alimentação e não um booleano `ti,`: tensão num pino é o que o `-supply` descreve, como o `vref-supply` (padrão antes de customizado). **Feito** (`d536f740caa0`) | 3.4 |
-| `#daisy-chained-devices` (a propriedade comum, `common-properties.txt`) | quantos chips dividem o CS, o que muda o quadro inteiro. O *binding* descreve o hardware mesmo que o driver não o suporte: com N > 1 exige `clocks` e proíbe `#clock-cells`, e o driver do `v1` recusa a cadeia. **Feito** (`8ea9357f8490`) | 3.8 |
+| `powerdown-gpios` | o pino PWDN. **Feito** (`772cc96d7eb5`) | 3.7 |
+| `dvdd-supply` | a alimentação digital, que hoje não é descrita. **Feito** (`772cc96d7eb5`) | 3.7 |
+| `biasref-supply` | `BIASREF_INT = 0`: a placa alimenta o BIASREF de fora. Uma alimentação e não um booleano `ti,`: tensão num pino é o que o `-supply` descreve, como o `vref-supply` (padrão antes de customizado). **Feito** (`4926987eccaf`) | 3.4 |
+| `#daisy-chained-devices` (a propriedade comum, `common-properties.txt`) | quantos chips dividem o CS, o que muda o quadro inteiro. O *binding* descreve o hardware mesmo que o driver não o suporte: com N > 1 exige `clocks` e proíbe `#clock-cells`, e o driver do `v1` recusa a cadeia. **Feito** (`7d30d2922961`) | 3.8 |
 
 Cada propriedade nova entra com o exemplo correspondente, e a injeção de falha da Fase 2 é refeita
 para ela.
@@ -707,7 +707,7 @@ distância.
 
 **Decisão de 2026-10-17: a daisy-chain sai do `v1`.** O *binding* a descreve, o driver a recusa com
 `-EOPNOTSUPP` no *probe*, e o código que a suporta está pronto e guardado na branch
-`wip/ads1299-daisy-chain` do `linux-med` (`7c9cb5cf7277`), com os testes de host dele no histórico
+`wip/ads1299-daisy-chain` do `linux-med` (`2c64c6986377`), com os testes de host dele no histórico
 de `tests/ads1299/feature.c` (`dcb13d3`). Ela vira uma série separada, depois do `v1`.
 
 Ela chegou a ser implementada (2026-10-17) e foi o que mostrou por que não deve ir agora:
@@ -724,12 +724,12 @@ Ela chegou a ser implementada (2026-10-17) e foi o que mostrou por que não deve
   todos os chips, e a cadeia passaria a ser caso especial em toda a ABI por canal.
 - **Não há como testá-la em silício aqui**: a bancada tem um chip.
 
-**O que ficou no `v1`**, porque vale para um chip só (`b18610b58e84`): `DAISY_EN = 0` gravado em vez
+**O que ficou no `v1`**, porque vale para um chip só (`59e2f61a7e66`): `DAISY_EN = 0` gravado em vez
 de assumido do reset; a *status word* conferida (1100b) em toda leitura do autoteste; e a recusa de
 `#daisy-chained-devices` > 1. Sem a recusa, uma cadeia de dois chips passaria no *probe* como um
 chip de 8 canais e perderia os outros 8 sem aviso - medido no *fake*, é a injeção de falha do teste.
 
-**Quem tiver a placa em cadeia**, até a série separada: aplica o `7c9cb5cf7277` como patch fora da
+**Quem tiver a placa em cadeia**, até a série separada: aplica o `2c64c6986377` como patch fora da
 árvore (nesta plataforma, a camada adjunta é o lugar dele); ou religa em modo *cascaded*, um CS por
 chip, que o `v1` atende - cada chip é um dispositivo IIO, e um deles fornece o clock aos outros pelo
 `#clock-cells`. O que o *cascaded* ainda não tem é o início simultâneo: sem `start-gpios`, o START vai
@@ -744,7 +744,7 @@ um nó e um dispositivo IIO; é o modo que o datasheet chama de adequado à maio
 (§10.1.4.1).
 
 - **No driver, quase tudo já existe**: a configuração inteira por canal, o clock de um chip para os
-  outros (`#clock-cells` e `clocks`, `c2d0410e18b2`), e o bias ligado em um só, como a Figura 39 pede
+  outros (`#clock-cells` e `clocks`, `67ad7ebdd6e3`), e o bias ligado em um só, como a Figura 39 pede
   para vários chips. Falta o **início simultâneo**: um nó é dono do pino START (`start-gpios`), os
   outros declaram que o START deles vem de fora (propriedade nova, a nomear) e não mandam o comando;
   o pino sobe quando o buffer do dono liga, e os outros ligam antes. Algumas dezenas de linhas e uma
@@ -956,7 +956,7 @@ que converte o atraso do módulo em progresso, em vez de espera.
 | A cobertura total multiplica a ABI customizada (de 8 atributos para ~20, metade por canal) e reabre a tensão do §3 | a ABI é a pergunta explícita da carta (§5.4); cada atributo customizado tem a alternativa padrão considerada escrita; uma série por capacidade (Fase 3) deixa o mantenedor recusar uma sem levar as outras |
 | A ABI nova quebra a plataforma (§3.3) | a troca na tradução por ligação entra no mesmo `SRCREV`; `tests/derive` e `make check` são o portão |
 | Funções sem silício nesta bancada (SRB2, GPIO, saída de clock, lead-off AC, PM) | registradas como "testado no host", nunca como "validado"; a daisy-chain já saiu do `v1` (§5.6) |
-| `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | **resolvido em 2026-10-17**: existe na mainline; a feature carrega o *backport* `ce492eee75fd`, que sai na submissão, e o `write_event_config` passa de `int` para `bool` lá |
+| `IIO_EV_DIR_FAULT_OPENWIRE` não existe no 6.6 da placa (§3.1.2) | **resolvido em 2026-10-17**: existe na mainline; a feature carrega o *backport* `0af609ee8b4a`, que sai na submissão, e o `write_event_config` passa de `int` para `bool` lá |
 | O driver expõe ILEAD_OFF de 6 e 24 µA, e em DC isso passa do limite de corrente auxiliar de paciente da IEC 60601-1 para corrente contínua (10 µA, citado de memória; conferir na norma) | política fora do kernel (§3): o driver é genérico e expõe o campo inteiro, e a tradução por ligação (`do_derive_device_options`) não oferece esses valores em DC - hoje não oferece nenhum valor de corrente, e uma linha nova de opções tem de respeitar isso |
 | Constantes fora das tabelas transcritas (temperatura, MVDD) | **temperatura resolvida em 2026-10-17**: Equação 3 do SBAS499 conferida. O MVDD analógico depende de o texto estar certo sobre "AVDD + AVSS"; o driver reporta a tensão medida e não infere a alimentação (§3.1.1), e a placa responde |
 
@@ -997,17 +997,17 @@ citável, é evidência de qualidade externa que nenhuma seção de resultados c
 | 2 | `dt_binding_check` limpo; injeção de falha vista | — | — |
 | 3 | auditoria campo a campo (§3.1): PR 6 ✅ / 5 ⚙️ / 7 ⚠️ / 15 ❌; board 9 / 10 / 5 / 9, de 33 | **medido**, 7 defeitos (§3.2) | 2026-10-16 |
 | 3.0 | base trazida da board; D2, D4, D5, D7 corrigidos | — | — |
-| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`c797fbc8324b`), entrada de teste nunca sem o gerador (`6bd29f6b17ee`), `BIAS_MEAS` seguindo o MUX e D1 (`af57c59032b2`), MUX por canal (`6f7282c9aebb`). **Só host** | **feito**, 2026-10-17 |
-| 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | ganho por canal (`c7617d7880f4`); `in_temp` e os dois MVDD por leitura direta, constantes da Equação 3 conferidas, injeção do plano (offset trocado) vista (`a938edce4d13`). **Só host**. O sinal de AVSS no MVDD analógico fica para a bancada | **feito**, 2026-10-17 |
-| 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`b4bfb9b1fe4d`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
-| 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`d536f740caa0`, `af57c59032b2`); derivação por canal e `bias_drive` = `off`/`on` (`76ab0eb81369`); a política do referencial saiu do kernel com o `montage` (`b4bfb9b1fe4d`). **Só host** | **feito**, 2026-10-17 |
-| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`a77a4a5b85c7`); limiar, corrente e frequência (`79996faac302`); *sense* e FLIP por canal, comparadores derivados, D2 (`a4ec768155ba`); evento `fault`/`openwire` com o *backport* `ce492eee75fd`, e a palavra por amostra (`e8beadc22afd`). **Só host** | **feito**, 2026-10-17 |
-| 3.6 | `gpiochip` (só host) | binding (`4c43365dce94`) e `gpiochip` (`0956fdcc4e0b`); injeção do plano (GPIOC invertido) vista, e a de leitura-modificação-escrita, a primeira versão do próprio driver. **Só host** | **feito**, 2026-10-17 |
-| 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | binding (`d7ba633bc6f4`) e *suspend*/*resume*, PWDN, DVDD (`7606957f8b73`); injeção do plano (sem `regcache_sync`) vista, e um defeito achado pelo teste (níveis do GPIO perdidos no *resume*). Sem runtime PM, por decisão. **Só host**. A medida do `RDATAC` a 16 kSPS e o que o PWDN guarda ficam para a bancada | **feito no host**, 2026-10-17 |
-| 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`8ea9357f8490`, `c2d0410e18b2`, `b18610b58e84`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
-| 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`ebd0d855efc5`; só host) | **feito** | 2026-10-17 |
-| 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | **feito no host**: 28 ✅ / 5 ⚙️, e `sysfs-bus-iio-adc-ti-ads1299` com todos os atributos próprios, o evento `fault_openwire` incluído (`1e902b7494d8`). O `KernelVersion` está em 6.6, a versão desta árvore, e passa à da mainline-alvo na submissão | 2026-10-17 |
-| 3 | comentários enxugados de 490 para 290 linhas (16% → 10%, arquivo 3070 → 2870), um só `MODULE_AUTHOR` (`993b702cf8f9`). Código objeto idêntico ao anterior; `feature.c` 590/0; `W=1` arm64 limpo; `checkpatch --strict` 0/0/0 no patch. A versão comentada, para estudo, fica fora dos repositórios (`~/Documents/TCC/drivers-comentados`, de `eb2b8851cf01`) | **feito** | 2026-10-17 |
+| 3.1 | MUX por canal, `BIAS_MEAS`, `test_signal` DC; D1 corrigido | `test_signal` DC (`71d6dc5a8b90`), entrada de teste nunca sem o gerador (`facb5b681f47`), `BIAS_MEAS` seguindo o MUX e D1 (`4dd3dce3a356`), MUX por canal (`82023bca3376`). **Só host** | **feito**, 2026-10-17 |
+| 3.2 | ganho por canal; `in_temp_*` e alimentação; constantes `[SBAS499?]` conferidas | ganho por canal (`5a24ed3524d4`); `in_temp` e os dois MVDD por leitura direta, constantes da Equação 3 conferidas, injeção do plano (offset trocado) vista (`634edcb6da46`). **Só host**. O sinal de AVSS no MVDD analógico fica para a bancada | **feito**, 2026-10-17 |
+| 3.3 | SRB1, SRB2 (SRB2: só host) | `montage` e `in_voltageN_srb2` (`ba69650c53c1`); injeção do plano (máscara do SRB2 no bit 4) vista. **Só host** | **feito**, 2026-10-17 |
+| 3.4 | bias por campo; BIASREF externo no DT | `biasref-supply` (`4926987eccaf`, `4dd3dce3a356`); derivação por canal e `bias_drive` = `off`/`on` (`12af163d6fd6`); a política do referencial saiu do kernel com o `montage` (`ba69650c53c1`). **Só host** | **feito**, 2026-10-17 |
+| 3.5 | lead-off completo; tipo de evento decidido na mainline; D3 corrigido (AC: só host) | eletrodo de bias e D3 (`f2f3f43e0886`); limiar, corrente e frequência (`dfb2b4c1aa1e`); *sense* e FLIP por canal, comparadores derivados, D2 (`9f171d081e99`); evento `fault`/`openwire` com o *backport* `0af609ee8b4a`, e a palavra por amostra (`5d785b807628`). **Só host** | **feito**, 2026-10-17 |
+| 3.6 | `gpiochip` (só host) | binding (`203d62366756`) e `gpiochip` (`ccb981c3c4ee`); injeção do plano (GPIOC invertido) vista, e a de leitura-modificação-escrita, a primeira versão do próprio driver. **Só host** | **feito**, 2026-10-17 |
+| 3.7 | PM, PWDN, DVDD; `RDATAC` medido a 16 kSPS | binding (`772cc96d7eb5`) e *suspend*/*resume*, PWDN, DVDD (`a8401a6abde8`); injeção do plano (sem `regcache_sync`) vista, e um defeito achado pelo teste (níveis do GPIO perdidos no *resume*). Sem runtime PM, por decisão. **Só host**. A medida do `RDATAC` a 16 kSPS e o que o PWDN guarda ficam para a bancada | **feito no host**, 2026-10-17 |
+| 3.8 | CLK_EN como provedor de clock; `DAISY_EN` gravado; *status word* no autoteste; cadeia recusada (`7d30d2922961`, `67ad7ebdd6e3`, `59e2f61a7e66`); `dt_binding_check` com duas violações injetadas e vistas; `W=1` arm64 e `checkpatch` 0/0/0 por commit; `tests/ads1299/feature.c`. **Só host**. `start-gpios` em aberto | **feito**, menos START | 2026-10-17 |
+| 3 | `-EBUSY` em todo atributo que muda o significado de uma amostra, a taxa por último (`36a8b793332b`; só host) | **feito** | 2026-10-17 |
+| 3 | nenhuma linha da §3.1 em ❌ ou ⚠️; ABI documentada = atributos customizados | **feito no host**: 28 ✅ / 5 ⚙️, e `sysfs-bus-iio-adc-ti-ads1299` com todos os atributos próprios, o evento `fault_openwire` incluído (`fb4756e751c1`). O `KernelVersion` está em 6.6, a versão desta árvore, e passa à da mainline-alvo na submissão | 2026-10-17 |
+| 3 | comentários enxugados de 490 para 290 linhas (16% → 10%, arquivo 3070 → 2870), um só `MODULE_AUTHOR` (`bec53c0e6365`). Código objeto idêntico ao anterior; `feature.c` 590/0; `W=1` arm64 limpo; `checkpatch --strict` 0/0/0 no patch. A versão comentada, para estudo, fica fora dos repositórios (`~/Documents/TCC/drivers-comentados`, de `eb2b8851cf01`) | **feito** | 2026-10-17 |
 | 4 | primeira vez no silício: o driver da série (`993b702cf8f9`) com a ponte da board, pelo USB de um PC (kernel 6.8, o evento `openwire` fora só da cópia do host). Autoteste passa (ruído em curto até 28 códigos); gerador a −0,33 % de VREF/2400 nos 7 ganhos, MUX e ganho independentes por canal, `in_temp` 30,8 °C, `mvdd_analog` 2,498 V, lead-off só nas entradas monitoradas, as 4 recusas `-EINVAL` e as 8 `-EBUSY`, 10 s de buffer com entregues + perdidas = devidas. **42/0** no `afe-feature-abi.py`, depois de uma primeira rodada 38/4 cujos 4 eram do próprio roteiro (sinal do nível DC, tolerância abaixo da resolução do sysfs). NVRAM da ponte idêntica antes e depois nos campos documentados (`BRINGUP_AFE.md` §6.12) | **visto no silício, pelo USB** | 2026-10-17 |
 | 4 | varredura de registradores do driver da série: nove padrões aplicados pela ABI, o silício lido pelo oráculo (hidraw, `RREG` próprio) com os drivers descarregados, contra a transcrição bit a bit, e o cache do driver contra o silício. 25/0, cobrindo todo código de taxa, ganho, MUX, gerador e dos três campos de LOFF; injeções (gravação pelas costas do driver, posição de campo errada) vistas, 5/0. O `cache_bypass` do debugfs não serve no PC: lockdown do Secure Boot (`BRINGUP_AFE.md` §6.13) | **feito, pelo USB** | 2026-10-17 |
 | 4 | autoteste passa com tolerância medida: 100 rodadas replicadas (pior ruído 39 códigos = 0,87 µV; erro do gerador −0,06 % a −0,42 %, 0,34 ponto entre canais, ±0,004 % em cada), 30 recargas (24 a 38 códigos), 10 *probes* a frio (47 a 182, e o 244 da §6.13). **As duas constantes ficam**: 20 % por estar 47× acima desta peça e 2,5× abaixo do defeito; 10 µV por estar só 1,8× acima do pior a frio. Achado: o esperado não depende de VREF, então o autoteste não vê um VREF errado (`BRINGUP_AFE.md` §6.14) | **medido, pelo USB**; dispersão entre peças falta (datasheet) | 2026-10-17 |

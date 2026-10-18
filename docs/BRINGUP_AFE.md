@@ -2192,7 +2192,7 @@ placa imprimiu.
 | Citado nos registros | Hoje na árvore | Branch |
 |---|---|---|
 | `d658fd3ac242` | `c904353be66a` | `feature/ads1299-mcp2210-driver` |
-| `d982b35277a8` | `e577cc080449` | `feature/ads1299-mcp2210-driver` |
+| `d982b35277a8` | `b4f14f0d5102` (§12.8) | `feature/ads1299-mcp2210-driver` |
 | `a15bc5ed68c3` | `6d8312902fca` | `feature/ads1299-mcp2210-driver` |
 | `e9f382da54ba` | `2d1f7fb7efc1` | `board/medplatform-afe` |
 | `b8dbcb083402` | `c2291fd29166` | `board/medplatform-afe` |
@@ -2202,6 +2202,65 @@ placa imprimiu.
 build feito depois desta data produz módulos para `-g983c5cf63b54`. Um bundle novo instalaria um
 rootfs cujos módulos o kernel em execução recusa. A próxima entrega para a placa é por
 **regravação do cartão**, não por `rauc install`.
+
+### 12.8 Os hashes do `linux-med` mudaram em 2026-10-17
+
+Um *fixup* corrigiu o comentário de `ADS1299_SELF_TEST_TOLERANCE_PCT` (o motivo dos ±20 % era "a
+tolerância da referência", que se cancela; o certo é o gerador e o ganho, §6.16) e entrou no commit
+que introduziu o autoteste pelo nível DC, e não no que adiciona o driver: lá o autoteste ainda media
+o pico a pico, e o comentário descreveria um código que o patch não contém. O rebase reescreveu
+esse commit e os 28 seguintes da `feature/ads1299-mcp2210-driver`. A árvore final é idêntica à de
+antes mais o comentário (`git diff` só nele). A branch antiga ficou em
+`backup/pre-fixup-tolerance`.
+
+Pela mesma regra da §12.7, os **registros de medida continuam com o hash antigo**: as §6.12 a §6.15
+rodaram no `993b702cf8f9`. O `implementation_plan_ads1299_upstream.md`, que descreve a série como
+ela está, passou para os novos, menos as duas menções que são história (o silício na Fase 4 e a
+cópia comentada, tirada de `eb2b8851cf01`).
+
+| Antes | Hoje na árvore | Commit |
+|---|---|---|
+| `e577cc080449` | `b4f14f0d5102` | iio: adc: ti-ads1299: self test the generator's DC level, not its swing |
+| `6d8312902fca` | `ae0ccb637aa9` | HID: mcp2210: do not rewrite unchanged transfer settings |
+| `00748bb06e01` | `ed6924e6995d` | iio: adc: ti-ads1299: name every register field, and shorten the comments |
+| `8ea9357f8490` | `7d30d2922961` | dt-bindings: iio: adc: ti,ads1299: add the clock output and daisy chain |
+| `c2d0410e18b2` | `67ad7ebdd6e3` | iio: adc: ti-ads1299: the CLK pin as a clock output |
+| `b18610b58e84` | `59e2f61a7e66` | iio: adc: ti-ads1299: write DAISY_EN, check the status word, refuse a chain |
+| `c797fbc8324b` | `71d6dc5a8b90` | iio: adc: ti-ads1299: the test generator at DC, and not while running |
+| `6bd29f6b17ee` | `facb5b681f47` | iio: adc: ti-ads1299: never leave a channel on an undriven test input |
+| `d536f740caa0` | `4926987eccaf` | dt-bindings: iio: adc: ti,ads1299: describe an external BIASREF |
+| `af57c59032b2` | `4dd3dce3a356` | iio: adc: ti-ads1299: BIAS_MEAS follows the MUX, BIASREF from the board |
+| `a77a4a5b85c7` | `f2f3f43e0886` | iio: adc: ti-ads1299: lead-off of the bias electrode |
+| `79996faac302` | `dfb2b4c1aa1e` | iio: adc: ti-ads1299: lead-off threshold, current and frequency |
+| `a4ec768155ba` | `9f171d081e99` | iio: adc: ti-ads1299: lead-off sensing and flip per channel |
+| `ce492eee75fd` | `0af609ee8b4a` | iio: introduce the FAULT event type |
+| `e8beadc22afd` | `5d785b807628` | iio: adc: ti-ads1299: lead-off status as an event and in every sample |
+| `b4bfb9b1fe4d` | `ba69650c53c1` | iio: adc: ti-ads1299: SRB2 per channel, SRB1 as the montage |
+| `76ab0eb81369` | `12af163d6fd6` | iio: adc: ti-ads1299: the bias derivation per channel, bias_drive on or off |
+| `c7617d7880f4` | `5a24ed3524d4` | iio: adc: ti-ads1299: gain per channel |
+| `6f7282c9aebb` | `82023bca3376` | iio: adc: ti-ads1299: input MUX per channel |
+| `4c43365dce94` | `203d62366756` | dt-bindings: iio: adc: ti,ads1299: describe GPIO1 to GPIO4 |
+| `0956fdcc4e0b` | `ccb981c3c4ee` | iio: adc: ti-ads1299: GPIO1 to GPIO4 as a gpiochip |
+| `ebe16a1f3d81` | `c3c8d0d4b1aa` | iio: adc: ti-ads1299: align every macro to one column |
+| `a938edce4d13` | `634edcb6da46` | iio: adc: ti-ads1299: read the temperature sensor and the supplies |
+| `d7ba633bc6f4` | `772cc96d7eb5` | dt-bindings: iio: adc: ti,ads1299: describe PWDN and the digital supply |
+| `7606957f8b73` | `a8401a6abde8` | iio: adc: ti-ads1299: system suspend, PWDN and the digital supply |
+| `ebd0d855efc5` | `36a8b793332b` | iio: adc: ti-ads1299: no rate change while the buffer runs |
+| `1e902b7494d8` | `fb4756e751c1` | Documentation: ABI: testing: document the ti-ads1299 attributes |
+| `eb2b8851cf01` | `38ce25afa944` | dt-bindings: iio: adc: ti,ads1299: DRDY is optional |
+| `993b702cf8f9` | `bec53c0e6365` | iio: adc: ti-ads1299: trim comments, one MODULE_AUTHOR |
+
+A `wip/ads1299-daisy-chain` partia do `6d8312902fca` antigo e carregava o `e577cc080449` sem o
+comentário. Foi movida para o `ae0ccb637aa9` sem conflito (diferença para antes: só o comentário;
+a antiga em `backup/pre-fixup-tolerance-daisy`):
+
+| Antes | Hoje na árvore | Commit |
+|---|---|---|
+| `8b98c69f5c7c` | `2062933441d5` | iio: adc: ti-ads1299: name every register field, and shorten the comments |
+| `8c3d602693f1` | `e932b7c3027c` | dt-bindings: iio: adc: ti,ads1299: add the clock output and daisy chain |
+| `ceaa3f09e909` | `768199c52e78` | iio: adc: ti-ads1299: the CLK pin as a clock output |
+| `7c9cb5cf7277` | `2c64c6986377` | iio: adc: ti-ads1299: support a daisy chain of converters |
+| `2b6dfea340b4` | `9476a84c6a8d` | iio: adc: ti-ads1299: the test generator at DC, and not while running |
 
 ## 13. As regras que este trabalho acrescenta
 
