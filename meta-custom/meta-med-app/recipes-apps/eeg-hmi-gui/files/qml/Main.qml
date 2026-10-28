@@ -19,6 +19,12 @@ Window {
     // cannot be brought back with a mouse, and a closed operator display is a
     // device with no display. Seen on the board 2026-10-11 - both windows
     // minimised, and nothing left but the compositor's background.
+    //
+    // Where the display does have that answer, the toolbar carries a Close of
+    // its own instead of a frame (see the Close chip). A frame was tried on a
+    // desktop PC, 2026-10-28: the client-side decoration found none of its
+    // button icons in this image, and drawing it cost a full-window copy per
+    // frame on a software renderer.
     flags: Qt.Window | Qt.FramelessWindowHint
     visibility: Window.Maximized
     width: 1280
@@ -588,6 +594,15 @@ Window {
                 checked: eeg.frozen
                 accent: theme.warn
                 onClicked: eeg.frozen = !eeg.frozen
+            }
+            Chip {
+                // Present only where the display can bring this window back
+                // (MED_WINDOW_CLOSABLE in compositor.env). It closes the
+                // display and nothing else: acquisition, and a recording in
+                // progress, belong to the service and carry on.
+                visible: windowClosable
+                text: "Close"
+                onClicked: Qt.quit()
             }
         }
     }

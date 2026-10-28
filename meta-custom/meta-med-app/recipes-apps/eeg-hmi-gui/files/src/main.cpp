@@ -44,7 +44,15 @@ int main(int argc, char* argv[]) {
     PrescriptionTable prescriptions(qEnvironmentVariable(
         "MED_EEG_CHOICES", QStringLiteral("/etc/medplatform/eeg-choices.conf")));
 
+    // Whether this display gives the operator a way back once the window is
+    // closed - a menu or a dock that reopens it. The compositor says so
+    // (compositor.env, read by the unit); this program does not guess it from a
+    // desktop name. Absent, there is no Close button, which is the device's
+    // case: a closed operator display is a device with no display.
+    const bool closable = qEnvironmentVariable("MED_WINDOW_CLOSABLE") == QStringLiteral("1");
+
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("windowClosable"), closable);
     engine.rootContext()->setContextProperty(QStringLiteral("eeg"), &client);
     engine.rootContext()->setContextProperty(QStringLiteral("review"), &review);
     engine.rootContext()->setContextProperty(QStringLiteral("sessions"), &sessions);
