@@ -1,0 +1,39 @@
+#!/bin/sh
+# medplatform-station: unpack the container and give the desktop its group.
+set -e
+
+root=/var/lib/machines/med-eeg
+archive=/usr/lib/medplatform-station/rootfs.tar.zst
+
+case "$1" in
+configure)
+    getent group medplatform >/dev/null || groupadd --system medplatform
+
+    # The container tree is a build artefact and is replaced whole, the way a
+    # slot is on a device. The records under /var/lib/medplatform/data are not
+    # part of it and are never touched here.
+    rm -rf "$root.new"
+    install -d -m 0700 "$root.new"
+    tar --zstd -xpf "$archive" -C "$root.new" --numeric-owner
+    rm -rf "$root"
+    mv "$root.new" "$root"
+    : > "$root/etc/machine-id"
+
+    install -d -m 0750 /var/lib/medplatform /var/lib/medplatform/data
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    # Whoever ran "sudo apt install" is almost always the person who will use
+    # the station; anyone else is added by hand.
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1; then
+        usermod -aG medplatform "$SUDO_USER"
+        echo "medplatform-station: $SUDO_USER added to the medplatform group."
+    else
+        echo "medplatform-station: add each user with: sudo usermod -aG medplatform <user>"
+    fi
+    link=$(sed -n 's/^acquisition.link *= *//p' "$root/etc/medplatform/eeg.conf")
+    echo "medplatform-station: installed, front-end link: $link. Open \"MedPlatform EEG\" from the menu."
+    ;;
+esac
+
+exit 0

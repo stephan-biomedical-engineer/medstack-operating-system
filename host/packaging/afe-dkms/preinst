@@ -1,0 +1,40 @@
+#!/bin/sh
+# medplatform-afe-dkms: refuse to share a module name with anything else.
+#
+# Two providers of ti-ads1299 or hid-mcp2210 under /lib/modules/*/updates
+# leave depmod to pick one, silently, and removing either package deletes the
+# file the other one installed. Both have happened on the bench PC this was
+# written on (a second DKMS tree of the converter's driver, and a bridge
+# module copied in by hand), so they are named here rather than guessed at.
+set -e
+
+case "$1" in
+install|upgrade)
+    problems=""
+
+    for other in $(dkms status 2>/dev/null | sed -n 's|^\([^/]*\)/.*|\1|p' | sort -u); do
+        [ "$other" = medplatform-afe ] && continue
+        for module in ti-ads1299 hid-mcp2210; do
+            # <name>/<version>/<kernel>/<arch>/module/ holds what a tree built
+            if ls /var/lib/dkms/"$other"/*/*/*/module/"$module".ko* >/dev/null 2>&1; then
+                problems="$problems
+  DKMS tree '$other' also builds $module:  sudo dkms remove $other --all"
+            fi
+        done
+    done
+
+    for file in /lib/modules/*/updates/ti-ads1299.ko* /lib/modules/*/updates/hid-mcp2210.ko*; do
+        [ -e "$file" ] || continue
+        problems="$problems
+  copied in by hand: $file:  sudo rm $file"
+    done
+
+    if [ -n "$problems" ]; then
+        echo "medplatform-afe-dkms: another copy of the front-end drivers is installed:$problems" >&2
+        echo "Remove it (then: sudo depmod -a) and install this package again." >&2
+        exit 1
+    fi
+    ;;
+esac
+
+exit 0

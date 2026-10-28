@@ -1,0 +1,7 @@
+[Unit]
+Description=MedPlatform compositor is accepting clients (the host's display)
+# The compositor is the host's own, outside this container. The host hands its
+# socket in at start (host/medplatform-station@.service); with no socket there
+# is no display, and a client ordered on this target is not started rather
+# than restarted forever against a path that will not appear.
+AssertPathExists=/run/host-display/wayland-0

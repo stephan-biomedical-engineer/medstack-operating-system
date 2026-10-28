@@ -1,0 +1,59 @@
+header:
+  version: 14
+  includes:
+    - kas/kas-base.yml
+
+# The EEG profile as a container on a desktop Linux host (an Ubuntu PC): the
+# host provides the kernel, the front-end's modules and the display, and this
+# image provides everything above them. See host/README.md for the host side.
+#
+# qemux86-64 and not a machine of its own: nothing here boots a kernel, and
+# that machine's tune (core2-64) runs on any x86-64 PC. The real gain is that
+# every package is already in sstate from the QEMU profile, so this image
+# costs a rootfs and one small recipe, not a second world build.
+machine: qemux86-64
+
+repos:
+  # The front-end's adjunct layer, for the link's translation and nothing else:
+  # its kernel half is installed on the host, not in this image
+  # (med-image-eeg-host.bb removes MED_AFE_INSTALL).
+  meta-med-afe-ads1299:
+    path: "meta-custom/meta-med-afe-ads1299"
+  # Needed to parse: med-image-eeg is the image this one requires, and nothing
+  # of it is installed - MED_GUI_COMPOSITOR below picks the host's display.
+  meta-med-desktop:
+    path: "meta-custom/meta-med-desktop"
+  meta-med-host:
+    path: "meta-custom/meta-med-host"
+
+target:
+  - med-image-eeg-host
+
+local_conf_header:
+  eeg-host: |
+    # The converter behind the USB bridge, on the PC's own USB port - the one
+    # link a PC can carry. "make host LINK=simulated" builds the same container
+    # with the synthetic source, for a machine with no front-end attached.
+    # "?=" so the parameter wins (see env: in kas-base.yml).
+    MED_EEG_LINK ?= "usb"
+    MED_EEG_DRIVER = "${@'simulated' if d.getVar('MED_EEG_LINK') == 'simulated' else 'iio'}"
+    # Not /dev/med-afe-eeg0: a container's /dev is its own, nothing in it runs
+    # udev, and systemd-nspawn binds device nodes but cannot create a symlink
+    # among them. The host's launcher resolves the converter at start and
+    # links its node here, in the directory it hands in as /run/med-afe; the
+    # framework's realpath() then lands on /dev/iio:deviceN exactly as on a
+    # device (host/medplatform-station-run).
+    MED_EEG_ADDRESS = "${@'' if d.getVar('MED_EEG_LINK') == 'simulated' else '/run/med-afe/node'}"
+
+    # /data is a directory of the host. Requiring a LUKS volume behind it would
+    # stop the service on every PC; not requiring it is recorded in each
+    # session's metadata, so a record made here cannot pass for a device's.
+    MED_EEG_REQUIRE_ENCRYPTION = "false"
+
+    # The display is the host's (meta-med-host/recipes-graphics/med-host-display).
+    MED_GUI_COMPOSITOR = "med-host-display"
+
+    # Parse-time answers the platform asks of every profile. Neither reaches
+    # the image: the update path and the record volume are the host's.
+    MED_BOOTLOADER = "noop"
+    MED_DATA_KEY_SOURCE ?= "development"

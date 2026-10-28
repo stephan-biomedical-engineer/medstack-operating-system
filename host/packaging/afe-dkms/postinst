@@ -1,0 +1,30 @@
+#!/bin/sh
+# medplatform-afe-dkms: build, sign and install the drivers, then load them.
+set -e
+
+NAME=medplatform-afe
+VERSION=@VERSION@
+
+case "$1" in
+configure)
+    # Ubuntu's own DKMS path: builds for the running kernel (and the newest
+    # installed), signs with /var/lib/shim-signed/mok, and when this machine
+    # has no MOK yet, creates one and asks for a one-time password to enroll
+    # it at the next boot.
+    /usr/lib/dkms/common.postinst "$NAME" "$VERSION" "" "" "$2"
+
+    udevadm control --reload >/dev/null 2>&1 || true
+
+    # Loading now binds a bridge that is already plugged in (a specific HID id
+    # takes the device from hid-generic). With Secure Boot and a key enrolled
+    # only at the next boot, this is refused until then - which is expected.
+    if modprobe ti_ads1299 2>/dev/null && modprobe hid_mcp2210 2>/dev/null; then
+        echo "medplatform-afe-dkms: drivers loaded."
+    else
+        echo "medplatform-afe-dkms: drivers installed but not loaded yet. If you were just asked"
+        echo "  for a MOK password, reboot and choose 'Enroll MOK' on the blue screen."
+    fi
+    ;;
+esac
+
+exit 0

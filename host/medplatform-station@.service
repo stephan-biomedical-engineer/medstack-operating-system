@@ -1,0 +1,16 @@
+[Unit]
+Description=MedPlatform EEG station (container) for %i
+Documentation=file:///usr/share/doc/medplatform-station/README.md
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/lib/medplatform-station/medplatform-station-run %i
+# SIGTERM to systemd-nspawn is what asks the container's init for an orderly
+# halt (nspawn forwards it as SIGRTMIN+3), so a recording session is closed by
+# the service on the way down. Sending SIGRTMIN+3 to nspawn itself instead does
+# nothing: on 2026-10-28 that waited out the timeout and SIGKILLed acquisition.
+KillMode=mixed
+TimeoutStopSec=30s
+Delegate=yes
+Slice=machine.slice

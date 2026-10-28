@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=MedPlatform EEG
+GenericName=EEG station
+Comment=The EEG operator display, with the platform's acquisition service in a container
+Exec=/usr/bin/medplatform-station open
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Science;MedicalSoftware;
+Actions=stop;
+
+[Desktop Action stop]
+Name=Stop the station
+Exec=/usr/bin/medplatform-station stop

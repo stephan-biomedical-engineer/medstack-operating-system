@@ -1,0 +1,14 @@
+PACKAGE_NAME="medplatform-afe"
+PACKAGE_VERSION="@VERSION@"
+
+# The analogue front-end's two drivers, from linux-med @REF@: the converter's
+# IIO driver and the USB bridge that carries it. Built for each installed
+# kernel, signed with this machine's MOK by DKMS itself.
+BUILT_MODULE_NAME[0]="ti-ads1299"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+BUILT_MODULE_NAME[1]="hid-mcp2210"
+DEST_MODULE_LOCATION[1]="/updates/dkms"
+
+MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"
+CLEAN="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build clean"
+AUTOINSTALL="yes"

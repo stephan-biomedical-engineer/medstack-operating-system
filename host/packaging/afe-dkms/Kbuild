@@ -1,0 +1,4 @@
+# In-tree these come from Kconfig; out of tree the symbol has to be said
+# (same as scripts/oot-modules/Makefile).
+obj-m += hid-mcp2210.o ti-ads1299.o
+ccflags-y += -DCONFIG_HID_MCP2210_MODULE=1 -DCONFIG_TI_ADS1299_MODULE=1

@@ -1,0 +1,12 @@
+#!/bin/sh
+# medplatform-station: a running station is halted (a recording is closed on the
+# way down) before its tree is replaced or removed.
+set -e
+
+case "$1" in
+remove|upgrade|deconfigure)
+    systemctl stop 'medplatform-station@*.service' >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0

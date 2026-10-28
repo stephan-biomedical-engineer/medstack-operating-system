@@ -1,0 +1,17 @@
+#!/bin/sh
+# medplatform-station: the container tree goes with the package; the records
+# stay, even on purge - they are patient data, not configuration.
+set -e
+
+case "$1" in
+remove|purge)
+    rm -rf /var/lib/machines/med-eeg /var/lib/machines/med-eeg.new
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    ;;
+esac
+
+if [ "$1" = purge ]; then
+    echo "medplatform-station: records kept in /var/lib/medplatform/data"
+fi
+
+exit 0

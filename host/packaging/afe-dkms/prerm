@@ -1,0 +1,15 @@
+#!/bin/sh
+# medplatform-afe-dkms: unload and remove the built modules from every kernel.
+set -e
+
+NAME=medplatform-afe
+VERSION=@VERSION@
+
+case "$1" in
+remove|upgrade|deconfigure)
+    modprobe -r hid_mcp2210 ti_ads1299 >/dev/null 2>&1 || true
+    dkms remove -m "$NAME" -v "$VERSION" --all >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0

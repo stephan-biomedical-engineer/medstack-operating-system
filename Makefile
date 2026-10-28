@@ -49,6 +49,7 @@ export KAS_IMAGE_VERSION ?= $(KAS_VERSION)
 QEMU_CFG  := kas/project-eeg-qemu.yml
 STM32_CFG := kas/project-eeg-stm32mp2.yml
 TOMO_CFG  := kas/project-tomograph.yml
+HOST_CFG  := kas/project-eeg-host.yml
 IMAGE     := med-image-eeg
 
 # Where the LUKS key for /data comes from, as a parameter on the build targets
@@ -123,8 +124,20 @@ endif
 # comment above describes. And refused without KERNEL=med for the links Linux
 # drives, whose drivers exist only in ./linux-med: ST's kernel has neither, so
 # the image would build and the converter would never appear.
+#
+# The host container (make host) takes LINK too, with its own two answers: a PC
+# carries the converter only behind the USB bridge, or no converter at all.
+# Its drivers come from the host's kernel, so KERNEL=med does not apply.
 LINK ?=
 ifneq ($(LINK),)
+ifneq ($(filter host,$(MAKECMDGOALS)),)
+  ifeq ($(filter $(LINK),usb simulated),)
+    $(error LINK on the host container must be "usb" or "simulated", not "$(LINK)")
+  endif
+  ifneq ($(filter-out host,$(MAKECMDGOALS)),)
+    $(error LINK=$(LINK) with host applies to make host alone)
+  endif
+else
   ifeq ($(filter $(LINK),amp usb spi),)
     $(error LINK must be "amp", "usb" or "spi", not "$(LINK)")
   endif
@@ -141,6 +154,7 @@ ifneq ($(LINK),)
       $(error LINK=$(LINK) needs KERNEL=med: its drivers live only in ./linux-med)
     endif
   endif
+endif
 endif
 
 # The size of the record volume, in MiB: "make stm32 DATA=12288" for a 16 GB
@@ -227,7 +241,7 @@ else
   KERNEL_ARGS += $(if $(MED_BENCH),--runtime-args "-e MED_BENCH=$(MED_BENCH)",)
 endif
 
-.PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 \
+.PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 host host-deb \
         tomograph bundle verify-bundle bundle-disk shell runqemu \
         runqemu-tomograph check test image-info clean purge
 
@@ -248,6 +262,9 @@ help:
 	@echo "              add KERNEL=med to build the kernel fork in ./linux-med at its HEAD"
 	@echo "              add LINK=usb (or spi) for the front-end's other links; default amp"
 	@echo "              add DATA=<MiB> for the record volume; default 512 (DATA=12288 on a 16 GB card)"
+	@echo "  host        build the EEG container for an Ubuntu PC (host/README.md)"
+	@echo "              add LINK=simulated for a PC with no front-end; default usb"
+	@echo "  host-deb    package it, and the front-end drivers (DKMS), as two .deb"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY=/KERNEL=/LINK= as the image"
@@ -320,6 +337,18 @@ service: $(TOOL)
 
 qemu: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(QEMU_CFG)
+
+# The EEG profile as a container for a desktop Linux host (host/README.md):
+# med-image-eeg minus boot, A/B and LUKS, as a rootfs archive. LINK=usb (the
+# default) or LINK=simulated.
+host: $(TOOL)
+	$(LINK_ENV) $(KAS) $(LINK_ARGS) build $(HOST_CFG)
+
+# The two packages another PC installs instead of building anything
+# (host/README.md): the container from the last "make host", and the
+# front-end's drivers as DKMS source. No kas, no root; output in build/debs/.
+host-deb:
+	host/packaging/build-debs.sh
 
 stm32: $(TOOL)
 	$(KEY_ENV) $(LINK_ENV) $(DATA_ENV) $(KAS) $(KEY_ARGS) $(LINK_ARGS) $(DATA_ARGS) $(KERNEL_ARGS) build $(STM32_CFG)

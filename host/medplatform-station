@@ -1,0 +1,45 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# What the menu icon runs, as the desktop user. Starts this user's EEG
+# container if it is not running, then asks it for the operator display the
+# way the station's own icon does - a file left in the directory the
+# container's eeg-hmi-request.path watches, delivered by a root unit
+# (medplatform-station-open@.service says why not by this script). Closing the display leaves
+# acquisition (and any open recording) running; "stop" ends the container.
+set -eu
+
+unit="medplatform-station@$(id -un).service"
+open_unit="medplatform-station-open@$(id -un).service"
+
+# Started from a menu, stderr goes nowhere; say it on the desktop too.
+fail() {
+    echo "medplatform-station: $1" >&2
+    command -v notify-send >/dev/null 2>&1 && notify-send -i dialog-error "MedPlatform EEG" "$1" || true
+    exit 1
+}
+
+case "${1:-open}" in
+    stop)
+        exec systemctl stop "$unit"
+        ;;
+    open)
+        ;;
+    *)
+        echo "usage: $0 [open|stop]" >&2
+        exit 2
+        ;;
+esac
+
+[ -n "${WAYLAND_DISPLAY:-}" ] || fail "this desktop session is not Wayland; log in with a Wayland session (Ubuntu on Wayland)."
+id -nG "$(id -un)" | tr ' ' '\n' | grep -qx medplatform \
+    || fail "$(id -un) is not in the medplatform group: sudo usermod -aG medplatform $(id -un), and open the station again."
+
+if ! systemctl is-active --quiet "$unit"; then
+    systemctl start "$unit" || fail "the station did not start: journalctl -u $unit"
+fi
+
+# The request is a file left in the directory the container's
+# eeg-hmi-request.path watches. Left there even before that path unit is up:
+# it acts on a directory that is already non-empty when it starts.
+systemctl start "$open_unit" || fail "the station did not open the display: journalctl -u $unit"

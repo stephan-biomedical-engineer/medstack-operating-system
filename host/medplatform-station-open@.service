@@ -1,0 +1,16 @@
+[Unit]
+Description=MedPlatform EEG station: open the operator display for %i
+# Delivers the menu icon's request into the running container, as root.
+#
+# The user used to drop the file there directly, into a directory the station
+# created for them. That worked once per boot: the directory is bound into the
+# container as /run/eeg-hmi-request, the container's systemd-tmpfiles applies
+# the HMI's rule to it ("d ... 0730 root wayland"), and that chown lands on the
+# host's directory too - root and a gid that on the host is another group
+# (gamemode, 2026-10-28). Root writes there whatever tmpfiles decided.
+Requisite=medplatform-station@%i.service
+After=medplatform-station@%i.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/touch /run/medplatform-station/hmi-request/open
