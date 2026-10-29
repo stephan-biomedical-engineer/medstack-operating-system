@@ -564,17 +564,6 @@ Window {
             anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter }
             spacing: 16
 
-            Text {
-                // What the last request came to, as the service worded it. A
-                // refusal stays red until the next request.
-                anchors.verticalCenter: parent.verticalCenter
-                visible: sessions.message.length > 0
-                text: sessions.message
-                color: sessions.refused ? theme.bad : theme.dim
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                width: Math.min(implicitWidth, 420)
-            }
             Chip {
                 // Present only where a reviewer is installed. It asks; the
                 // reviewer is started by the init system, as its own user.
@@ -597,13 +586,72 @@ Window {
             }
             Chip {
                 // Present only where the display can bring this window back
-                // (MED_WINDOW_CLOSABLE in compositor.env). It closes the
-                // display and nothing else: acquisition, and a recording in
-                // progress, belong to the service and carry on.
+                // (MED_WINDOW_CLOSABLE in compositor.env). It quits the
+                // display; what else a Close means is the display's to say
+                // (on a desktop PC it ends the station). Not while recording:
+                // a session is ended by Stop, never as a side effect.
                 visible: windowClosable
+                enabled: !sessions.recording
                 text: "Close"
                 onClicked: Qt.quit()
             }
+        }
+    }
+
+    // --- what the last request came to ------------------------------------------
+    // As the service worded it, above the toolbar rather than in it: in the
+    // toolbar a long message slid over the display filters (seen 2026-10-28,
+    // "front-end settings applied" across them). A success is said for four
+    // seconds and goes; a refusal stays, red, until it is clicked away or the
+    // next request answers - nobody should miss being told no.
+    property string noticeText: ""
+    property bool noticeRefused: false
+    Connections {
+        target: sessions
+        function onChanged() {
+            if (sessions.message.length === 0
+                    || (sessions.message === root.noticeText
+                        && sessions.refused === root.noticeRefused)) {
+                return
+            }
+            root.noticeText = sessions.message
+            root.noticeRefused = sessions.refused
+            notice.visible = true
+            if (sessions.refused) {
+                noticeTimer.stop()
+            } else {
+                noticeTimer.restart()
+            }
+        }
+    }
+    Timer {
+        id: noticeTimer
+        interval: 4000
+        onTriggered: notice.visible = false
+    }
+    Rectangle {
+        id: notice
+        visible: false
+        z: 10
+        anchors { right: parent.right; rightMargin: 20; bottom: toolbar.top; bottomMargin: 10 }
+        width: Math.min(noticeLabel.implicitWidth + 28, root.width - 40)
+        height: noticeLabel.implicitHeight + 16
+        radius: 6
+        color: root.noticeRefused ? "#3a1014" : theme.panel
+        border.width: 1
+        border.color: root.noticeRefused ? theme.bad : theme.line
+        Text {
+            id: noticeLabel
+            anchors { left: parent.left; right: parent.right; leftMargin: 14; rightMargin: 14;
+                      verticalCenter: parent.verticalCenter }
+            text: root.noticeText
+            color: root.noticeRefused ? "#ffb3b8" : theme.text
+            font.pixelSize: 13
+            elide: Text.ElideRight
+        }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: notice.visible = false
         }
     }
 
