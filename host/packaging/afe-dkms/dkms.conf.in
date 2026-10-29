@@ -1,14 +1,22 @@
 PACKAGE_NAME="medplatform-afe"
 PACKAGE_VERSION="@VERSION@"
 
-# The analogue front-end's two drivers, from linux-med @REF@: the converter's
-# IIO driver and the USB bridge that carries it. Built for each installed
-# kernel, signed with this machine's MOK by DKMS itself.
+# The analogue front-end's two drivers, built for each installed kernel and
+# signed with this machine's MOK by DKMS itself:
+#
+#   ti-ads1299   the converter's IIO driver, from the out-of-tree repository of
+#                its upstream submission (@ADS1299@), built by that
+#                repository's own Makefile - which adapts the source to what
+#                the kernel lacks (compat/configure.sh) before compiling it
+#   hid-mcp2210  the USB-to-SPI bridge carrying it, from linux-med
+#                (@MCP2210@), the version made for this front-end board
 BUILT_MODULE_NAME[0]="ti-ads1299"
+BUILT_MODULE_LOCATION[0]="ads1299/build/drivers/iio/adc"
 DEST_MODULE_LOCATION[0]="/updates/dkms"
 BUILT_MODULE_NAME[1]="hid-mcp2210"
+BUILT_MODULE_LOCATION[1]="mcp2210"
 DEST_MODULE_LOCATION[1]="/updates/dkms"
 
-MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"
-CLEAN="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build clean"
+MAKE[0]="make -C ads1299 KDIR=${kernel_source_dir} && make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/mcp2210 modules"
+CLEAN="make -C ads1299 clean; make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/mcp2210 clean"
 AUTOINSTALL="yes"

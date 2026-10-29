@@ -1,0 +1,21 @@
+[Unit]
+Description=MedPlatform EEG station: requests from the desktop
+# The desktop user asks for their station by leaving a file here
+# (medplatform-station, the menu icon) and never asks systemd itself, so no
+# password is involved. medplatform-station-request decides, as root, from
+# who owns the file. polkit was the first answer and did not hold: on Ubuntu
+# 24.04 a rule scoped to the unit's name authorised pkcheck and never the real
+# "systemctl start" from the menu, which asked for a password twice per click
+# (2026-10-28).
+
+[Path]
+DirectoryNotEmpty=/run/medplatform-requests
+# Anyone may leave a request (write and search, not list), and the sticky bit
+# keeps one user from removing another's. Who may be served is not decided by
+# this mode but by the handler: the owner of the file, in the medplatform
+# group.
+MakeDirectory=yes
+DirectoryMode=1733
+
+[Install]
+WantedBy=multi-user.target

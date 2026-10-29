@@ -1,4 +1,5 @@
-# In-tree these come from Kconfig; out of tree the symbol has to be said
-# (same as scripts/oot-modules/Makefile).
-obj-m += hid-mcp2210.o ti-ads1299.o
-ccflags-y += -DCONFIG_HID_MCP2210_MODULE=1 -DCONFIG_TI_ADS1299_MODULE=1
+# The bridge alone: the converter's driver is built by its own repository's
+# Makefile (ads1299/). In-tree the symbol comes from Kconfig; out of tree it
+# has to be said (same as scripts/oot-modules/Makefile).
+obj-m += hid-mcp2210.o
+ccflags-y += -DCONFIG_HID_MCP2210_MODULE=1

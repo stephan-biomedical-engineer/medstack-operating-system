@@ -4,8 +4,8 @@
 # Boots the EEG container (med-image-eeg-host) on this host, for the desktop
 # user named $1. Run as root by medplatform-station@<user>.service; never by
 # hand, so that the container has exactly one owner and one lifetime. Named by
-# user and not by uid so that one polkit rule, keyed on the requester's name,
-# can say "your own instance and no other" on every machine.
+# user and not by uid so that the request handler, which knows a requester by
+# name (the owner of the request file), starts their own instance and no other.
 #
 # Everything the host lends the container is decided here, at start:
 #   - the user's Wayland socket, as the container's compositor
@@ -39,7 +39,8 @@ rm -rf "$state"
 install -d -m 0755 "$state"
 install -d -m 0755 "$state/afe"
 # Root's, not the user's: the container's tmpfiles takes this directory over
-# anyway, and the request is delivered by medplatform-station-open@.service.
+# anyway (its gid is another group on the host), and the request is left
+# here by medplatform-station-request, as root.
 install -d -m 0755 "$state/hmi-request"
 
 args=(
@@ -55,28 +56,36 @@ args=(
     --bind="$state/afe:/run/med-afe"
 )
 
-# The converter, if one is attached. The host's udev (the adjunct layer's rule,
-# installed by install.sh) names it /dev/med-afe-eeg0 and links its sysfs
-# directory at /run/med-afe/eeg0; the container gets the node at its own path
-# and two links where the service looks for them. Resolved now, so a converter
-# plugged in after the station started is not seen until it is restarted.
+# The converter. The host's udev (the adjunct layer's rule) names it
+# /dev/med-afe-eeg0 and links its sysfs directory at /run/med-afe/eeg0; the
+# container gets the node at its own path and two links where the service looks
+# for them, in the directory it sees as /run/med-afe. Attached here when it is
+# already plugged in, and by medplatform-station-afe when it is plugged in
+# while the station runs (71-medplatform-station.rules) - the service retries
+# every few seconds and finds it either way.
 #
 # The service writes the converter's settings into that sysfs directory, and
 # nspawn mounts /sys read-only. Binding the one directory rw does NOT work:
 # nspawn mounts its read-only sysfs over the same path afterwards, and the last
 # mount wins (seen 2026-10-28 in /proc/self/mountinfo: our rw bind, then a ro
 # sysfs on top, and "Read-only file system" with no sandbox at all). So the
-# container's /sys is left writable, and the narrowing is the service's own
-# sandbox, exactly as on a device: ProtectKernelTunables makes /sys read-only
-# for it and ReadWritePaths reopens /run/med-afe/eeg0 alone.
+# container's /sys is left writable whenever its link reaches a converter -
+# decided by the container's own sealed configuration, not by whether one is
+# plugged in now, so that one plugged in later can be configured - and the
+# narrowing is the service's own sandbox, exactly as on a device:
+# ProtectKernelTunables makes /sys read-only for it and ReadWritePaths reopens
+# /run/med-afe/eeg0 alone.
+link=$(sed -n 's/^acquisition.link *= *//p' "$root/etc/medplatform/eeg.conf")
+if [ "$link" != simulated ]; then
+    export SYSTEMD_NSPAWN_API_VFS_WRITABLE=yes
+fi
 if node=$(readlink -e /dev/med-afe-eeg0) && sys=$(readlink -e /run/med-afe/eeg0); then
     ln -sfn "$node" "$state/afe/node"
     ln -sfn "$sys" "$state/afe/eeg0"
     args+=(--bind="$(esc "$node")")
-    export SYSTEMD_NSPAWN_API_VFS_WRITABLE=yes
     echo "front-end: $node ($sys)"
 else
-    echo "front-end: none attached (a usb container will not acquire; a simulated one does not need it)"
+    echo "front-end: none attached yet (link: $link)"
 fi
 
 exec systemd-nspawn "${args[@]}"

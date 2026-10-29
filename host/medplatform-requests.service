@@ -1,0 +1,6 @@
+[Unit]
+Description=MedPlatform EEG station: answer the desktop's requests
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/medplatform-station/medplatform-station-request

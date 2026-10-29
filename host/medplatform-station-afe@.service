@@ -1,0 +1,9 @@
+[Unit]
+Description=MedPlatform EEG station: front-end %i
+# Started by the host's udev when the converter appears or goes away
+# (71-medplatform-station.rules). Ordered after the adjunct layer's rule has
+# named it, which udev guarantees: SYSTEMD_WANTS acts once the event is done.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/medplatform-station/medplatform-station-afe %i

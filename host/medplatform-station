@@ -1,16 +1,17 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 #
-# What the menu icon runs, as the desktop user. Starts this user's EEG
-# container if it is not running, then asks it for the operator display the
-# way the station's own icon does - a file left in the directory the
-# container's eeg-hmi-request.path watches, delivered by a root unit
-# (medplatform-station-open@.service says why not by this script). Closing the display leaves
-# acquisition (and any open recording) running; "stop" ends the container.
+# What the menu icon runs, as the desktop user. Asks for this user's EEG
+# station by leaving a request where the host's medplatform-requests.path
+# watches, and never asks systemd directly - so there is no password prompt
+# (medplatform-requests.path says why). The request is answered as root by
+# medplatform-station-request: start the station if it is not running, then
+# open its operator display. Closing that display ends the station.
 set -eu
 
-unit="medplatform-station@$(id -un).service"
-open_unit="medplatform-station-open@$(id -un).service"
+user=$(id -un)
+requests=/run/medplatform-requests
+unit="medplatform-station@$user.service"
 
 # Started from a menu, stderr goes nowhere; say it on the desktop too.
 fail() {
@@ -20,26 +21,32 @@ fail() {
 }
 
 case "${1:-open}" in
-    stop)
-        exec systemctl stop "$unit"
-        ;;
-    open)
-        ;;
+    open|stop) verb=${1:-open} ;;
     *)
         echo "usage: $0 [open|stop]" >&2
         exit 2
         ;;
 esac
 
-[ -n "${WAYLAND_DISPLAY:-}" ] || fail "this desktop session is not Wayland; log in with a Wayland session (Ubuntu on Wayland)."
-id -nG "$(id -un)" | tr ' ' '\n' | grep -qx medplatform \
-    || fail "$(id -un) is not in the medplatform group: sudo usermod -aG medplatform $(id -un), and open the station again."
-
-if ! systemctl is-active --quiet "$unit"; then
-    systemctl start "$unit" || fail "the station did not start: journalctl -u $unit"
+if [ "$verb" = open ]; then
+    [ -n "${WAYLAND_DISPLAY:-}" ] || fail "this desktop session is not Wayland; log in with a Wayland session (Ubuntu on Wayland)."
 fi
+id -nG "$user" | tr ' ' '\n' | grep -qx medplatform \
+    || fail "$user is not in the medplatform group: sudo usermod -aG medplatform $user, and try again."
+[ -d "$requests" ] || fail "the station's request service is not running: sudo systemctl enable --now medplatform-requests.path"
 
-# The request is a file left in the directory the container's
-# eeg-hmi-request.path watches. Left there even before that path unit is up:
-# it acts on a directory that is already non-empty when it starts.
-systemctl start "$open_unit" || fail "the station did not open the display: journalctl -u $unit"
+request="$requests/$verb.$user"
+: > "$request" || fail "could not leave a request in $requests"
+
+# Answered when the file is gone. Starting the container is the slow part;
+# twenty seconds is generous for a boot with no hardware to probe.
+i=0
+while [ -e "$request" ]; do
+    i=$((i + 1))
+    [ "$i" -le 100 ] || fail "the station did not answer: journalctl -u medplatform-requests.service"
+    sleep 0.2
+done
+
+if [ "$verb" = open ] && ! systemctl is-active --quiet "$unit"; then
+    fail "the station did not start: journalctl -u $unit"
+fi

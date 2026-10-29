@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# Answers the desktop's requests, as root (medplatform-requests.path). A request
+# is an empty file named <verb>.<user> in /run/medplatform-requests:
+#
+#   open.<user>   start <user>'s station if it is not running, and open its
+#                 operator display
+#   stop.<user>   halt <user>'s station
+#
+# The name only says what is wanted; who is asking is the file's owner, which
+# a user cannot forge. A request is served only when the owner is the user it
+# names and is in the medplatform group (read from the group database, so a
+# user added a minute ago does not have to log in again). Anything else is
+# removed and logged.
+set -u
+
+dir=/run/medplatform-requests
+display_request=/run/medplatform-station/hmi-request/open
+
+find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null |
+while IFS= read -r -d '' path; do
+    name=${path##*/}
+    owner=$(stat -c %U -- "$path" 2>/dev/null || true)
+    regular=no
+    [ -f "$path" ] && [ ! -L "$path" ] && regular=yes
+    rm -f -- "$path"
+
+    verb=${name%%.*}
+    user=${name#*.}
+
+    if [ "$regular" != yes ] || [ -z "$owner" ] || [ "$owner" != "$user" ]; then
+        echo "ignored '$name': not a plain file left by $user (owner: ${owner:-?})"
+        continue
+    fi
+    if ! id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx medplatform; then
+        echo "refused '$name': $user is not in the medplatform group"
+        continue
+    fi
+
+    unit="medplatform-station@$user.service"
+    case "$verb" in
+    open)
+        if ! systemctl is-active --quiet "$unit"; then
+            systemctl start "$unit" || { echo "$unit did not start"; continue; }
+        fi
+        # The container's eeg-hmi-request.path acts on this even if it is not
+        # up yet: it starts on a directory that is already non-empty.
+        touch "$display_request"
+        echo "opened the display for $user"
+        ;;
+    stop)
+        systemctl stop "$unit"
+        echo "stopped the station for $user"
+        ;;
+    *)
+        echo "ignored '$name': unknown request"
+        ;;
+    esac
+done

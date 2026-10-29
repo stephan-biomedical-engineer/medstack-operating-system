@@ -8,7 +8,10 @@ path. Selected by MED_GUI_COMPOSITOR = \"med-host-display\"."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-SRC_URI = "file://med-compositor.target"
+SRC_URI = " \
+    file://med-compositor.target \
+    file://eeg-hmi-close-ends-station.conf \
+"
 
 inherit useradd allarch
 
@@ -34,9 +37,14 @@ do_install() {
         'WAYLAND_DISPLAY=/run/host-display/wayland-0' \
         'MED_WINDOW_CLOSABLE=1' \
         > ${D}${nonarch_libdir}/medplatform/compositor.env
+
+    # And what that Close means here: the end of the station, not of a window.
+    install -D -m 0644 ${WORKDIR}/eeg-hmi-close-ends-station.conf \
+        ${D}${systemd_system_unitdir}/eeg-hmi.service.d/close-ends-station.conf
 }
 
 FILES:${PN} = " \
     ${systemd_system_unitdir}/med-compositor.target \
+    ${systemd_system_unitdir}/eeg-hmi.service.d/close-ends-station.conf \
     ${nonarch_libdir}/medplatform/compositor.env \
 "

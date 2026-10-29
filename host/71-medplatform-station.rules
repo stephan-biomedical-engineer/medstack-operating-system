@@ -1,0 +1,7 @@
+# A converter plugged in or out while the EEG station runs: hand it to the
+# running container, or take it back (medplatform-station-afe). After
+# 70-med-afe-ads1299.rules, which names it.
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ACTION=="add", ATTR{name}=="ads1299-*", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="medplatform-station-afe@attach.service"
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ACTION=="remove", ENV{DEVNAME}=="/dev/iio:device*", \
+    RUN+="/bin/systemctl --no-block start medplatform-station-afe@detach.service"

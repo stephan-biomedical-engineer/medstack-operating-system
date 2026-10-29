@@ -1,0 +1,92 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# Lends a converter plugged in after the station started to the running
+# container, and takes it back when it is unplugged. Run as root by
+# medplatform-station-afe.service, which the host's udev starts
+# (71-medplatform-station.rules):
+#
+#   medplatform-station-afe attach   the converter appeared
+#   medplatform-station-afe detach   it went away
+#
+# What the station's start does for a converter already present
+# (medplatform-station-run), done to a running container: its device node bound
+# in with machinectl, and the two links the service looks for updated in the
+# directory the container sees as /run/med-afe. The acquisition service, which
+# retries while it has no front-end, finds it on its next attempt.
+set -u
+
+machine=med-eeg
+links=/run/medplatform-station/afe
+# Whether the converter was here at the last event, so that a removal can be
+# told to be the converter's: on removal udev no longer has its attributes.
+present=/run/medplatform-afe-present
+
+# The desktop's own "device added" / "device removed" sounds, played in the
+# session of each logged-in member of the medplatform group: a USB device that
+# is not a disk makes no sound on Ubuntu, and the operator plugging the
+# front-end in wants to hear that it was seen. The sound is the one the user's
+# desktop plays for a disk - their sound theme's (Yaru on Ubuntu), the generic
+# freedesktop one only as a fallback, which is much quieter - and none at all
+# if they turned the desktop's event sounds off. Best effort: no player, no
+# session or no sound file is no sound, never a failure.
+beep() {
+    local event=$1 user uid bus theme sound
+    command -v paplay >/dev/null || return 0
+    for user in $(getent group medplatform | cut -d: -f4 | tr ',' ' '); do
+        uid=$(id -u "$user" 2>/dev/null) || continue
+        [ -S "/run/user/$uid/pulse/native" ] || continue
+        bus="unix:path=/run/user/$uid/bus"
+        if [ "$(as_user "$user" "$uid" "$bus" gsettings get org.gnome.desktop.sound event-sounds)" = false ]; then
+            continue
+        fi
+        theme=$(as_user "$user" "$uid" "$bus" gsettings get org.gnome.desktop.sound theme-name | tr -d "'")
+        sound=/usr/share/sounds/${theme:-freedesktop}/stereo/$event.oga
+        [ -r "$sound" ] || sound=/usr/share/sounds/freedesktop/stereo/$event.oga
+        [ -r "$sound" ] || continue
+        as_user "$user" "$uid" "$bus" paplay "$sound" >/dev/null 2>&1 &
+    done
+    wait
+}
+
+as_user() {
+    local user=$1 uid=$2 bus=$3
+    shift 3
+    timeout 5 runuser -u "$user" -- \
+        env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="$bus" "$@" 2>/dev/null
+}
+
+case "${1:-}" in
+attach)
+    node=$(readlink -e /dev/med-afe-eeg0) || { echo "no converter named med-afe-eeg0"; exit 0; }
+    sys=$(readlink -e /run/med-afe/eeg0) || { echo "no sysfs link for the converter"; exit 0; }
+    touch "$present"
+    beep device-added
+    machinectl show "$machine" >/dev/null 2>&1 || { echo "converter plugged in, no station running"; exit 0; }
+    # The node first, then the links: a link to a node the container does not
+    # have yet would be a failed open instead of a missing device.
+    machinectl bind --mkdir "$machine" "$node" || { echo "could not bind $node"; exit 1; }
+    ln -sfn "$node" "$links/node"
+    ln -sfn "$sys" "$links/eeg0"
+    echo "front-end attached: $node ($sys)"
+    ;;
+detach)
+    # udev cannot say on removal which IIO device it was (its attributes are
+    # gone), so any IIO removal lands here: it was the converter if the
+    # converter was here and its name is now gone, and the links go only if
+    # the node they point to is the one that went away.
+    if [ -e "$present" ] && ! readlink -e /dev/med-afe-eeg0 >/dev/null; then
+        rm -f "$present"
+        beep device-removed
+        echo "converter unplugged"
+    fi
+    if [ -L "$links/node" ] && [ ! -e "$(readlink "$links/node")" ]; then
+        rm -f "$links/node" "$links/eeg0"
+        echo "front-end detached from the station"
+    fi
+    ;;
+*)
+    echo "usage: $0 attach|detach" >&2
+    exit 2
+    ;;
+esac

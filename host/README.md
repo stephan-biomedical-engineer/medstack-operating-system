@@ -29,14 +29,22 @@ sudo apt install ./medplatform-afe-dkms_*.deb ./medplatform-station_*.deb
   Boot e sem chave MOK na máquina, o DKMS cria uma e pede uma **senha temporária** durante o
   `apt install`. No próximo boot aparece uma tela azul (MokManager): escolha *Enroll MOK* →
   *Continue* → *Yes* e digite a senha. Isso é feito uma vez por PC.
-- **`medplatform-station`** instala o container, a unit, o ícone e a regra polkit, e coloca quem
-  rodou o `sudo apt install` no grupo `medplatform`. Para
-  outros usuários: `sudo usermod -aG medplatform <usuário>`.
+- **`medplatform-station`** instala o container, a unit, o ícone e o serviço que atende o ícone, e
+  coloca quem rodou o `sudo apt install` no grupo `medplatform`. Para outros usuários:
+  `sudo usermod -aG medplatform <usuário>` (vale na hora, sem sair da sessão).
 
-Depois, **MedPlatform EEG** no menu de aplicativos. A primeira abertura sobe o container, e as
-seguintes só abrem a HMI. Botão direito no ícone → *Stop the station* desliga. Pelo terminal:
-`medplatform-station`, `medplatform-station stop`, `journalctl -u medplatform-station@$USER` e
+Depois, **MedPlatform EEG** no menu de aplicativos, **sem senha**. A primeira abertura sobe o
+container e abre a HMI; o **Close** da HMI fecha a tela e desliga a estação (o conversor para de
+adquirir), e fica desabilitado enquanto há uma gravação. Botão direito no ícone → *Stop the station*
+também desliga. Pelo terminal: `medplatform-station`, `medplatform-station stop`,
+`journalctl -u medplatform-station@$USER`, `journalctl -u medplatform-requests` e
 `sudo machinectl shell med-eeg`.
+
+O ícone não pede nada ao systemd diretamente: ele deixa um arquivo `open.<usuário>` em
+`/run/medplatform-requests`, e um serviço do próprio Ubuntu (`medplatform-requests.path`) atende
+como root, depois de conferir que o dono do arquivo é o usuário nomeado e está no grupo
+`medplatform`. Uma regra polkit foi a primeira tentativa e não funcionou: no Ubuntu 24.04 ela
+autorizava o `pkcheck` e nunca o `systemctl start` vindo do menu, que pedia senha duas vezes.
 
 O PC precisa ser x86-64 e estar numa **sessão Wayland** (o padrão do Ubuntu 22.04+ com Intel/AMD; com
 NVIDIA o login às vezes cai em Xorg, e aí a HMI não tem onde desenhar).
@@ -59,8 +67,10 @@ se havia mudança não commitada) e o commit do `linux-med` para os drivers.
 - **Não há A/B nem RAUC.** O pacote `rauc` está na imagem porque o framework depende dele, mas as
   units estão mascaradas. Atualizar é instalar um `.deb` novo; os registros em
   `/var/lib/medplatform/data` ficam, mesmo com `apt purge`.
-- **O conversor é resolvido quando a estação sobe.** Conecte a ponte antes de abrir a estação; se
-  conectar depois, pare e abra de novo.
+- **O conversor pode ser conectado com a estação aberta.** Uma regra udev do pacote
+  (`71-medplatform-station.rules`) percebe a ponte e empresta o dispositivo ao container em execução
+  (`machinectl bind`); o serviço de aquisição, que tenta de novo a cada poucos segundos, o encontra
+  sozinho. Desconectar e conectar de novo também funciona.
 - **Os drivers são da branch `board/medplatform-afe`** do `linux-med`, cuja ABI é a que a receita do
   serviço escreve (`lead_off`, `temperature_channel`, `input_mux`...). A série para o kernel oficial
   (o DKMS `ads1299-linux` e o HEAD de `feature/ads1299-mcp2210-driver`) usa outra ABI, e com ela o

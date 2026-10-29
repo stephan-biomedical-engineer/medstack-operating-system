@@ -22,6 +22,10 @@ configure)
     install -d -m 0750 /var/lib/medplatform /var/lib/medplatform/data
 
     systemctl daemon-reload >/dev/null 2>&1 || true
+    # What answers the menu icon (medplatform-requests.path).
+    systemctl enable --now medplatform-requests.path >/dev/null 2>&1 || true
+    # And what lends a converter plugged in while the station runs.
+    udevadm control --reload >/dev/null 2>&1 || true
 
     # Whoever ran "sudo apt install" is almost always the person who will use
     # the station; anyone else is added by hand.
