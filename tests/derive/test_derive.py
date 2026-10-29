@@ -171,15 +171,91 @@ for link, rows in tables.items():
         check('%s: o registro declara a entrada da linha' % link,
               row['record.input'] == row['afe.input'], row['record.input'])
 
+# --- the kernel driver's ABI is per channel (2026-10-28) --------------------
+# The table speaks the upstream submission's ABI: each channel its own gain,
+# input and switches. These read a row back the way the converter would be
+# programmed by it.
+CHANNELS = 8
+PER_CHANNEL = ('hardwaregain', 'input_mux', 'bias_sense_p', 'bias_sense_n',
+               'lead_off_sense_p', 'lead_off_sense_n', 'lead_off_flip', 'srb2')
+
+
+def channel(row, c, name):
+    return row.get('device.option.in_voltage%d_%s' % (c, name))
+
+
+def mask(row, name):
+    """The register a per-channel switch lands in: bit c for channel c."""
+    return sum(1 << c for c in range(CHANNELS) if channel(row, c, name) == '1')
+
+
+def inputs(row):
+    return {channel(row, c, 'input_mux') for c in range(CHANNELS)}
+
+
+def board_registers(row):
+    """What the board branch's driver programmed for the same prescription
+    (its ads1299_set_bias and ads1299_set_lead_off, read in linux-med's
+    board/medplatform-afe): the oracle the new table is held against."""
+    sensor = row['afe.temperature'] == 'true'
+    electrodes = 0xff & ~(0x80 if sensor else 0)
+    bipolar = row['afe.montage'] == 'bipolar'
+    # Not an operator's choice, so not a column of the table of choices: the
+    # factory's, read from the factory file and not from the derivation.
+    bias_on = row.get('afe.bias_drive', parse(FACTORY)['afe.bias_drive']) == 'true'
+    bias = electrodes if bias_on else 0
+    lead_off = row['afe.lead_off_detection'] == 'true'
+    return {
+        'bias_sense_p': bias,
+        'bias_sense_n': bias if bipolar else 0,
+        'lead_off_sense_p': electrodes if lead_off else 0,
+        'lead_off_sense_n': (electrodes if bipolar else 0x01) if lead_off else 0,
+    }
+
+
+for link in ('spi', 'usb'):
+    rows = tables.get(link, [])
+    check('%s: toda linha diz todos os ajustes de todos os canais' % link,
+          all(channel(row, c, name) is not None
+              for row in rows for c in range(CHANNELS) for name in PER_CHANNEL)
+          and all(row.get('device.option.' + k) is not None for row in rows
+                  for k in ('test_signal', 'bias_drive', 'montage', 'lead_off_frequency',
+                            'lead_off_current_nanoamp', 'lead_off_threshold_percent',
+                            'bias_lead_off')))
+    check('%s: nenhuma linha usa a ABI antiga' % link,
+          not any(k in row for row in rows for k in (
+              'device.option.hardwaregain', 'device.option.input_mux',
+              'device.option.lead_off', 'device.option.temperature_channel')))
+    wrong = [(row['afe.montage'], row.get('afe.bias_drive'), row['afe.lead_off_detection'],
+              row['afe.temperature'], name, hex(mask(row, name)), hex(want))
+             for row in rows for name, want in board_registers(row).items()
+             if mask(row, name) != want]
+    check('%s: BIAS_SENSP/N e LOFF_SENSP/N iguais aos do driver da placa' % link,
+          not wrong, wrong[:3])
+    check('%s: bias_drive = on só onde a prescrição pede' % link,
+          all(row['device.option.bias_drive']
+              == ('on' if row.get('afe.bias_drive', parse(FACTORY)['afe.bias_drive']) == 'true'
+                  else 'off')
+              for row in rows))
+    check('%s: lead-off em DC, 6 nA, 95 %%, sem o eletrodo do bias' % link,
+          all(row['device.option.lead_off_frequency'] == 'dc'
+              and row['device.option.lead_off_current_nanoamp'] == '6'
+              and row['device.option.lead_off_threshold_percent'] == '95'
+              and row['device.option.bias_lead_off'] == 'off' for row in rows))
+    check('%s: SRB2 e flip sempre abertos' % link,
+          all(mask(row, 'srb2') == 0 and mask(row, 'lead_off_flip') == 0 for row in rows))
+
+
 # --- the shorted rows of the kernel-driven links ----------------------------
 for link in ('spi', 'usb'):
     rows = tables.get(link, [])
     shorted = [row for row in rows if row['afe.input'] == 'shorted']
     check('%s: 14 linhas de curto' % link, len(shorted) == 14, len(shorted))
-    check('%s: o curto chega ao kernel como input_mux = shorted' % link,
-          all(row['device.option.input_mux'] == 'shorted' for row in shorted))
-    check('%s: o curto chega com lead_off = off' % link,
-          all(row['device.option.lead_off'] == 'off' for row in shorted))
+    check('%s: o curto chega ao kernel como input_mux = shorted, em todo canal' % link,
+          all(inputs(row) == {'shorted'} for row in shorted))
+    check('%s: o curto chega sem nenhuma entrada em lead-off' % link,
+          all(mask(row, 'lead_off_sense_p') == 0 and mask(row, 'lead_off_sense_n') == 0
+              for row in shorted))
     check('%s: o curto chega com o gerador desligado' % link,
           all(row['device.option.test_signal'] == 'off' for row in shorted))
     check('%s: as duas montagens e os sete ganhos' % link,
@@ -189,8 +265,8 @@ for link in ('spi', 'usb'):
     # And the other way: nothing that is not a short reaches the switch as one.
     normal = [row for row in rows if row['afe.input'] == 'normal']
     check('%s: entrada normal nunca chega como curto' % link,
-          all(row['device.option.input_mux']
-              == ('test_signal' if row['afe.test_signal'] == 'internal' else 'normal')
+          all(inputs(row) - {'temperature'}
+              == {'test_signal' if row['afe.test_signal'] == 'internal' else 'normal'}
               for row in normal))
 
 # --- a factory prescription the link cannot honour fails the build ----------
@@ -205,7 +281,7 @@ for link in ('spi', 'usb', 'amp'):
               values.get('record.input') == 'shorted', values.get('record.input'))
         if link != 'amp':
             check('%s: o eeg.conf de fábrica diz input_mux = shorted' % link,
-                  values.get('device.option.input_mux') == 'shorted')
+                  inputs(values) == {'shorted'})
 
 # --- the sensor on the last channel (phase 4) --------------------------------
 GAINS = ('1', '2', '4', '6', '8', '12', '24')
@@ -213,8 +289,14 @@ for link in ('spi', 'usb'):
     rows = tables.get(link, [])
     sensor = [row for row in rows if row['afe.temperature'] == 'true']
     check('%s: 42 linhas com o sensor' % link, len(sensor) == 42, len(sensor))
-    check('%s: o sensor vai ao último canal' % link,
-          all(row.get('device.option.temperature_channel') == '7' for row in sensor))
+    check('%s: o sensor vai ao último canal, e só a ele' % link,
+          all(channel(row, 7, 'input_mux') == 'temperature'
+              and all(channel(row, c, 'input_mux') != 'temperature' for c in range(7))
+              for row in sensor))
+    check('%s: o canal do sensor no ganho limitado a 12, os outros no prescrito' % link,
+          all(int(channel(row, 7, 'hardwaregain')) == min(int(row['afe.gain']), 12)
+              and all(channel(row, c, 'hardwaregain') == row['afe.gain'] for c in range(7))
+              for row in sensor))
     # The cap is the kernel driver's, and this is the declaration it is held
     # against: 4.5 V over min(gain, 12).
     check('%s: o passo do canal do sensor é o do ganho limitado a 12' % link,
@@ -233,8 +315,9 @@ for link in ('spi', 'usb'):
     # Every row says where the sensor is, "none" included: the kernel keeps
     # the last setting, and a row that said nothing would inherit it.
     others = [row for row in rows if row['afe.temperature'] == 'false']
-    check('%s: toda linha sem o sensor diz temperature_channel = none' % link,
-          all(row.get('device.option.temperature_channel') == 'none' for row in others))
+    check('%s: toda linha sem o sensor põe o último canal no eletrodo' % link,
+          all('temperature' not in inputs(row)
+              and channel(row, 7, 'hardwaregain') == row['afe.gain'] for row in others))
     check('%s: e não declara passo próprio de canal' % link,
           all(not any(k.startswith('device.option.full_scale.') for k in row) for row in others))
 
