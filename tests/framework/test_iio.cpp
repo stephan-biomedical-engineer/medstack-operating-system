@@ -441,6 +441,51 @@ void testIio() {
         }
     }
     {
+        // The same referential montage said input by input, the way a driver
+        // with a switch per input says it (in_voltageN_lead_off_sense_p/_n):
+        // every positive sensed, the reference electrode alone on the
+        // negative side - channel 1's, which SRB1 ties to every channel.
+        makeTree();
+        addLeadOff("ff 01");
+        ::unlink((kDir + "/lead_off_monitored").c_str());
+        for (int c = 0; c < 8; ++c) {
+            const std::string prefix = "in_voltage" + std::to_string(c) + "_lead_off_sense_";
+            put(prefix + "p", "1\n");
+            put(prefix + "n", c == 0 ? "1\n" : "0\n");
+        }
+        std::vector<std::uint32_t> words(14, 0);
+        words[0] = 0x0401U;
+        writeScansLeadOff(words, 0);
+        std::unique_ptr<MedicalDevice> device = make(declared());
+        CHECK(device != nullptr);
+        if (device) {
+            CHECK_STATUS(device->start(), Status::Ok);
+            Result<SampleFrame> frame = device->read(std::chrono::milliseconds(100));
+            CHECK(frame.isOk());
+            if (frame.isOk()) {
+                CHECK_EQ(frame.value().leadOff.monitoredPositive, static_cast<std::uint16_t>(0xff));
+                CHECK_EQ(frame.value().leadOff.monitoredNegative, static_cast<std::uint16_t>(0x01));
+                CHECK_EQ(frame.value().leadOff.detachedPositive(), static_cast<std::uint16_t>(0x04));
+                CHECK_EQ(frame.value().leadOff.detachedNegative(), static_cast<std::uint16_t>(0x01));
+            }
+            device->stop();
+        }
+        // One channel that does not say: refused, not taken as "not sensed".
+        makeTree();
+        addLeadOff("ff ff");
+        ::unlink((kDir + "/lead_off_monitored").c_str());
+        for (int c = 0; c < 7; ++c) {
+            const std::string prefix = "in_voltage" + std::to_string(c) + "_lead_off_sense_";
+            put(prefix + "p", "1");
+            put(prefix + "n", "1");
+        }
+        device = make(declared());
+        if (device) {
+            CHECK_STATUS(device->start(), Status::NotSupported);
+            CHECK_EQ(get("buffer/enable"), std::string("0"));
+        }
+    }
+    {
         // A word and no list of what it watches: refused, not guessed.
         makeTree();
         addLeadOff("ff ff");

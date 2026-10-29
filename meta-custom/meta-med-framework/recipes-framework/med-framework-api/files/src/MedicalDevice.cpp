@@ -962,7 +962,8 @@ private:
 /// Electrode contact, where the kernel driver reports it, arrives the same way
 /// as on the rpmsg link: in every frame's lead-off block. The kernel driver
 /// says which electrodes it watches in `lead_off_monitored` (two hex bytes,
-/// positive inputs then negative, one bit per channel) and puts each sample's
+/// positive inputs then negative, one bit per channel) or, a switch per input,
+/// in `in_voltageN_lead_off_sense_p` / `_n`, and puts each sample's
 /// state in one more scan element after the voltages, `in_voltageN_lead_off`:
 /// (positive << 8) | negative, a set bit an electrode off. A driver with
 /// neither reports nothing monitored - which is the truth about it, and not
@@ -1130,12 +1131,9 @@ public:
         monitoredPositive_ = 0;
         monitoredNegative_ = 0;
         if (hasLeadOff_) {
-            std::string monitored;
             unsigned int positive = 0;
             unsigned int negative = 0;
-            if (!readSysfs("lead_off_monitored", monitored) ||
-                std::sscanf(monitored.c_str(), "%x %x", &positive, &negative) != 2 ||
-                positive > 0xffffU || negative > 0xffffU) {
+            if (!readMonitored(positive, negative)) {
                 lastError_ = "the front-end reports electrode contact and not which "
                              "electrodes it watches";
                 disableBuffer();
@@ -1392,6 +1390,35 @@ private:
         return true;
     }
 
+    // Which electrodes the lead-off word speaks for, one bit per channel,
+    // positive inputs and negative. Two ways a kernel driver says it, and
+    // both are sysfs ABI of the driver that publishes them: one attribute,
+    // lead_off_monitored ("PP NN" in hex), or one switch per input of each
+    // channel, in_voltageN_lead_off_sense_p / _n ("1" sensed, "0" not). The
+    // second is the form a driver takes when every input is its own setting.
+    // Neither is a monitored set this driver may assume.
+    bool readMonitored(unsigned int& positive, unsigned int& negative) const {
+        std::string text;
+        if (readSysfs("lead_off_monitored", text)) {
+            return std::sscanf(text.c_str(), "%x %x", &positive, &negative) == 2 &&
+                   positive <= 0xffffU && negative <= 0xffffU;
+        }
+        positive = 0;
+        negative = 0;
+        for (std::size_t channel = 0; channel < config_.channelCount; ++channel) {
+            const std::string prefix = "in_voltage" + std::to_string(channel) + "_lead_off_sense_";
+            std::string p;
+            std::string n;
+            if (!readSysfs(prefix + "p", p) || !readSysfs(prefix + "n", n) ||
+                (p != "0" && p != "1") || (n != "0" && n != "1")) {
+                return false;
+            }
+            positive |= (p == "1" ? 1U : 0U) << channel;
+            negative |= (n == "1" ? 1U : 0U) << channel;
+        }
+        return true;
+    }
+
     bool writeSysfs(const std::string& relative, const std::string& value) const {
         // O_TRUNC is what `echo value > attribute` does, and the kernel ignores
         // it on an attribute. It matters only where the attribute is a plain
@@ -1452,14 +1479,22 @@ private:
     // ------------------------------------------------------------- settings
 
     Status applyOptions() {
-        // Every option, written and read back, in key order. Written before
-        // the scale is read, because an option may be the gain and reading the
-        // scale first would record the previous setting.
+        // Every option, written and read back. Written before the scale is
+        // read, because an option may be the gain and reading the scale first
+        // would record the previous setting.
         //
-        // In KEY order, which is a constraint worth naming: a kernel driver
-        // whose attributes only work when written in some other order cannot be
-        // configured correctly from a map, and that belongs fixed in the
-        // driver rather than papered over here.
+        // In key order, and a write the front-end refuses is tried again after
+        // the others, pass after pass, for as long as a pass gets something
+        // through. A kernel driver may legitimately refuse a setting because of
+        // another one: the converter's driver refuses a channel on the internal
+        // test generator while the generator is off, and the generator off
+        // while a channel is on it (its sysfs ABI says so). Which of the two
+        // has to come first depends on where the device is coming from, which
+        // a configuration cannot know - and the fixed point of "retry what was
+        // refused" reaches the configuration from either side without this
+        // file learning either attribute. A setting still refused when a pass
+        // gets nothing through is refused, and named.
+        std::vector<const std::pair<const std::string, std::string>*> pending;
         for (const std::pair<const std::string, std::string>& entry : config_.driverOptions) {
             if (entry.first == "full_scale" || entry.first == "resolution_bits" ||
                 entry.first.compare(0, 11, "full_scale.") == 0) {
@@ -1469,22 +1504,39 @@ private:
                 lastError_ = "the front-end has no attribute '" + entry.first + "'";
                 return Status::NotSupported;
             }
-            if (!writeSysfs(entry.first, entry.second)) {
-                lastError_ = "the front-end refused " + entry.first + " = '" + entry.second +
-                             "'";
+            pending.push_back(&entry);
+        }
+        std::vector<const std::pair<const std::string, std::string>*> applied;
+        while (!pending.empty()) {
+            std::vector<const std::pair<const std::string, std::string>*> refused;
+            for (const std::pair<const std::string, std::string>* entry : pending) {
+                if (!writeSysfs(entry->first, entry->second)) {
+                    refused.push_back(entry);
+                    continue;
+                }
+                applied.push_back(entry);
+            }
+            if (refused.size() == pending.size()) {
+                lastError_ = "the front-end refused " + refused.front()->first + " = '" +
+                             refused.front()->second + "'";
                 return Status::OutOfRange;
             }
-            // The read-back is for the other failure: a driver that accepts a
-            // value and programs the nearest one. A device running at a setting
-            // its configuration does not name is a traceability defect.
+            pending.swap(refused);
+        }
+        // The read-back is for the other failure: a driver that accepts a
+        // value and programs the nearest one. A device running at a setting
+        // its configuration does not name is a traceability defect. Read once
+        // every write is done, so that a write which moved an earlier setting
+        // is seen too.
+        for (const std::pair<const std::string, std::string>* entry : applied) {
             std::string readBack;
-            if (!readSysfs(entry.first, readBack)) {
-                lastError_ = "cannot read back " + entry.first +
+            if (!readSysfs(entry->first, readBack)) {
+                lastError_ = "cannot read back " + entry->first +
                              ", so the setting cannot be confirmed";
                 return Status::NotSupported;
             }
-            if (!sameSetting(entry.second, readBack)) {
-                lastError_ = "asked for " + entry.first + " = '" + entry.second +
+            if (!sameSetting(entry->second, readBack)) {
+                lastError_ = "asked for " + entry->first + " = '" + entry->second +
                              "' and the front-end programmed '" + readBack + "'";
                 return Status::OutOfRange;
             }
