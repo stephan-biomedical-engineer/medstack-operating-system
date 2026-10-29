@@ -338,16 +338,14 @@ python do_derive_device_options() {
                        "refused by the producer on link 'amp'")
 
         elif link in ('spi', 'usb'):
-            # The kernel driver's sysfs attributes: hardwaregain is IIO standard ABI,
-            # input_mux, test_signal, bias_drive, montage and lead_off are the
-            # driver's own.
+            # The kernel driver's sysfs attributes (the table below says which,
+            # and why they are per channel since 2026-10-28).
             #
-            # The temperature sensor on the last channel is the kernel driver's
-            # temperature_channel (implementation_plan_usb_parity.md, phase 4).
-            # The driver runs that channel at the prescribed gain capped at 12,
-            # takes it out of the bias derivation and of lead-off, and says the
-            # gain in the channel's scale; the cap is the producer's on "amp"
-            # too, where gain 24 read -79 C on the board (2026-10-12). Offered
+            # The temperature sensor is on the last channel (introduced as the
+            # board driver's temperature_channel, implementation_plan_usb_parity.md
+            # phase 4; now its input_mux): at the prescribed gain capped at 12,
+            # out of the bias derivation and of lead-off, its gain said in the
+            # channel's scale. Offered
             # before a bench has read it through this link, like the short
             # below, and for the same reason. The channel's step is declared
             # here, full_scale.<n>, from the same cap - and the framework holds
@@ -399,32 +397,79 @@ python do_derive_device_options() {
             if gain != int(gain):
                 refuse("eeg.conf: afe.gain = %s is not an integer" % values['afe.gain'])
             internal = test_signal == 'internal'
-            # The prescription is a boolean and the part offers three
-            # configurations, so the translation has to choose - and the choice is
-            # clinical, which is why it is made here and written down rather than
-            # defaulted inside the driver.
+            bipolar = montage == 'bipolar'
+            sensor = channels - 1 if temperature else None
+            # The kernel driver's sysfs ABI is the one its upstream submission
+            # carries (the ads1299-linux out-of-tree repository, and linux-med's
+            # feature branch; its Documentation/ABI/testing file is the
+            # reference): every channel its own gain, input and switches, the
+            # part-wide settings beside them. Until 2026-10-28 this table
+            # spoke the board branch's ABI, where the driver derived the
+            # per-channel registers from five words (input_mux, bias_drive =
+            # derived, lead_off, temperature_channel, one hardwaregain); with
+            # the upstream ABI that derivation is made here, register for
+            # register the same, so that what the converter is programmed with
+            # did not change with the driver.
             #
-            # "on" means DERIVED: the amplifier drives the inverse of the average of
-            # every enabled channel, which is the driven-electrode arrangement that
-            # rejects common mode. The other one the driver offers, "reference",
-            # drives a mid-supply with no feedback from anything measured - a DC
-            # bias and no rejection. A prescription asking for bias drive is asking
-            # for the first; if a montage ever wants the second, it needs a
-            # prescription that can say so, not a different default here.
+            # Every setting is said, the "off" ones included: the kernel keeps
+            # a setting from one choice to the next, and a choice that left one
+            # out would inherit the previous choice's.
+            #
+            # Settings that depend on each other (a channel on the test
+            # generator while the generator is off is refused, and the other
+            # way round) are written by the framework until nothing more is
+            # refused, so their order here does not matter.
             options = [
-                ('hardwaregain', str(int(gain))),
-                ('input_mux', 'test_signal' if internal else source),
                 ('test_signal', '1x_slow' if internal else 'off'),
-                ('bias_drive', 'derived' if bias else 'off'),
-                # The same two words on both sides. A kernel without the attribute
-                # makes the driver refuse the option and the service refuse to
-                # start, which is the right outcome for a montage nobody applied.
+                # The prescription is a boolean and the part offers more, so
+                # the translation chooses - and the choice is clinical, which
+                # is why it is made here and written down. "on" is the DERIVED
+                # bias: the amplifier drives the inverse of the average of the
+                # electrodes, the arrangement that rejects common mode. In a
+                # referential montage the negative inputs are one node, the
+                # reference electrode, and summing it once per channel would
+                # make the bias follow the reference instead of the common
+                # mode, so they stay out (the board driver's choice, kept; the
+                # datasheet does not say).
+                ('bias_drive', 'on' if bias else 'off'),
                 ('montage', montage),
-                ('lead_off', 'dc' if lead_off else 'off'),
-                # Always said, "none" included: the kernel keeps the setting
-                # from one choice to the next, and a choice without it would
-                # leave the sensor where the previous one put it.
-                ('temperature_channel', str(channels - 1) if temperature else 'none'),
+                # Lead-off: DC excitation at the part's reset values (6 nA,
+                # comparators at 95 % / 5 %), every electrode's positive input
+                # sensed; on the negative side every electrode in bipolar, and
+                # in referential the reference alone - channel 1's negative
+                # input, which SRB1 ties to every channel. The bias electrode
+                # is not sensed.
+                ('lead_off_frequency', 'dc'),
+                ('lead_off_current_nanoamp', '6'),
+                ('lead_off_threshold_percent', '95'),
+                ('bias_lead_off', 'off'),
+            ]
+            for c in range(channels):
+                electrode = c != sensor
+                prefix = 'in_voltage%d_' % c
+                if electrode:
+                    channel_gain = int(gain)
+                    channel_input = 'test_signal' if internal else source
+                else:
+                    # The temperature sensor: ~145 mV, past full scale at gain
+                    # 24, so its channel runs at the prescribed gain capped at
+                    # 12 - the producer's cap on "amp" too, where gain 24 read
+                    # -79 C on the board (2026-10-12) - and is out of the bias
+                    # derivation and of lead-off.
+                    channel_gain = min(int(gain), 12)
+                    channel_input = 'temperature'
+                options += [
+                    (prefix + 'hardwaregain', str(channel_gain)),
+                    (prefix + 'input_mux', channel_input),
+                    (prefix + 'bias_sense_p', '1' if bias and electrode else '0'),
+                    (prefix + 'bias_sense_n', '1' if bias and electrode and bipolar else '0'),
+                    (prefix + 'lead_off_sense_p', '1' if lead_off and electrode else '0'),
+                    (prefix + 'lead_off_sense_n',
+                     '1' if lead_off and electrode and (bipolar or c == 0) else '0'),
+                    (prefix + 'lead_off_flip', '0'),
+                    (prefix + 'srb2', '0'),
+                ]
+            options += [
                 # Not attributes, and never written to the device: the range and
                 # the resolution, from which the framework takes the exact step.
                 # The kernel publishes its scale as short text (five significant
