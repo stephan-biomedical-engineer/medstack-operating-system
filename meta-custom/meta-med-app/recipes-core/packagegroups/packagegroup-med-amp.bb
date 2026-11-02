@@ -1,7 +1,7 @@
 SUMMARY = "MedPlatform asymmetric multiprocessing (AMP) profile"
 DESCRIPTION = "Capability marker and userspace enablement for device profiles \
-whose acquisition path runs on a real-time co-processor (Cortex-M4 next to the \
-Cortex-A35 on the STM32MP257), reached from Linux through MedicalIPC over \
+whose acquisition path runs on a real-time co-processor beside the \
+application cores, reached from Linux through MedicalIPC over \
 OpenAMP rpmsg. \
 \
 The kernel side (REMOTEPROC, RPMSG_CHAR, virtio) is distro policy and comes \

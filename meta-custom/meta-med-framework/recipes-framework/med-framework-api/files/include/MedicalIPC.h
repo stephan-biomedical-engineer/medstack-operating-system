@@ -38,7 +38,8 @@ enum class IpcTransport {
 struct IpcEndpoint {
     IpcTransport transport = IpcTransport::UnixSeqpacket;
 
-    /// Device node for RpmsgChar ("/dev/rpmsg0"), filesystem socket path for
+    /// Device node for RpmsgChar (a stable udev link to the channel's
+    /// character device, never its numbered name), filesystem socket path for
     /// UnixSeqpacket ("/run/medplatform/<service>.sock").
     std::string address;
 

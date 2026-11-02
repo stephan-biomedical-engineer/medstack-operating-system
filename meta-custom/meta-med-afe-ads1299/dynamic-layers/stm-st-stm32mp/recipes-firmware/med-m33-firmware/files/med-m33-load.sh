@@ -7,7 +7,7 @@
 #
 # Run by med-m33-firmware.service, which udev starts when the remoteproc called
 # "m33" appears (90-med-amp.rules). The core is found by its NAME and never by
-# its index: remoteproc0 and remoteproc1 swapped roles between two boots of the
+# its index - measured: remoteproc0 and remoteproc1 swapped roles between two boots of the
 # same board, and a fixed index sent this firmware to the M0+ once
 # (BRINGUP_STM32MP2.md §9.15).
 #

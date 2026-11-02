@@ -133,8 +133,9 @@ struct SampleFrame {
 struct DeviceConfig {
     std::string driver = "simulated";
     std::string id = "device0";
-    /// Driver specific: "/dev/rpmsg0" for rpmsg, a /dev/iio:device* node (or a
-    /// stable symlink to one) for iio, unused by simulated.
+    /// Driver specific: for rpmsg the producer's channel and for iio the
+    /// front-end's IIO device node, each by a stable udev link and never by
+    /// the kernel's numbered name; required by both, unused by simulated.
     std::string address;
     std::uint16_t channelCount = 8;
     double sampleRateHz = 250.0;

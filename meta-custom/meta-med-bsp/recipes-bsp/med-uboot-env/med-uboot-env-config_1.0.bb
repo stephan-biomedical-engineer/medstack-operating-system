@@ -53,16 +53,16 @@ install this package on this machine."
 # bootfs, rootfs, vendorfs, u-boot-env, fip-a and fip-b exist on *both* disks,
 # and /dev/disk/by-partlabel/ is one flat namespace across every block device,
 # so udev gives each colliding name to whichever disk enumerated first. Which
-# disk that is was measured twice and came out differently both times: the SD
+# disk that is came out differently on two boots - measured: the SD
 # card was mmcblk1 and the eMMC mmcblk0 on one boot, mmcblk0 and mmcblk2 on the
 # next, same hardware, no configuration change. Device enumeration is a race.
 #
-# And for this partition the race is lost, measured on the board 2026-08-18:
+# And for this partition the race is lost - measured: on the board 2026-08-18,
 #
 #     readlink -f /dev/disk/by-partlabel/u-boot-env   ->  /dev/mmcblk2p5
 #     readlink -f /dev/disk/by-partuuid/d7ba3548-...  ->  /dev/mmcblk0p7
 #
-# mmcblk2 is the factory eMMC. ST's own fw_env.config.mmc, addressing this by
+# That second disk is the factory eMMC. ST's own fw_env.config.mmc, addressing this by
 # partlabel, would therefore have pointed fw_setenv at *another operating
 # system's* bootloader environment - and it would have worked, silently, until
 # someone wondered why a slot switch never took effect. A PARTUUID is unique by

@@ -1,8 +1,8 @@
 SUMMARY = "MedPlatform EEG device profile (proof of concept)"
 DESCRIPTION = "The validation target of the thesis: MedOS + MedFramework + the \
-AMP acquisition path + the Qt/Wayland HMI. Builds unchanged for qemux86-64 \
-and for the STM32MP257 - the machine is selected by the KAS project file, and \
-nothing in this recipe or in the applications it installs mentions either one."
+AMP acquisition path + the Qt/Wayland HMI. Builds unchanged for every machine \
+the platform supports - the machine is selected by the KAS project file, and \
+nothing in this recipe or in the applications it installs names one."
 LICENSE = "MIT"
 
 # Cross-layer require: BBPATH spans every layer, so meta-med-app builds its

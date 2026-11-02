@@ -28,7 +28,7 @@ DeviceConfig baseConfig(const std::string& driver) {
     DeviceConfig config;
     config.driver = driver;
     config.id = "device0";
-    config.address = (driver == "iio") ? "/dev/med-afe-eeg0" : "/dev/rpmsg0";
+    config.address = (driver == "iio") ? "/dev/med-afe-eeg0" : "/dev/med-amp0";
     config.channelCount = 8;
     config.sampleRateHz = 250.0;
     config.samplesPerFrame = 14;
@@ -101,6 +101,26 @@ void testDevice() {
         DeviceConfig noFrame = baseConfig("simulated");
         noFrame.samplesPerFrame = 0;
         CHECK_STATUS(MedicalDeviceFactory::create(noFrame).status(), Status::InvalidArgument);
+    }
+
+    {
+        // No driver guesses a numbered node (docs/implementation_plan_layer_check.md,
+        // F9): rpmsg channels and IIO devices are numbered in the order they
+        // appear, so rpmsg and iio refuse an empty address at creation instead of
+        // falling back to "/dev/rpmsg0" or "/dev/iio:device0". simulated has no
+        // node and still accepts one.
+        for (const char* name : {"rpmsg", "iio"}) {
+            DeviceConfig noAddress = baseConfig(name);
+            noAddress.address.clear();
+            Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(noAddress);
+            CHECK_MSG(!created.isOk(), std::string("endereço vazio aceito por ") + name);
+            CHECK_STATUS(created.status(), Status::InvalidArgument);
+            CHECK_MSG(created.message().find("device.address") != std::string::npos,
+                      std::string("a recusa de ") + name + " não nomeia device.address");
+        }
+        DeviceConfig simulated = baseConfig("simulated");
+        simulated.address.clear();
+        CHECK(MedicalDeviceFactory::create(simulated).isOk());
     }
 
     medtest::section("Opções - nenhum vocabulário de classe de dispositivo no framework");

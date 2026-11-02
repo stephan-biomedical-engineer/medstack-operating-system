@@ -683,6 +683,16 @@ public:
     static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config) {
         using DeviceResult = Result<std::unique_ptr<MedicalDevice>>;
 
+        // No default node. The kernel numbers rpmsg channels in the order they
+        // appear, so a fallback to a numbered one would be a guess that is
+        // right on some boots; the address is a name the platform gives the
+        // channel, and a configuration without one is refused here.
+        if (config.address.empty()) {
+            return DeviceResult::fail(Status::InvalidArgument,
+                                      "driver rpmsg needs device.address: the node of "
+                                      "the producer's channel, by a name udev gives it");
+        }
+
         if (!config.driverOptions.empty()) {
             Result<std::vector<unsigned char>> encoded = amp::encodeControl(config.driverOptions);
             if (!encoded) {
@@ -714,7 +724,7 @@ public:
 
         IpcEndpoint endpoint;
         endpoint.transport = IpcTransport::RpmsgChar;
-        endpoint.address = config_.address.empty() ? "/dev/rpmsg0" : config_.address;
+        endpoint.address = config_.address;
 
         // A bounded reconnection window, not a single attempt.
         //
@@ -991,6 +1001,14 @@ class IioDevice : public MedicalDevice {
 public:
     static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config) {
         using DeviceResult = Result<std::unique_ptr<MedicalDevice>>;
+
+        // No default node, for the reason resolve() gives below: IIO devices
+        // are numbered in probe order, so the address must be a name.
+        if (config.address.empty()) {
+            return DeviceResult::fail(Status::InvalidArgument,
+                                      "driver iio needs device.address: a stable link "
+                                      "to the front-end's IIO device node");
+        }
 
         double fullScale = 0.0;
         unsigned int resolutionBits = 0;
@@ -1436,8 +1454,7 @@ private:
     // ----------------------------------------------------------- resolution
 
     Status resolve() {
-        const std::string requested =
-            config_.address.empty() ? "/dev/iio:device0" : config_.address;
+        const std::string& requested = config_.address;
 
         // realpath, because the configured address is expected to be a udev
         // symlink naming the front-end rather than /dev/iio:deviceN, which is

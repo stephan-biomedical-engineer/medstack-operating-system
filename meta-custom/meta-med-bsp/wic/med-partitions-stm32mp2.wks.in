@@ -112,10 +112,10 @@ part fip-b --source rawcopy --fstype=ext4 --fsoptions "noauto" --part-name=fip-b
 # /dev/disk/by-partlabel/ is one flat namespace across every block device: udev
 # gives each colliding name to whichever disk enumerated first. Which disk that
 # is was measured on two boots of this same hardware, with no configuration
-# change between them, and came out differently: SD=mmcblk1/eMMC=mmcblk0 once,
+# change between them, and came out differently - measured: SD=mmcblk1/eMMC=mmcblk0 once,
 # SD=mmcblk0/eMMC=mmcblk2 the next. Enumeration is a race, so by-partlabel is
 # not merely "usually the eMMC" - it has no defined answer at all. And for this
-# partition the answer measured on 2026-08-18 is the wrong disk:
+# partition the answer is the wrong disk - measured: 2026-08-18,
 # by-partlabel/u-boot-env resolved to /dev/mmcblk2p5, the factory eMMC, while
 # ours is /dev/mmcblk0p7 by PARTUUID. Addressing it by name would have sent
 # fw_setenv to another operating system's bootloader environment.
@@ -146,7 +146,7 @@ part u-boot-env --source rawcopy --fstype=ext4 --fsoptions "noauto" --sourcepara
 # eMMC carrying a factory OpenSTLinux image whose partitions are named bootfs,
 # rootfs, vendorfs, u-boot-env, fip-a, fip-b, metadata1 and metadata2 - the same
 # names this layout uses. /dev/disk/by-partlabel/ is a flat namespace across all
-# block devices, so the eMMC won every colliding name: observed on the device,
+# block devices, so the eMMC won every colliding name - measured: on the device,
 # by-partlabel/bootfs resolved to mmcblk0p6 while ours was mmcblk1p8.
 #
 # That mattered because this partition is the key store: med-data-provision.sh

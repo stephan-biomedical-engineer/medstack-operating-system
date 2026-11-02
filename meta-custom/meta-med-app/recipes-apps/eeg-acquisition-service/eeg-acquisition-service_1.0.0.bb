@@ -359,7 +359,7 @@ python do_derive_device_options() {
             # that measures them needs the row on the screen, as with the rates
             # on "amp". What stands in until then is that the converter's
             # switch is programmed with the same bytes the producer on "amp"
-            # writes (tests/ads1299 holds the driver against it), and that the
+            # writes (the kernel driver's host suite holds it to them), and that the
             # record says "shorted", so the clinical file never calls it EEG.
             #
             # Off the electrodes there is no contact to monitor, and the record
@@ -400,7 +400,7 @@ python do_derive_device_options() {
             bipolar = montage == 'bipolar'
             sensor = channels - 1 if temperature else None
             # The kernel driver's sysfs ABI is the one its upstream submission
-            # carries (the ads1299-linux out-of-tree repository, and linux-med's
+            # carries (the driver's out-of-tree repository, and linux-med's
             # feature branch; its Documentation/ABI/testing file is the
             # reference): every channel its own gain, input and switches, the
             # part-wide settings beside them. Until 2026-10-28 this table

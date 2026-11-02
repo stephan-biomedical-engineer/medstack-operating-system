@@ -15,6 +15,6 @@ SUBSYSTEM=="remoteproc", ACTION=="add", ATTR{name}=="m33", \
 #
 # udev matches ATTR on the node itself and every ATTRS key on one ancestor, so
 # the two "name" tests below look at different devices, as intended - checked
-# with `udevadm info -a /dev/rpmsg0` on the board, 2026-10-08.
+# on the board, 2026-10-08 - measured: `udevadm info -a /dev/rpmsg0`.
 SUBSYSTEM=="rpmsg", KERNEL=="rpmsg[0-9]*", ATTR{name}=="rpmsg-raw", ATTRS{name}=="m33", \
     SYMLINK+="med-amp0"

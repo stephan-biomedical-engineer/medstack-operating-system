@@ -41,7 +41,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 #
 # The out-of-tree module recipes used to catch part of this, because a module
 # fails to build against a kernel that lacks what it needs. With the AFE driver
-# now in the kernel tree, that accidental check is gone: a CONFIG_TI_ADS1299 that
+# now in the kernel tree, that accidental check is gone: a converter symbol that
 # never took produces an image with no front-end driver and no error anywhere.
 #
 # So the check becomes explicit, and it is about the FINAL .config - after
@@ -78,7 +78,7 @@ python () {
 
     # A bancada que estes símbolos servem é a da ponte USB, e só ela. O spidev
     # existe para a Fase 2 do plano de bancada, que mede a máquina de estados
-    # de transferência do MCP2210 com um jumper - e o MCP2210 só está no
+    # de transferência da ponte USB-SPI com um jumper - e a ponte só está no
     # caminho quando MED_EEG_LINK = "usb".
     #
     # Sem esta recusa a combinação silenciosa é amp + spidev: um perfil de
@@ -88,7 +88,7 @@ python () {
     # MED_BENCH ser ortogonal ao link.
     #
     # E a recusa é útil na outra direção também: MED_BENCH sem "usb" não
-    # produz kernel-module-hid-mcp2210 nem CONFIG_HID_MCP2210, então seria uma
+    # produz o módulo da ponte nem o seu símbolo Kconfig, então seria uma
     # imagem de bancada sem a ponte que a bancada mede.
     link = (d.getVar('MED_EEG_LINK') or '').strip()
     if link != 'usb':

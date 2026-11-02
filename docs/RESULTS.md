@@ -1629,6 +1629,13 @@ Registrado explicitamente para que a ausência não seja lida como resultado:
   Mapa de registradores do ADS1299, opcodes e deslocamentos do MCP2210, VID/PID. Estão marcadas nos
   fontes e agrupadas para que conferir seja uma passada só; enquanto não for, qualquer medida feita
   com esses drivers estaria medindo a interpretação do datasheet junto com o hardware.
+- **Fronteiras entre camadas: o que a checagem não vê** (§11). Uma dependência que não passa pelo
+  BitBake (`dlopen`, um caminho montado em execução); conhecimento de máquina escrito sem nenhum dos
+  padrões de F6 (um offset sem `--offset`, um nome de placa que ainda não existe em nenhum
+  `conf/machine/`); um valor injetado por um arquivo KAS de projeto (fora do escopo por definição,
+  D7); comentários, para F6 (contados, não reprovados, D1); e um perfil que não está na lista do
+  `make check-layers-graph`. O nível B cobre sete perfis; `LINK=simulated` na placa não é um perfil
+  que o `Makefile` aceite, e não foi coletado.
 
 ---
 
@@ -1680,3 +1687,132 @@ breve de `active` a cada tentativa — ela dava PASS para um serviço em *crash 
 caso que existia para pegar. Só a injeção de falha da §7 revelou isso. **Uma asserção que nunca viu
 a falha que procura é uma afirmação, não uma verificação**, e o mesmo ceticismo vale para as outras
 vinte.
+
+---
+
+## 11. Fronteiras entre camadas, verificadas na construção (2026-11-02)
+
+O TCC afirma que as fronteiras da `MedStack` são **impostas e verificadas durante a construção**.
+Até esta data isso não era verdade: a regra 1 do `CLAUDE.md` dizia de si mesma *"no build will
+report it"*. Plano e decisões: `docs/implementation_plan_layer_check.md` (regras F1-F9 no §3,
+decisões D1-D8 no §9, registro no §10).
+
+### Método
+
+Três níveis, todos vistos falhando antes de serem acreditados:
+
+| Nível | O que lê | Onde roda | Comando | Tempo |
+|---|---|---|---|---|
+| A | o texto das camadas `meta-custom/meta-med-*` | host, sem kas | `make check-layers` (também dentro de `make test`) | 0,27-0,30 s (3 rodadas) |
+| B | o que o BitBake resolveu: `bitbake -g` (grafo de tarefas), `bitbake-layers show-appends`, `bitbake -e` | container kas, 7 perfis | `make check-layers-graph` | primeira coleta de uma configuração nova: 65-163 s por perfil, 12 min 18 s no total; com o parse em cache: 26-53 s, 5 min 37 s |
+| C | o nível A como tarefa da imagem | dentro do `bitbake` | `do_med_layer_check`, antes do `do_rootfs` (`meta-med-distro/classes-recipe/med-layer-guard.bbclass`) | uma vez por mudança de conteúdo das camadas |
+
+Regras implementadas: F1 (postos em `LAYERDEPENDS`), F2 (adjuntas), F3 (`bbappend`), F4 (arestas do
+grafo efetivo, só nível B), F5 (regra 6), F6 (máquina/bootloader/console/nó de disco acima do BSP,
+fora de comentário), F7 (*part number*, comentários incluídos), F8 (drivers com nome de transporte),
+F9 (nomes de dispositivo numerados em qualquer camada, comentários incluídos, exceto com o marcador
+`measured:`). Uma exceção, com motivo e data (`rauc-conf.bbappend`, `uboot|barebox)`); uma exceção
+sem uso ou sem motivo reprova.
+
+### Resultado — a árvore reprovava (antes da correção)
+
+`python3 scripts/med-layer-check.py` sobre a árvore de 02/11 (`HEAD` `0d7f5c5` + mudanças pendentes
+de outro trabalho): **37 ocorrências** — F6 3, F7 8, F9 26 —, todas no código commitado.
+
+- **F7 (regra 9) estava quebrada**, em 8 linhas: 2 comentários na receita do serviço (o que o plano
+  já sabia) e **6 no `meta-med-distro`** (o que o plano não sabia: `CONFIG_TI_ADS1299`, "o MCP2210 só
+  está no…", `kernel-module-hid-mcp2210`, `ti-ads1299`), onde a regra só admite nome de documento e
+  da camada adjunta.
+- **F9 era mais larga do que o plano medira**: 26 ocorrências em 4 camadas (não 3 arquivos do BSP),
+  e **duas em código no framework**: os drivers `rpmsg` e `iio` caíam em `/dev/rpmsg0` e
+  `/dev/iio:device0` com endereço vazio — o segundo logo acima de um comentário explicando por que um
+  nó numerado é um erro. Nenhum perfil chegava nesses padrões; agora os dois drivers recusam endereço
+  vazio na criação (`tests/framework`, 1727 verificações, 0 falhas; a recusa desligada dá 3 falhas).
+- F6: as duas `DESCRIPTION` que nomeavam a máquina e a SoC (uma delas afirmando portabilidade
+  nomeando as duas máquinas, e ainda dizendo Cortex-M4).
+
+Contagem informativa de F6 em comentário, que não reprova (D1): distro 38, framework 4, app 4.
+
+### Resultado — injeção de falha (nível A)
+
+`make -C tests/layer-check check`: **26 casos, 0 falhas** (I1-I19 do plano mais 7), cada um uma cópia
+de `meta-custom` com uma violação, comparada com a linha de base; o caso passa só se o achado novo é
+exatamente o esperado (regra, arquivo, trecho da mensagem) e nada mais. Mira por conteúdo, nunca por
+número de linha. 7,9 s.
+
+| # | Regra | Violação | Pegou |
+|---|---|---|---|
+| I1, I2 | F1 | distro → app; BSP → distro em `LAYERDEPENDS` | F1 |
+| I3, I3b | F2 | framework → adjunta AFE; desktop → app | F2 (I3 também F7: o nome da adjunta carrega o *part number*) |
+| I4, I5 | F3 | `bbappend` do BSP sobre o serviço; da AFE sobre o framework | F3 |
+| I6 | F4 | `RDEPENDS` do serviço sobre `kernel-module-hid-mcp2210` | F5 e F7 (já no nível A) |
+| I7 | F4 | receita do BSP por variável, a do plano (`med-uboot-env-config`) | **F6** no distro, pelo `uboot` do nome — o plano esperava que só o B visse |
+| I7b | F4 | framework → `eeg-hmi-gui` por variável | só aviso no A (o caso puro de F4) |
+| I8, I9 | F5 | `libiio` no serviço; `zlib` no framework | F5 |
+| I10 | F6 | `QB_KERNEL_ROOT = "/dev/vda2"` no distro | F6 |
+| I11 | F6 | `.wks` com `loader=grub-efi` no distro | F6 ×3 (o arquivo, `bootimg-efi`, `grub-efi`) |
+| I12, I13 | F6 | `ttySTM0` numa unidade do app; `/dev/mmcblk1p8` em código do framework | F6 (I13 também F9) |
+| I14, I15, I22 | controle | `by-partlabel/med-data`; bootloader em comentário; nó numerado com `measured:` | **nada**, como esperado |
+| I16, I17 | F7 | `ADS1299` em comentário do framework; `MCP2210` num `SUMMARY` do app | F7 |
+| I18, I19 | EX | exceção sem uso; exceção sem motivo | EX |
+| I20 | F8 | driver `max30001` | F8 |
+| I21 | F9 | `mmcblk0` num comentário de adjunta, sem marcador | F9 |
+| I23, I24 | F5, F1 | receita de aplicação não classificada; camada `meta-med-*` não classificada | F5, F1 |
+
+### Resultado — replay histórico em `dd58dd6`
+
+`git worktree add … dd58dd6; python3 scripts/med-layer-check.py --root <worktree>/meta-custom`:
+reprova, como o critério do plano exige, **`med-image-base.bb:89` (`/dev/vda2`), `med-partitions.wks:29`
+(`ttyS0`) e `:40` (`grub-efi`, `bootimg-efi`), e o `.wks` estar fora do BSP**. A checagem, aplicada
+retroativamente, teria reprovado as duas violações de agosto, que só foram descobertas quando um
+segundo alvo precisou de outra resposta. Achou também o que o plano não listava: `by-partlabel/esp`
+em `med-data-provision.sh:34` (o exemplo que a regra 1 cita) e `/dev/rpmsg0` em código na unidade do
+serviço, no `eeg.conf` e no framework — corrigidos depois por outro caminho. Total: F6 9, F9 6, e EX 1
+(a exceção de hoje não existia lá, como esperado).
+
+### Resultado — nível B, sete perfis
+
+`make check-layers-graph`: **0 violações** em `eeg-qemu`, `eeg-stm32-amp`, `eeg-stm32-spi`,
+`eeg-stm32-usb` (`KERNEL=med`), `tomograph`, `host-usb` e `host-simulated` (319-393 receitas e
+10.442-13.491 arestas por perfil). As arestas da pilha para adjuntas são 0 (tomógrafo), 1 (host),
+15 (QEMU) e 16-18 (placa, conforme o link), **todas por variável-gancho**. Os `DEPENDS` expandidos,
+sem as ferramentas de build, são os que o texto declara: serviço `med-framework-api`; HMI `qtbase
+qtdeclarative med-framework-api`; framework `systemd openssl med-amp-abi`. `host-usb` e
+`host-simulated` dão o mesmo grafo, com o link certo em cada um (`MED_EEG_DRIVER` `iio`/`simulated`):
+no container o link só muda configuração.
+
+Dois falsos positivos do próprio analisador foram corrigidos antes desse resultado e valem como
+dado: o `do_rootfs` e o `do_rm_work_all` de uma imagem dependem do fecho inteiro (13 arestas para o
+`meta-med-desktop` que chegavam pelo `med-desktop-session`, nomeado por `MED_GUI_COMPOSITOR`); e um
+`uboot` vindo de `${MED_BSP_INSTALL}` no `IMAGE_INSTALL` foi atribuído a outra atribuição da mesma
+variável, cuja referência era vazia.
+
+**Injeção contra o nível B** (I4-I10 de uma vez na árvore real, perfil QEMU recoletado, árvore
+restaurada com os hashes conferidos): **8 achados, todos os esperados** — F3 ×2 (I4, I5), F4 do
+serviço para `med-afe-modprobe` fora de imagem (I6), **F4 do framework para `eeg-hmi-gui` por
+variável (I7b, o que o nível A só avisava)**, F5 `libiio` (I8) e `med-afe-modprobe` (I6), F5 `zlib`
+(I9), F6 `QB_KERNEL_ROOT` (I10).
+
+### Resultado — nível C
+
+- **Caminho 2, implementado.** `do_med_layer_check` é assinada pelo **conteúdo** de cada arquivo das
+  camadas e do checador (`[file-checksums]`, que percorre diretórios) e roda antes do `do_rootfs`
+  (o grafo confirma a aresta). `bitbake -c med_layer_check med-image-eeg`: passa; com
+  `QB_KERNEL_ROOT = "/dev/vda2"` no distro, **falha** com `the MedPlatform layer boundary is
+  violated - the image is not built` e a linha F6 exata; revertido, volta ao carimbo da rodada limpa;
+  sem mudança, não roda. `[nostamp]` foi rejeitado: o manual do BitBake diz que toda tarefa que
+  depende de uma `nostamp` roda sempre, e o `do_rootfs` rodaria a cada build. O preço do desenho
+  escolhido é o inverso: uma mudança só de comentário numa camada faz o `do_rootfs` rodar uma vez.
+- **Caminho 1, investigado e testado, não implementado (D4).** Uma classe com tratador em
+  `bb.event.BuildStarted` (o precedente é o `uninative.bbclass:22` do poky, que chama `bb.fatal` ali),
+  carregada por `bitbake -R` sobre uma cópia com a violação: o build **para antes de qualquer tarefa**
+  (`-c fetch med-amp-abi`, saída 1, sem "Tasks Summary"); com a árvore limpa, segue. Vale para
+  qualquer alvo, não só imagens, e é a opção se a frase do TCC tiver de ser "o BitBake recusa".
+
+### O que isso significa — e o que não significa
+
+Significa que as regras 1, 6 e 9 do `CLAUDE.md` deixaram de ser recomendações: um alvo as reprova em
+menos de um segundo, `make test` o executa, nenhuma imagem é gerada com uma delas violada, e cada
+regra foi vista reprovando. **Não** significa que a fronteira esteja provada: a checagem é por padrões
+e por grafo, e o §9 lista o que ela não vê. E a frase defensável é "verificadas a cada construção de
+imagem", não "pelo BitBake em qualquer alvo" — esta exigiria o caminho 1.

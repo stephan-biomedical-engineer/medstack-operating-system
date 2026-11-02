@@ -8,6 +8,10 @@ LICENSE = "MIT"
 
 inherit core-image
 
+# No image is built while a layer boundary is broken: the layer-boundary check
+# runs before do_rootfs (classes-recipe/med-layer-guard.bbclass).
+inherit med-layer-guard
+
 # Immutable rootfs is the default, not an option: it is what makes the A/B
 # update story sound (the running slot cannot drift from the slot that was
 # validated) and what bounds the effect of a compromised application.

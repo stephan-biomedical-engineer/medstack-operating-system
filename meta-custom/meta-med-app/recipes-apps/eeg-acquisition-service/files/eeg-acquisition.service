@@ -83,7 +83,7 @@ ReadWritePaths=/data
 # for every board. A class is a statement about what kind of hardware this
 # service may talk to, which is what the sandbox is for.
 #
-# The rpmsg entry used to be "/dev/rpmsg0", plus /dev/rpmsg_ctrl0, which the
+# The rpmsg entry used to be the kernel's numbered node plus its control node, which the
 # service never opens (it has no ioctl path). Once the address became a udev
 # link to whichever rpmsgN the co-processor's channel got, a node here would
 # have denied the device the link pointed at on any boot where N was not 0.

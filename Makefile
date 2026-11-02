@@ -243,7 +243,7 @@ endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 host host-deb \
         tomograph bundle verify-bundle bundle-disk shell runqemu \
-        runqemu-tomograph check test image-info clean purge
+        runqemu-tomograph check check-layers check-layers-graph test image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -273,6 +273,8 @@ help:
 	@echo "  shell       interactive build environment"
 	@echo "  runqemu     boot the GPT disk image, KVM accelerated, serial console"
 	@echo "  check       boot and assert on the running system (exits non-zero on failure)"
+	@echo "  check-layers  the layer-boundary rules (F1-F9) over meta-custom: no kas, seconds"
+	@echo "  check-layers-graph  the same rules over what BitBake resolved, every profile (bitbake -g/-e, minutes)"
 	@echo "  test        MedFramework host tests: no kas, no image, seconds"
 	@echo "  image-info  size and package count of the last build"
 	@echo "  clean       drop build artefacts, keep sstate and downloads"
@@ -448,6 +450,39 @@ runqemu: $(TOOL)
 check: $(TOOL)
 	python3 scripts/med-check.py eeg
 
+# The layer-boundary rules, read from the layers' text (level A of
+# docs/implementation_plan_layer_check.md). Until it existed, CLAUDE.md rule 1
+# said of its own rule that "no build will report it", and rule 9 sat broken in
+# committed code for two weeks. Python 3 only, outside the container, seconds.
+check-layers:
+	@python3 scripts/med-layer-check.py
+
+# Level B: the same rules over what BitBake resolved - the task graph, the
+# bbappends applied and the expanded values - for every profile, because what
+# an image depends on changes with the link. bitbake -g and -e only, never -n.
+# LINK=usb needs ./linux-med (the bridge's driver) and is skipped without it.
+GRAPH := python3 ../scripts/med-layer-graph.py
+ifeq ($(NATIVE),1)
+  graph_kas = $(1) $(KAS)
+  GRAPH_KGIT := git://$(CURDIR)/linux-med;protocol=file;branch=$(shell git -C linux-med branch --show-current 2>/dev/null)
+  GRAPH_USB_ENV := MED_EEG_LINK=usb MED_KERNEL_GIT='$(GRAPH_KGIT)' MED_KERNEL_SRCREV=$(shell git -C linux-med rev-parse HEAD 2>/dev/null)
+else
+  graph_kas = $(KAS) $(foreach e,$(1),--runtime-args "-e $(e)")
+  GRAPH_KGIT := git:///work/linux-med;protocol=file;branch=$(shell git -C linux-med branch --show-current 2>/dev/null)
+  GRAPH_USB_ENV := MED_EEG_LINK=usb MED_KERNEL_GIT=$(GRAPH_KGIT) MED_KERNEL_SRCREV=$(shell git -C linux-med rev-parse HEAD 2>/dev/null)
+endif
+check-layers-graph: $(TOOL)
+	$(KAS) shell $(QEMU_CFG) -c "$(GRAPH) collect eeg-qemu med-image-eeg"
+	$(call graph_kas,MED_EEG_LINK=amp) shell $(STM32_CFG) -c "$(GRAPH) collect eeg-stm32-amp med-image-eeg"
+	$(call graph_kas,MED_EEG_LINK=spi) shell $(STM32_CFG) -c "$(GRAPH) collect eeg-stm32-spi med-image-eeg"
+	@if [ -d linux-med/.git ]; then \
+	  $(call graph_kas,$(GRAPH_USB_ENV)) shell $(STM32_CFG) -c "$(GRAPH) collect eeg-stm32-usb med-image-eeg"; \
+	else echo "eeg-stm32-usb skipped: no ./linux-med"; rm -rf $(KAS_BUILD_DIR)/layer-graph/eeg-stm32-usb; fi
+	$(KAS) shell $(TOMO_CFG) -c "$(GRAPH) collect tomograph med-image-tomograph"
+	$(call graph_kas,MED_EEG_LINK=usb) shell $(HOST_CFG) -c "$(GRAPH) collect host-usb med-image-eeg-host"
+	$(call graph_kas,MED_EEG_LINK=simulated) shell $(HOST_CFG) -c "$(GRAPH) collect host-simulated med-image-eeg-host"
+	cd $(KAS_BUILD_DIR) && $(GRAPH) analyze
+
 # The host-side functional tests. No kas, no container, no image: they compile
 # the sources under test for the host and run in seconds, which is what makes
 # them the inner loop `check` cannot be.
@@ -485,6 +520,8 @@ test:
 	@$(MAKE) --no-print-directory -C tests/hmi check
 	@$(MAKE) --no-print-directory -C tests/amp-bench check
 	@$(MAKE) --no-print-directory -C tests/derive check
+	@$(MAKE) --no-print-directory -C tests/layer-check check
+	@python3 scripts/med-layer-check.py
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform
