@@ -250,7 +250,7 @@ Cada fase tem critério, injeção de falha e onde o número é registrado.
 
 - Marcar o commit de base (`git tag base-infusao`). **Todas** as métricas de M1 são diferença a
   partir dele.
-- Registrar o estado do EEG nesse commit: `make check` (37/37), testes de host (`make test`) e as
+- Registrar o estado do EEG nesse commit: `make check` (39 asserções desde o selo; 37 quando este plano foi escrito), testes de host (`make test`) e as
   listas de pacotes dos dois perfis atuais, **do mesmo commit** (a lição de `RESULTS.md` §2,
   "Uma correção").
 - Contar o vocabulário de classe no framework antes (L3, M2).
@@ -281,7 +281,7 @@ Na ordem, cada uma com teste de host antes de qualquer receita:
 
 **Critério**:
 - `make test` verde;
-- `make check` do EEG continua 37/37, porque o framework mudou e o EEG não pode regredir;
+- `make check` do EEG continua igual ao da base (§13: 38/39, só `journal-sealed` falhando, até D11 do plano de conformidade), porque o framework mudou e o EEG não pode regredir;
 - `make check-layers` sem violação;
 - a busca por `infus\|pump\|syringe\|seringa\|occlu\|oclus\|vtbi\|bolus` em `meta-med-framework`
   volta vazia.
@@ -328,7 +328,7 @@ instalação), `kas/project-infusion-qemu.yml` e os alvos de D11. As receitas no
 
 ### Fase 7 — suíte de aceitação, perfil `infusion`
 
-Todas as asserções de plataforma (as 11 que o tomógrafo já passa), **sem mudar uma linha**, mais
+Todas as asserções de plataforma (13 desde o selo do journal; eram 11), **sem mudar uma linha**, mais
 as da bomba. Cada asserção da bomba tem de ser vista falhar com o defeito injetado.
 
 | Asserção | O que verifica | Injeção que tem de fazê-la falhar |
@@ -383,8 +383,8 @@ Fica declarado como trabalho futuro se não for feito.
 | M4 | Linhas de código próprias de cada classe vs. herdadas | contagem por diretório (código, sem comentário) | aplicação ≪ framework + plataforma | linhas não medem complexidade nem risco |
 | M5 | Reuso de build | sumário de sstate do bitbake ao construir a bomba depois do EEG | a maioria das tarefas vem do sstate | depende do estado do cache; o método tem de fixar esse estado |
 | M6 | Uso das APIs | quais `Medical*` cada aplicação chama | as duas classes usam o núcleo; cada uma ignora partes | "não usar" pode ser lacuna da aplicação, não do framework |
-| M7 | Asserções de plataforma no perfil novo | `med-check.py infusion` | 11/11 sem mudar uma linha | — |
-| M8 | Não regressão do EEG | `make check` e `make test` depois da Fase 2 | 37/37 | — |
+| M7 | Asserções de plataforma no perfil novo | `med-check.py infusion` | as 13 de plataforma, com o mesmo resultado do tomógrafo na base, sem mudar uma linha | — |
+| M8 | Não regressão do EEG | `make check` e `make test` depois da Fase 2 | o resultado da base (§13) | — |
 | M9 | Requisitos técnicos herdados | §9 | maioria herdada com 0 linhas | — |
 | M10 | Superfície de adaptação do perfil | variáveis que o projeto KAS da bomba define | nenhuma `MED_EEG_*` | se precisar de uma, é achado (L5) |
 
@@ -414,7 +414,7 @@ Mais os RTs `INF-xx` da Fase 1. O número que sai disso é o mais forte do traba
   é dado de M2. Invalida a expectativa "framework pequeno", e o texto mostra o número que saiu, não
   o esperado.
 - **R2. O EEG regredir por mudança no framework.** Mitigado pelo critério da Fase 2: `make check`
-  37/37 antes de seguir.
+  com o resultado da base (§13) antes de seguir.
 - **R3. A simulação ser criticada como rasa.** Mitigado por declarar o que ela é (§1, §12) e por
   medir o software, não a física: as asserções verificam reação a falhas, não exatidão de entrega.
 - **R4. A HMI sair cara.** Ela é a parte de menor valor para as métricas. A `infusion-ctl` sustenta
@@ -452,7 +452,7 @@ o resultado que a Fase 2 deve medir.
 1. Conferir o selo do journal no QEMU (`implementation_plan_conformity.md` §5, A6). Não muda
    código e não afeta nenhuma contagem.
 2. **Fase 0 deste plano, imediatamente**: o commit de base é marcado antes de qualquer mudança.
-3. Fases 1 e 2: requisitos e a interface de atuador, com testes de host e o EEG em 37/37.
+3. Fases 1 e 2: requisitos e a interface de atuador, com testes de host e o EEG no resultado da base.
 4. O plano de conformidade continua **em commits separados**, cada um com a linha
    `Profile: conformity` no fim da mensagem. M1 deste plano soma só os commits **sem** essa linha:
 
@@ -484,7 +484,7 @@ Pontos de parada que deixam um resultado defensável:
 
 | Estado | Afirmação defensável |
 |---|---|
-| Fase 7 + 8 | "Uma segunda classe de dispositivo, um atuador de classe C (hipótese), foi construída sobre a mesma plataforma. Ela alterou *a* linhas no framework, todas genéricas e classificadas, e zero nas camadas de SO e de placa. Herdou *k* dos *N* requisitos técnicos sem trabalho específico, e passou as 11 asserções de plataforma sem mudança." |
+| Fase 7 + 8 | "Uma segunda classe de dispositivo, um atuador de classe C (hipótese), foi construída sobre a mesma plataforma. Ela alterou *a* linhas no framework, todas genéricas e classificadas, e zero nas camadas de SO e de placa. Herdou *k* dos *N* requisitos técnicos sem trabalho específico, e passou as 13 asserções de plataforma sem mudança." |
 | Fase 9 | "...e executa nos dois alvos sem diferença de código de aplicação." |
 | Fase 10 | "...com o laço de segurança do atuador no coprocessador de tempo real." |
 
@@ -496,4 +496,79 @@ não é, e a medida honesta é quanto).
 
 ## 13. Registro de execução
 
-*(vazio; preenchido fase a fase)*
+### Fase 0 — linha de base (2026-11-05)
+
+**Commit de base**: `git tag -a base-infusao` em `b1344a7` (o selo do journal, último commit antes
+da bomba). Todas as medições abaixo são desse commit; as duas imagens foram construídas a partir
+dele no mesmo dia (`make qemu`: 6580 tarefas, nenhuma refeita; `make tomograph`: 5639, 61 refeitas).
+
+**Testes de host** (`make test`, 0 falhas em todas):
+
+| Suíte | Verificações |
+|---|---|
+| `tests/framework` | 1727 |
+| `tests/mcp2210` | 452 |
+| `tests/ads1299` (driver da placa / branch do PR) | 1875 / 590 |
+| `tests/m33-producer` | 322 |
+| `tests/eeg-export` | 117 |
+| `tests/hmi` | 60 |
+| `tests/amp-bench` | 13 |
+| `tests/derive` | 1466 |
+| `tests/layer-check` | 26 injeções; `make check-layers` F1–F9 ok |
+
+`tests/ads1299` relata "1 defeito confirmado, 0 resolvido", anterior a este plano.
+
+**Suíte de execução** (`make check`, QEMU), 13 asserções de plataforma + 26 do EEG:
+
+| Perfil | Resultado | Observação |
+|---|---|---|
+| EEG (`make check`) | **38/39** | só `journal-sealed`: 6 de 10 arquivos selados não verificam. Falso positivo do systemd 255 (`implementation_plan_conformity.md` §5 A8), e o número cresce cerca de 2 por boot |
+| tomógrafo (`med-check.py tomograph`) | **13/13** | imagem nova, então era o boot de provisionamento do selo, o único em que o A8 ainda não aparece |
+
+Critério de não regressão daqui em diante (M8): o EEG com 38/39 e `journal-sealed` como única
+falha; o tomógrafo e a bomba com as 13 de plataforma, e o selo julgado como no EEG, até D11.
+
+**Pacotes** (`installed-package-names.txt` do `buildhistory`, método de `RESULTS.md` §2):
+
+| | Pacotes | `IMAGESIZE` |
+|---|---|---|
+| `med-image-eeg` | 239 | 311.492 KB |
+| `med-image-tomograph` | 207 | 275.772 KB |
+| em comum | 204 | — |
+| só no EEG | 35 | — |
+| só no tomógrafo | 3 (`weston`, `weston-init`, `libweston-13-0`) | — |
+
+O tomógrafo **deixou de ser subconjunto** do EEG. Desde a estação de bancada, o EEG em QEMU usa
+`MED_GUI_COMPOSITOR = "med-desktop-session"` (`kas/project-eeg-qemu.yml`), e os 35 pacotes só do
+EEG são, em maioria, o desktop (`labwc`, `wlroots`, `sfwbar`, `pcmanfm-qt`, GTK) e o revisor
+(`edfbrowser`, `med-review`). As aplicações do EEG são `eeg-acquisition-service` e `eeg-hmi-gui`,
+mais `packagegroup-med-amp`. A bomba tem de ser medida contra um perfil com o **mesmo**
+compositor, ou o delta de pacotes mede a escolha de tela e não a classe: decisão para a Fase 5.
+
+**Vocabulário de classe no framework** (M2b, L3), em `meta-custom/meta-med-framework` (17 arquivos
+`.h`/`.cpp`), sem distinção de maiúsculas:
+
+```bash
+P='lead.?off|electrode|biosignal|\bBDF|\bEEG|montage|biopotential'
+grep -rhEi "$P" meta-custom/meta-med-framework --include=*.h --include=*.cpp | wc -l
+```
+
+| | Linhas | em código | em comentário | Arquivos |
+|---|---|---|---|---|
+| EEG / biopotencial | 136 | 96 | 40 | 7 |
+| bomba (`infus`, `syringe`, `plunger`, `occlu`, `bolus`, `pump`) | 0 | 0 | 0 | 0 |
+
+Por arquivo, para o EEG: `MedicalDevice.cpp` 49, `MedicalStorageBiosignal.cpp` 40,
+`MedicalStorage.h` 20, `med_amp_abi.h` 15, `MedicalDevice.h` 9, `MedicalLogger.h` 2,
+`MedicalLogger.cpp` 1. Os identificadores mais frequentes são `BiosignalWriter` (23), `leadOff`
+(17), `BDF` (17) e `med_amp_lead_off` (10). Duas menções em comentário que não são vocabulário de
+bomba, mas importam para ela: o DERS ("dose error reduction", `MedicalConfiguration.h:14`), que é
+um conceito nascido nas bombas de infusão, e o cabeçalho de `MedicalDevice.h`, que se declara
+"sensor and actuator abstraction" e não tem atuador (L1).
+
+**D6**: o tomógrafo fica como perfil de base, como proposto. A troca de nome continua aberta com
+o autor.
+
+**Achado lateral**: o `RESULTS.md` §2 dizia que o tomógrafo passa "11/11 [...] journal persistente
+e selado" e que é subconjunto estrito do EEG. As duas coisas estavam desatualizadas e foram
+corrigidas lá, com estes números.

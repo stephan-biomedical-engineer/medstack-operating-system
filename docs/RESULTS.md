@@ -55,6 +55,26 @@ O `diff` produz apenas remoções: o conjunto do tomógrafo é **subconjunto est
 EEG. Os três pacotes de diferença são `eeg-acquisition-service`, `eeg-hmi-gui` e
 `packagegroup-med-amp`.
 
+### Atualização (2026-11-05, commit `base-infusao`): o tomógrafo deixou de ser subconjunto
+
+Medido de novo, com o mesmo método, nas duas imagens construídas do mesmo commit:
+
+| | Pacotes instalados | `IMAGESIZE` |
+|---|---|---|
+| `med-image-eeg` | 239 | 311.492 KB |
+| `med-image-tomograph` | 207 | 275.772 KB |
+| em comum | 204 | — |
+
+São 35 pacotes só no EEG e 3 só no tomógrafo (`weston`, `weston-init`, `libweston-13-0`). A tabela
+acima é de antes da estação de bancada. Desde então o EEG em QEMU usa o desktop do
+`meta-med-desktop` (`MED_GUI_COMPOSITOR`), e o tomógrafo continua com o weston, então a diferença
+mistura a aplicação com a escolha de tela. O delta de **aplicação** do EEG continua sendo
+`eeg-acquisition-service`, `eeg-hmi-gui` e `packagegroup-med-amp`, mais o revisor (`edfbrowser`,
+`med-review`) que veio com a estação. A suíte de plataforma tem 13 asserções desde o selo do
+journal, e o tomógrafo passou **13/13** no primeiro boot de uma imagem nova. Esse é o boot de
+provisionamento do selo, o único em que o falso positivo do §5 ainda não aparece. Registro
+completo: `implementation_plan_infusion_pump.md` §13, Fase 0.
+
 ### O que isso significa — e o que não significa
 
 **Não** apresente como "os dois perfis compartilham 98,6%". O tomógrafo **não instala nenhuma
@@ -77,7 +97,7 @@ de lógica de dispositivo. Uma nova classe de dispositivo parte de 206 pacotes f
 acrescenta apenas a própria aplicação.
 
 E isso deixou de ser inferência sobre listas de pacotes: **`python3 scripts/med-check.py tomograph`
-boota a imagem do tomógrafo e passa 11/11** nas asserções de plataforma — journal persistente e selado, slots A/B
+boota a imagem do tomógrafo e passa 11/11** nas asserções de plataforma — journal persistente (o "e selado" que estava aqui era falso, ver §5), slots A/B
 resolvidos, as quatro partições GPT, e o volume `/data` provisionado, montado e criptografado. Um
 sistema completo, em execução, com zero aplicações instaladas.
 
