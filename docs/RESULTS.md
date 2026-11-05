@@ -764,13 +764,78 @@ reboot && journalctl --list-boots
 ### Resultado
 
 `/var/log/journal` é diretório real com setgid `systemd-journal`; `journalctl --verify` retorna
-`PASS` (o *Forward Secure Sealing* valida); e `--list-boots` lista o boot anterior depois de um
-reboot.
+`PASS`; e `--list-boots` lista o boot anterior depois de um reboot.
 
-**O que isso demonstra**: a persistência e o selo do journal funcionam de ponta a ponta. Isto é
-teste de regressão de um defeito real — o `VOLATILE_LOG_DIR` default do OE transformava `/var/log`
-em symlink para um tmpfs, descartando a trilha a cada boot e anulando em silêncio o
-`Storage=persistent`/`Seal=yes` do `10-journald-audit.conf`.
+**O que isso demonstra**: a **persistência** do journal funciona de ponta a ponta, e os arquivos são
+estruturalmente íntegros. Isto é teste de regressão de um defeito real — o `VOLATILE_LOG_DIR`
+default do OE transformava `/var/log` em symlink para um tmpfs, descartando a trilha a cada boot e
+anulando em silêncio o `Storage=persistent` do `10-journald-audit.conf`.
+
+### Correção (2026-11-02): o journal **não** é selado
+
+Este parágrafo dizia "`journalctl --verify` retorna `PASS` (o *Forward Secure Sealing* valida)", e
+o selo não existe. Medido no QEMU, imagem `med-image-eeg` de 2026-10-13 (systemd 255, `+GCRYPT`),
+pelo console serial, sem alterar nada:
+
+```bash
+grep -rh '^Seal' /etc/systemd/journald.conf.d/   # Seal=yes
+ls /var/log/journal/*/fss                        # No such file or directory
+journalctl --header | grep 'Compatible flags'    # TAIL_ENTRY_BOOT_ID, nos 6 arquivos
+journalctl --verify                              # PASS nos 6
+```
+
+`Seal=yes` só sela quando existe a chave que `journalctl --setup-keys` gera em
+`/var/log/journal/<machine-id>/fss`, e nada neste repositório executa esse comando. Sem chave, o
+journald grava sem selo e não avisa: a busca por `seal|fss|key` no log do `systemd-journald`
+volta vazia. Um arquivo selado traria `SEALED` em `Compatible flags`, e nenhum dos seis traz.
+E o `PASS` do `--verify` não contradiz isso: sem `--verify-key=`, ele confere a estrutura do
+arquivo, não um selo. O próprio `med-check.py` (asserção `journal-integro`) já registrava isso.
+
+**O que muda**: a trilha é persistente e estruturalmente íntegra; **não** é *tamper-evident* pelo
+SO. A outra metade da evidência de adulteração, a cadeia SHA-256 do `MedicalLogger`, é gravada em
+cada registro e não tem verificador
+(`implementation_plan_conformity.md` §5, A2). Hoje, portanto, **nenhum** dos dois mecanismos de
+detecção de adulteração da trilha está demonstrado. A correção é a Fase 2 daquele plano.
+
+**Na placa**: não medido. O mesmo `10-journald-audit.conf` e a mesma ausência de `--setup-keys`
+valem para o STM32MP257, então o resultado esperado é o mesmo; o `PASS` registrado lá
+(`BRINGUP_STM32MP2.md` §9) é o mesmo `--verify` sem chave, e diz o mesmo que este: estrutura.
+
+### Selo provisionado (2026-11-03): sela, e o systemd 255 reprova arquivos íntegros
+
+**Método**: a receita `med-journal-seal` (`meta-med-distro`) roda `journalctl --setup-keys
+--interval=15min` no primeiro boot de cada `machine-id`, gira o journal e deixa a chave de
+verificação em `/run/med-journal-seal/verify-key` (tmpfs, `0400`), nunca no journal nem no disco.
+Duas asserções novas do `make check`:
+
+```bash
+make check     # journal-seal-key: recolhe a chave para build/med-journal-keys/<machine-id>.key
+               # journal-sealed:  para cada system@*.journal com SEALED,
+               #   journalctl --verify --verify-key=<chave>        --file=<f>   -> tem de passar
+               #   journalctl --verify --verify-key=<chave errada> --file=<f>   -> tem de falhar
+```
+
+**Resultado**, QEMU, `med-image-eeg`, systemd 255.21:
+
+| Boot | `journal-seal-key` | `journal-sealed` | Total |
+|---|---|---|---|
+| 1º (provisionamento) | passa, chave recolhida | passa: todo arquivo selado valida com a chave e é recusado com a errada | 38/39 (`journal-integro`, corrigido depois) |
+| 2º | passa, chave de um boot anterior | **falha**: 2 de 5 selados não validam com a chave certa | 38/39 |
+
+Os dois arquivos que falham, sondados pelo console (só leitura): o que estava ativo no
+desligamento, reaberto no boot seguinte (`Epoch sequence not continuous (0 vs 0)`), e o que
+recebeu o descarregamento de `/run` no boot (`Tag failed verification` na etiqueta 1). Os girados
+no meio da execução sempre passam. Os desligamentos foram limpos, e nada tocou os arquivos.
+A primeira mensagem tem causa lida no código do systemd (o verificador só aceita a mesma época em
+duas etiquetas quando o arquivo tem uma etiqueta só, e cada fechamento grava uma). A segunda é
+hipótese (`implementation_plan_conformity.md` §5, A8).
+
+**O que isso demonstra**: o journal passa a ser selado, a chave de verificação sai do dispositivo
+e o selo recusa uma chave errada. **O que não demonstra**: que uma adulteração é detectada. Com
+esta versão do systemd, o `FAIL` aparece também na operação normal, e um verificador que reprova
+um desligamento comum não distingue adulteração de rotina. A injeção de falha das duas asserções
+e o byte alterado num arquivo selado ainda não foram feitos. Na placa: não medido. O caminho está
+na decisão D11 daquele plano.
 
 ---
 

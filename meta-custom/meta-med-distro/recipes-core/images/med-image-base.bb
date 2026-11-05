@@ -33,6 +33,7 @@ IMAGE_INSTALL = " \
 MED_OS_INSTALL = " \
     rauc \
     med-data-volume \
+    med-journal-seal \
     cryptsetup \
     util-linux-blkid \
     util-linux-lsblk \

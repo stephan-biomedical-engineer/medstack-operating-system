@@ -1,0 +1,26 @@
+[Unit]
+Description=MedOS journal sealing key provisioning (Forward Secure Sealing)
+Documentation=file:/usr/libexec/medplatform/med-journal-seal.sh
+
+# Early, so that what the system and the applications log from sysinit on is
+# sealed. The journal has to be on persistent storage first: the key lives in
+# the persistent journal directory of this machine-id.
+DefaultDependencies=no
+Requires=systemd-journal-flush.service
+After=systemd-journal-flush.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+# Once per machine-id. A skipped unit is the normal state of every boot after
+# the first, not a fault; a unit that runs and fails is a fault, and the
+# acceptance suite's failed-units check sees it.
+ConditionPathExists=!/var/log/journal/%m/fss
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+UMask=0077
+ExecStart=/usr/libexec/medplatform/med-journal-seal.sh
+
+[Install]
+WantedBy=sysinit.target

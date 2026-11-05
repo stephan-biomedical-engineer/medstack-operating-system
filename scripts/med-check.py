@@ -87,21 +87,105 @@ def check_journal_integrity(out):
 
     Note also what the old name claimed and this one does not. "Forward Secure
     Sealing valida" was never what ran: verifying seals needs --verify-key=,
-    which the command never passed, so a sealed file reports "Required key not
-    available" rather than validating. What is measured here is structural
-    integrity. Sealing is asserted by RESULTS.md §5 on other evidence.
+    which this command does not pass. What is measured here is structural
+    integrity of the files that carry no seal.
+
+    Since 2026-11-02 the journal really is sealed (med-journal-seal.service),
+    and a sealed file verified without the key reports "Required key not
+    available" - observed on the first run after the fix, 38/39 with this
+    check the only failure. That line is not corruption and is not counted as
+    one here; it is not counted as a pass either. Sealed files belong to
+    journal-sealed, which verifies them with the device's key and checks that
+    a wrong key is refused. Any other FAIL reason on an archived file still
+    fails this check.
     """
     lines = [l.strip() for l in out.splitlines() if l.strip()]
     passed = [l for l in lines if l.startswith("PASS:")]
     failed = [l for l in lines if l.startswith("FAIL:")]
     archived_failed = [l for l in failed if not l.split()[1].endswith("/system.journal")]
+    sealed = [l for l in archived_failed if l.endswith("(Required key not available)")]
+    broken = [l for l in archived_failed if l not in sealed]
 
-    if archived_failed:
-        return False, "journal arquivado não verifica: " + "; ".join(archived_failed)
-    if not passed:
+    if broken:
+        return False, "journal arquivado não verifica: " + "; ".join(broken)
+    if not passed and not sealed:
         return False, "nenhum journal verificou (saída: %s)" % (lines or "(vazia)")
-    return True, "%d arquivo(s) verificam, %d ativo(s) ignorado(s)" % (
-        len(passed), len(failed))
+    return True, "%d sem selo verificam; %d selado(s), para journal-sealed; %d ativo(s) ignorado(s)" % (
+        len(passed), len(sealed), len(failed) - len(archived_failed))
+
+
+# The journal's Forward Secure Sealing (med-journal-seal.service, RESULTS.md
+# section 5, correction of 2026-11-02). The verification key must leave the
+# device, so the suite plays the factory station: on the boot that provisions a
+# machine-id it collects the key from the tmpfs hand-over file and keeps it on
+# the host, under the build directory, one file per machine-id. The QEMU disk
+# persists between runs, so later runs verify with the key collected earlier.
+# A machine-id whose key nobody collected cannot have its seals verified by
+# anyone, and the suite says so rather than passing.
+SEAL_KEYS_DIR = os.path.join(os.environ.get("KAS_BUILD_DIR", os.path.join(ROOT, "build")),
+                             "med-journal-keys")
+SEAL = {}
+
+
+def check_seal_key(out):
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    if not lines or not re.fullmatch(r"[0-9a-f]{32}", lines[0]):
+        return False, "não li o machine-id (saída: %s)" % (lines or "(vazia)")
+    mid = lines[0]
+    path = os.path.join(SEAL_KEYS_DIR, mid + ".key")
+    handed = lines[1] if len(lines) > 1 and lines[1] != "NOKEY" else None
+    if handed:
+        if not re.fullmatch(r"[0-9a-f-]+/[0-9a-f]+-[0-9a-f]+", handed):
+            return False, "a chave entregue não tem a forma de uma chave de verificação"
+        os.makedirs(SEAL_KEYS_DIR, mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(handed + "\n")
+    if not os.path.exists(path):
+        return False, ("a chave de verificação de %s nunca foi recolhida: os selos desta "
+                       "identidade não podem ser verificados" % mid)
+    with open(path) as f:
+        SEAL["key"] = f.read().strip()
+    SEAL["mid"] = mid
+    return True, ("recolhida agora" if handed else "recolhida num boot anterior") + \
+        " (%s)" % path
+
+
+def wrong_key(key):
+    # Same form, one hex digit of the seed changed: a key journalctl accepts as
+    # a key and that is not this device's. A malformed one would be refused for
+    # its form, and "refused" would then prove nothing about the seal.
+    i = 0
+    return ("0" if key[i] != "0" else "1") + key[i + 1:]
+
+
+def seal_command():
+    key = SEAL.get("key")
+    if not key:
+        return "echo 'sem chave recolhida'"
+    return (
+        "M=$(cat /etc/machine-id); journalctl --rotate >/dev/null 2>&1; sleep 2; "
+        "n=0; ok=0; ref=0; "
+        "for f in /var/log/journal/$M/system@*.journal; do "
+        "journalctl --header --file=\"$f\" 2>/dev/null | grep -q '^Compatible flags:.*SEALED' || continue; "
+        "n=$((n+1)); "
+        "journalctl --verify --verify-key=%s --file=\"$f\" >/dev/null 2>&1 && ok=$((ok+1)); "
+        "journalctl --verify --verify-key=%s --file=\"$f\" >/dev/null 2>&1 || ref=$((ref+1)); "
+        "done; echo \"sealed=$n ok=$ok wrongkey_refused=$ref\"" % (key, wrong_key(key)))
+
+
+def check_sealed(out):
+    m = re.search(r"sealed=(\d+) ok=(\d+) wrongkey_refused=(\d+)", out)
+    if not m:
+        return False, out.strip().splitlines()[-1] if out.strip() else "(vazio)"
+    n, ok, ref = map(int, m.groups())
+    if n == 0:
+        return False, "nenhum journal arquivado selado"
+    if ok != n:
+        return False, "%d de %d selados não verificam com a chave do dispositivo" % (n - ok, n)
+    if ref != n:
+        return False, "%d de %d selados verificam com uma chave errada" % (n - ref, n)
+    return True, "%d selado(s): todos verificam com a chave, nenhum com uma errada" % n
 
 
 def check_exposure(out):
@@ -152,6 +236,17 @@ PLATFORM_CHECKS = [
      "journalctl --rotate >/dev/null 2>&1; sleep 2; "
      "journalctl --verify 2>&1 | grep -E '^(PASS|FAIL):' || true",
      check_journal_integrity),
+
+    # Forward Secure Sealing, which journal-integro does not see: without the
+    # key, --verify checks structure only. The first collects the verification
+    # key (and fails if this identity's was never collected); the second needs
+    # it, so it is built when it runs.
+    ("journal-seal-key", "a chave de verificação do selo saiu do dispositivo",
+     "cat /etc/machine-id; cat /run/med-journal-seal/verify-key 2>/dev/null || echo NOKEY",
+     check_seal_key),
+
+    ("journal-sealed", "o journal é selado e o selo só valida com a chave do dispositivo",
+     seal_command, check_sealed),
 
     # rauc.service is Type=dbus with BusName=de.pengutronix.rauc, so it is
     # activated on demand and being inactive is not a fault - on a platform
@@ -671,7 +766,8 @@ def main():
     # defeito da suíte, e é melhor dito aqui, em um segundo, do que depois de
     # um boot e de um timeout de 90 s que não diz por quê. O limite do editor
     # de linha do alvo é 1024; os marcadores que run() acrescenta levam ~80.
-    too_long = [(cid, len(command)) for cid, _, command, _ in checks if len(command) > 900]
+    too_long = [(cid, len(command)) for cid, _, command, _ in checks
+                if not callable(command) and len(command) > 900]
     if too_long:
         print("FALHA: comando longo demais para o shell do alvo (limite 900): " +
               ", ".join(f"{cid} ({n})" for cid, n in too_long), file=sys.stderr)
@@ -708,6 +804,15 @@ def main():
 
         print("executando verificações ...\n", flush=True)
         for cid, claim, command, predicate in checks:
+            # A command built when it runs, from what an earlier check learnt
+            # (journal-sealed needs the key journal-seal-key collected).
+            if callable(command):
+                command = command()
+                if len(command) > 900:
+                    out = None
+                    results.append((cid, claim, False, "comando longo demais para o shell do alvo"))
+                    print(f"  FAIL  {cid:<24} {claim}")
+                    continue
             out = con.run(cid, command)
             if out is None:
                 ok, detail = False, "sem resposta do guest"
@@ -715,7 +820,9 @@ def main():
                 ok, detail = predicate(out)
             results.append((cid, claim, ok, detail))
             print(f"  {'PASS' if ok else 'FAIL'}  {cid:<24} {claim}")
-            if not ok:
+            # MEDCHECK_VERBOSE=1 prints what a passing check saw, too: the
+            # number a RESULTS.md entry quotes, not just the verdict.
+            if not ok or os.environ.get("MEDCHECK_VERBOSE") == "1":
                 print(f"        -> {detail}")
 
         con.buf = ""
