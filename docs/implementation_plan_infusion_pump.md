@@ -292,6 +292,9 @@ Na ordem, cada uma com teste de host antes de qualquer receita:
 
 **Injeção**: o homem-morto testado no host. Com o *heartbeat* parado, o driver simulado entra no
 estado seguro em até `T_hb × k`, e uma asserção que não espera isso falha.
+*Revisto na execução (§13)*: o temporizador mora do lado do produtor, então esta injeção passa para
+a Fase 3 (`infusion-sim`). A Fase 2 testa a metade do framework: a janela é declarada, exigida e
+respeitada pelo lado do controlador.
 
 ### Fase 3 — `infusion-sim`
 
@@ -578,3 +581,86 @@ o autor.
 **Achado lateral**: o `RESULTS.md` §2 dizia que o tomógrafo passa "11/11 [...] journal persistente
 e selado" e que é subconjunto estrito do EEG. As duas coisas estavam desatualizadas e foram
 corrigidas lá, com estes números.
+
+### Fase 1 — requisitos e perigos (2026-11-05)
+
+`docs/REQUISITOS_INFUSAO.md`, commit `fdd7081`. Registro no próprio documento e na Fase 1 da §7.
+
+### Fase 2 — framework (2026-11-05)
+
+Quatro commits, um por decisão, na ordem D4 → D2 → D3 → D5, cada um com os testes de host e as
+injeções antes de entrar. Todos sem a linha `Profile: conformity`.
+
+**M2, as mudanças classificadas**:
+
+| Commit | Decisão | O que | Genérica? | O EEG usa? | Linhas (framework) |
+|---|---|---|---|---|---|
+| `7ea7f2a` | D4 (L2) | unidade por canal (`DeviceConfig`/`DeviceInfo::channelUnits`, `unitOf`); `encodeFrame` com escala; o decodificador recusa escala não positiva | sim | não (recusa de escala: sim, no caminho de decodificação) | +93 −7 |
+| `df8813a` | D2 | `RpmsgDevice` vira `LinkDevice` com o transporte como parâmetro; driver `seqpacket` | sim, é um transporte | mantém `rpmsg`, e ganha teste de host dele | +50 −12 |
+| `d5a88e5` | D3 (L1) | `MedicalActuator.h`/`.cpp`: comando, sinal de vida, estado seguro, janela do homem-morto exigida, troca sem resposta encerra a sessão; driver `seqpacket` | sim | não | +476 −0 |
+| `7528cd4` | D5 (L4) | seis `AuditEvent` ao fim do enum: `AlarmRaised`, `AlarmAcknowledged`, `TherapyStarted`, `TherapyStopped`, `SafetyLimitOverridden`, `ActuatorFault` | sim | não | +32 −0 |
+
+**M1 parcial** (§11.1, `git log --numstat` sem os commits `Profile: conformity`):
+
+| Camada | Linhas | Arquivos |
+|---|---|---|
+| `meta-med-bsp` | 0 | 0 |
+| `meta-med-distro` | 0 | 0 |
+| `meta-med-framework` | +651 −19 | 7 |
+| `meta-med-app` | 0 | 0 |
+| adjuntas (`afe-ads1299`, `desktop`, `host`) | 0 | 0 |
+| `kas/` | 0 | 0 |
+
+Das 651 linhas acrescentadas ao framework, **391 são código**, 189 são comentário e 71 são
+linhas em branco. A §11.1 contou ~3800 linhas de código nos `.cpp` do framework, sem comentário.
+As 391 linhas novas incluem `.h`, então a comparação é aproximada: algo como **10%** a mais. O `med-amp-abi` não mudou: a escala por quadro já existia no formato, e
+só o codificador a fixava em 1 (achado da D4, que tornou desnecessária a versão nova do ABI que a
+opção (b) previa).
+
+**M2b depois**: vocabulário de bomba em `meta-med-framework` = 0. A primeira busca pegou o nome
+do arquivo deste plano em dois comentários, que foram reescritos. Vocabulário de EEG: inalterado.
+
+**Não regressão do EEG (M8)**: `make qemu` (6580 tarefas, 70 refeitas) e `make check`
+**39/39**. A imagem era nova, então esse foi o boot de provisionamento do selo, em que
+`journal-sealed` passa. Isso cumpre o critério da base: as outras 38 passam, e `journal-sealed` é a
+única que pode falhar, pelo falso positivo A8. O EEG usa o `rpmsg`, e no QEMU o `simulated`, sobre
+um `MedicalDevice.cpp` reescrito, e a aquisição (`acq-sample-rate` e as demais) passou inalterada.
+`make check-layers` sem violação.
+
+**Testes de host**: `tests/framework` passou de 1727 para **1890** verificações, 0 falhas. As
+outras suítes ficaram iguais à base. Injeções feitas e vistas:
+
+| Mudança | Injeção | Falhas |
+|---|---|---|
+| D4 | decodificador aceita escala ≤ 0 | 2, só as do teste de escala |
+| D4 | fábrica aceita lista de unidades de outro tamanho | 3, só as do teste de unidades |
+| D2 | acúmulo antes da resposta não é descartado | 3, só o teste de acúmulo |
+| D2 | taxa do produtor não conferida | 2, só o teste de taxa |
+| D3 | timeout não encerra a sessão | 6, só o teste de troca sem resposta |
+| D3 | `start()` sem a janela do homem-morto | 5, nos testes que conferem a janela |
+
+**Desvios do plano, decididos na execução**:
+- **D3, `readback()`**: não está na interface. O que o mecanismo faz de fato é uma medida, e chega
+  por um `MedicalDevice` no mesmo produtor. Um atuador que relatasse o próprio resultado estaria
+  dando nota a si mesmo.
+- **D3, driver simulado no framework**: não foi feito. Os testes usam um produtor falso num soquete
+  real (`tests/framework/fake_producer.h`), e o homem-morto, que mora do lado do produtor, é
+  testado na Fase 3.
+- **D3, `rpmsg` para o atuador**: não foi registrado. Fica para a Fase 10, porque um driver que
+  nada exercita não é registrado antes.
+
+**Achados**:
+- O caminho de execução do driver `rpmsg` (janela de conexão, espera da resposta de controle,
+  descarte do acúmulo, conferência de taxa) **nunca tinha rodado fora da placa**. Ele agora tem 62
+  verificações de host pelo `seqpacket`, que é o mesmo código. Só o transporte rpmsg continua
+  restrito à placa.
+- **Acrescentar um campo a `DeviceConfig` é mudança de ABI**, e ela foi vista: objetos de teste
+  compilados com o cabeçalho velho davam falha de segmentação. O Makefile dos testes passou a
+  rastrear dependência de cabeçalho. O `SOVERSION` não foi alterado, como em toda mudança de
+  layout desde a 1.0.0, porque biblioteca e aplicações saem na mesma imagem. Isso é dívida
+  declarada, não decisão nova.
+- **A suíte de host não testa o `MedicalLogger` neste host**: falta `libsystemd-dev`. Isso já valia
+  na base, e a própria suíte avisa. A D5 foi compilada pelo bitbake (`make framework`, zero
+  avisos), mas o teste dela não rodou.
+- A regra F8 do `make check-layers` recusou o driver novo até ele ser declarado como transporte.
+  É a regra funcionando: um commit saiu antes da correção e foi emendado.
