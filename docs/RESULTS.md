@@ -75,6 +75,23 @@ journal, e o tomógrafo passou **13/13** no primeiro boot de uma imagem nova. Es
 provisionamento do selo, o único em que o falso positivo do §5 ainda não aparece. Registro
 completo: `implementation_plan_infusion_pump.md` §13, Fase 0.
 
+### Terceiro perfil (2026-11-05): a bomba de infusão, sobre a mesma plataforma
+
+Mesmo método, as duas imagens construídas no mesmo commit (`implementation_plan_infusion_pump.md`
+§13, Fase 6):
+
+| | Pacotes | `IMAGESIZE` |
+|---|---|---|
+| `med-image-tomograph` (plataforma, zero aplicação) | 208 | 275.852 KB |
+| `med-image-infusion` | 210 | 276.040 KB |
+| **Diferença** | **2**: `infusion-control-service`, `infusion-sim` | **188 KB** |
+
+O tomógrafo é subconjunto estrito da bomba, e a bomba passou as 13 asserções de plataforma sem
+mudar uma linha. **O que não significa**: que a segunda classe custou dois pacotes. Ela custou
+também +651 −19 linhas no framework (a interface de atuador e seus satélites), que entram em todos
+os perfis e não aparecem nesta diferença. O número de pacotes mede o que o **perfil** acrescenta, e
+o M1 daquele plano mede o que a **classe** custou à plataforma. Os dois vão juntos.
+
 ### O que isso significa — e o que não significa
 
 **Não** apresente como "os dois perfis compartilham 98,6%". O tomógrafo **não instala nenhuma

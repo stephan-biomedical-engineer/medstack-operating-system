@@ -49,6 +49,7 @@ export KAS_IMAGE_VERSION ?= $(KAS_VERSION)
 QEMU_CFG  := kas/project-eeg-qemu.yml
 STM32_CFG := kas/project-eeg-stm32mp2.yml
 TOMO_CFG  := kas/project-tomograph.yml
+INFU_CFG  := kas/project-infusion-qemu.yml
 HOST_CFG  := kas/project-eeg-host.yml
 IMAGE     := med-image-eeg
 
@@ -245,8 +246,8 @@ else
 endif
 
 .PHONY: help tool pki eject checkout layers risks parse framework service qemu stm32 host host-deb \
-        tomograph bundle verify-bundle bundle-disk shell runqemu \
-        runqemu-tomograph check check-layers check-layers-graph test image-info clean purge
+        tomograph infusion bundle verify-bundle bundle-disk shell runqemu \
+        runqemu-tomograph runqemu-infusion check check-layers check-layers-graph test image-info clean purge
 
 help:
 	@echo "MedPlatform build targets (append NATIVE=1 to bypass the container)"
@@ -269,6 +270,7 @@ help:
 	@echo "              add LINK=simulated for a PC with no front-end; default usb"
 	@echo "  host-deb    package it, and the front-end drivers (DKMS), as two .deb"
 	@echo "  tomograph   build the tomograph profile (reuse validation)"
+	@echo "  infusion    build the infusion pump profile (second device class, simulated)"
 	@echo "  bundle      build the signed RAUC update bundle (needs 'make pki')"
 	@echo "              add BOARD=stm32 for the STM32MP257F-DK, and the same KEY=/KERNEL=/LINK= as the image"
 	@echo "  verify-bundle  verify it exactly as the device would (keyring+purpose+CRL)"
@@ -360,6 +362,11 @@ stm32: $(TOOL)
 
 tomograph: $(TOOL)
 	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(TOMO_CFG)
+
+# A device class is a project file, as the tomograph is (D11 of
+# implementation_plan_infusion_pump.md); its variations stay parameters.
+infusion: $(TOOL)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(INFU_CFG)
 
 # Cheapest test of the update path: no image boot, no bootloader, no slots -
 # just the signature, the keyring, the codeSigning purpose and the CRL.
@@ -482,6 +489,7 @@ check-layers-graph: $(TOOL)
 	  $(call graph_kas,$(GRAPH_USB_ENV)) shell $(STM32_CFG) -c "$(GRAPH) collect eeg-stm32-usb med-image-eeg"; \
 	else echo "eeg-stm32-usb skipped: no ./linux-med"; rm -rf $(KAS_BUILD_DIR)/layer-graph/eeg-stm32-usb; fi
 	$(KAS) shell $(TOMO_CFG) -c "$(GRAPH) collect tomograph med-image-tomograph"
+	$(KAS) shell $(INFU_CFG) -c "$(GRAPH) collect infusion med-image-infusion"
 	$(call graph_kas,MED_EEG_LINK=usb) shell $(HOST_CFG) -c "$(GRAPH) collect host-usb med-image-eeg-host"
 	$(call graph_kas,MED_EEG_LINK=simulated) shell $(HOST_CFG) -c "$(GRAPH) collect host-simulated med-image-eeg-host"
 	cd $(KAS_BUILD_DIR) && $(GRAPH) analyze
@@ -535,6 +543,10 @@ test:
 runqemu-tomograph: $(TOOL)
 	$(KAS) $(RUNTIME_ARGS) shell $(TOMO_CFG) \
 	  -c 'runqemu qemux86-64 $$(echo $$BUILDDIR/tmp*/deploy/images/qemux86-64/med-image-tomograph-qemux86-64.rootfs.wic) nographic slirp'
+
+runqemu-infusion: $(TOOL)
+	$(KAS) $(RUNTIME_ARGS) shell $(INFU_CFG) \
+	  -c 'runqemu qemux86-64 $$(echo $$BUILDDIR/tmp*/deploy/images/qemux86-64/med-image-infusion-qemux86-64.rootfs.wic) nographic slirp'
 
 image-info:
 	@cat $(KAS_BUILD_DIR)/buildhistory/images/qemux86_64/glibc/$(IMAGE)/image-info.txt 2>/dev/null \

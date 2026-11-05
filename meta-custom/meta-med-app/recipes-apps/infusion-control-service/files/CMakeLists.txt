@@ -23,9 +23,13 @@ add_executable(infusion-control-service
     src/library.cpp
 )
 
-target_compile_options(infusion-control-service PRIVATE
-    -Wall -Wextra -Wpedantic -Wshadow -Wconversion
-)
-target_link_libraries(infusion-control-service PRIVATE PkgConfig::MEDFRAMEWORK)
+add_executable(infusion-ctl src/infusion_ctl.cpp)
 
-install(TARGETS infusion-control-service RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+foreach(target infusion-control-service infusion-ctl)
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic -Wshadow -Wconversion
+    )
+    target_link_libraries(${target} PRIVATE PkgConfig::MEDFRAMEWORK)
+endforeach()
+
+install(TARGETS infusion-control-service infusion-ctl RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

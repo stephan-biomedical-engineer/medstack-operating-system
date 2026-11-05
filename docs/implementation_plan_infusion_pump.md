@@ -758,6 +758,35 @@ Defeitos encontrados antes do commit:
 excesso é limitado a um período de leitura na taxa programada, mas não é zero. Zero exigiria que
 o próprio mecanismo contasse o volume (Fase 10).
 
+### Fase 6 — imagem, KAS e `make` (2026-11-05), com a `infusion-ctl` da Fase 5
+
+- `med-image-infusion.bb`: a mesma base, o mesmo perfil de desenvolvimento e os mesmos
+  packagegroups do tomógrafo (`packagegroup-med-core`, `packagegroup-med-gui`), mais
+  `infusion-control-service` e `infusion-sim`. Sem `packagegroup-med-amp`.
+- `kas/project-infusion-qemu.yml`: máquina, alvo e fonte da chave, como o do tomógrafo.
+- `make infusion` e `make runqemu-infusion` (D11); o perfil `infusion` no `med-check.py` e no
+  `make check-layers-graph`.
+- `infusion-ctl` (na receita do serviço) e `infusion-sim-fault` (na do simulador, para só
+  existir no perfil simulado). A HMI fica para depois da medição, como a ordem da §11 prevê.
+
+| Medida | Resultado |
+|---|---|
+| Build (M5) | 5815 tarefas, **5753 sem refazer (98,9%)** depois dos builds do EEG e do tomógrafo; 62 executadas |
+| `.wic` inspecionado | GPT com `esp` 64 MiB, `med-root-a` e `med-root-b` de 1 GiB cada, `med-data` 512 MiB |
+| Pacotes (M3), **mesmo commit** | tomógrafo 208, bomba 210, em comum 208: o tomógrafo é **subconjunto estrito** da bomba, e a diferença é **exatamente** `infusion-control-service` e `infusion-sim` (188 KB de `IMAGESIZE`) |
+| Asserções de plataforma (M7) | **13/13 sem mudar uma linha**; com as 4 do perfil, `med-check.py infusion` **17/17** no primeiro boot |
+| `make check-layers-graph` | 8 perfis, **0 violações**; os dois programas da bomba dependem só de `med-framework-api` (F5) |
+| Variáveis do projeto KAS (M10) | nenhuma `MED_EEG_*` |
+
+A primeira comparação de pacotes deu três pacotes a mais na bomba, e o terceiro era
+`med-framework-api-audit-verify`, da plataforma. Ele entrou depois que a lista do tomógrafo foi
+gerada. É a mesma armadilha do `RESULTS.md` §2 ("Uma correção"): só se compara lista do mesmo
+commit, e o tomógrafo foi reconstruído antes do número acima.
+
+As quatro asserções desta fase dizem que o perfil sobe inteiro: os dois serviços ativos com
+`NRestarts=0`, a biblioteca selada e o controlador ocioso respondendo pela `infusion-ctl`. As
+asserções que veem cada controle de risco falhar com a sua falha injetada são a Fase 7.
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)

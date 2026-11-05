@@ -25,9 +25,13 @@ add_executable(infusion-sim
     src/syringe_model.cpp
 )
 
-target_compile_options(infusion-sim PRIVATE
-    -Wall -Wextra -Wpedantic -Wshadow -Wconversion
-)
-target_link_libraries(infusion-sim PRIVATE PkgConfig::MEDFRAMEWORK)
+add_executable(infusion-sim-fault src/fault_main.cpp)
 
-install(TARGETS infusion-sim RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+foreach(target infusion-sim infusion-sim-fault)
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic -Wshadow -Wconversion
+    )
+    target_link_libraries(${target} PRIVATE PkgConfig::MEDFRAMEWORK)
+endforeach()
+
+install(TARGETS infusion-sim infusion-sim-fault RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

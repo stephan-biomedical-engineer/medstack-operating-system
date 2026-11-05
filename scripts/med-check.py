@@ -701,9 +701,35 @@ EEG_CHECKS = [
      rx(r"RESERVE_OK")),
 ]
 
+# The infusion pump profile (implementation_plan_infusion_pump.md). Phase 6
+# brings these four, which say the image comes up with the whole profile
+# running; phase 7 adds the ones that see each hazard's control fail when its
+# fault is injected.
+INFUSION_CHECKS = [
+    ("infusion-active", "o serviço de controle está rodando, sem reinícios",
+     "systemctl show infusion-control.service -p ActiveState -p NRestarts",
+     rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
+
+    ("infusion-sim-active", "o mecanismo simulado está rodando, sem reinícios",
+     "systemctl show infusion-sim.service -p ActiveState -p NRestarts",
+     rx(r"ActiveState=active[\s\S]*NRestarts=0|NRestarts=0[\s\S]*ActiveState=active")),
+
+    ("drug-library-seal", "a biblioteca de fármacos casa com o seu selo",
+     'test "$(sha256sum /etc/medplatform/infusion.conf | cut -d" " -f1)" '
+     '= "$(cat /etc/medplatform/infusion.conf.sha256)" && echo SEAL_OK || echo SEAL_BAD',
+     rx(r"SEAL_OK")),
+
+    ("infusion-idle", "o controlador responde, ocioso e sem alarme",
+     "infusion-ctl status; echo rc=$?", rx(r"idle none[\s\S]*rc=0")),
+]
+
+
 PROFILES = {
     "eeg": ("make runqemu", PLATFORM_CHECKS + EEG_CHECKS),
     "tomograph": ("make runqemu-tomograph", PLATFORM_CHECKS),
+    # The second device class: the platform's assertions unchanged (metric M7
+    # of implementation_plan_infusion_pump.md), and its own (phase 7).
+    "infusion": ("make runqemu-infusion", PLATFORM_CHECKS + INFUSION_CHECKS),
 }
 
 

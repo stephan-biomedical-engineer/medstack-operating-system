@@ -1,0 +1,17 @@
+# The infusion pump profile on QEMU (implementation_plan_infusion_pump.md,
+# phase 6). Like the tomograph's: a machine, an image, a key source - and no
+# MED_EEG_* variable, which is metric M10 of that plan: a device class that
+# needed one would be the platform's variables leaking a class into it.
+header:
+  version: 14
+  includes:
+    - kas/kas-base.yml
+
+machine: qemux86-64
+
+target:
+  - med-image-infusion
+
+local_conf_header:
+  infusion: |
+    MED_DATA_KEY_SOURCE ?= "development"
