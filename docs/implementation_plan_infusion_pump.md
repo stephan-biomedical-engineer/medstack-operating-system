@@ -270,6 +270,10 @@ Cada fase tem critério, injeção de falha e onde o número é registrado.
 **Critério**: cada perigo tem pelo menos um controle e uma asserção prevista na Fase 7. Um perigo
 sem asserção é declarado como tal.
 
+**Feita em 2026-11-05**: `docs/REQUISITOS_INFUSAO.md`, com 16 RTs `INF-xx`, 8 perigos e 26 causas. Ela
+acrescentou duas asserções à Fase 7 (`producer-lost`, `alarm-silence`) e os parâmetros do modelo
+(`T_hb` = 200 ms, `k` = 3, `P_occ` = 500 mmHg, ...).
+
 ### Fase 2 — framework
 
 Na ordem, cada uma com teste de host antes de qualquer receita:
@@ -344,6 +348,8 @@ as da bomba. Cada asserção da bomba tem de ser vista falhar com o defeito inje
 | `vtbi-complete` | ao fim do VTBI a bomba para e alarma | contagem de volume desligada |
 | `deadman` | serviço de controle morto: o simulador para o motor em até `T_hb × k` | homem-morto desligado no produtor |
 | `no-auto-resume` | serviço reiniciado durante infusão volta parado e em alarme | estado de terapia restaurado |
+| `producer-lost` | simulador para de responder durante a infusão: alarme no controlador em até `T_prod` | supervisão do produtor desligada |
+| `alarm-silence` | alarme silenciado volta depois de `T_sil` se a causa persistir | silenciamento sem prazo |
 | `audit-trail` | cada transição e alarme está na trilha, e a cadeia verifica | um evento não emitido |
 | `update-blocked` (se D7) | `rauc install` recusado durante a infusão | declaração não feita |
 
