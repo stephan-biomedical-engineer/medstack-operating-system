@@ -51,12 +51,26 @@ void testLogger() {
             AuditEvent::UpdateSucceeded,      AuditEvent::UpdateFailed,
             AuditEvent::SafetyLimitViolation, AuditEvent::DeviceFault,
             AuditEvent::SecurityEvent,        AuditEvent::ElectrodeContactChanged,
+            AuditEvent::AlarmRaised,          AuditEvent::AlarmAcknowledged,
+            AuditEvent::TherapyStarted,       AuditEvent::TherapyStopped,
+            AuditEvent::SafetyLimitOverridden, AuditEvent::ActuatorFault,
         };
+
+        // Appended, never inserted: a trail written before an event was added
+        // must still mean what it meant. The values are the enum's, and the
+        // spelling is what reaches the journal - both are held.
+        CHECK_EQ(static_cast<int>(AuditEvent::SystemStart), 0);
+        CHECK_EQ(static_cast<int>(AuditEvent::SecurityEvent), 16);
+        CHECK_EQ(static_cast<int>(AuditEvent::ElectrodeContactChanged), 17);
+        CHECK_EQ(static_cast<int>(AuditEvent::AlarmRaised), 18);
+        CHECK_EQ(static_cast<int>(AuditEvent::ActuatorFault), 23);
+        CHECK(std::string(toString(AuditEvent::SafetyLimitOverridden)) == "SAFETY_LIMIT_OVERRIDDEN");
+        CHECK(std::string(toString(AuditEvent::ActuatorFault)) == "ACTUATOR_FAULT");
 
         std::vector<std::string> names;
         for (const AuditEvent event : events) {
             const std::string name = toString(event);
-            CHECK_MSG(!name.empty(), "um AuditEvent não tem grafia");
+            CHECK_MSG(!name.empty() && name != "UNKNOWN", "um AuditEvent não tem grafia");
             names.push_back(name);
         }
         for (std::size_t i = 0; i < names.size(); ++i) {

@@ -67,6 +67,32 @@ enum class AuditEvent {
     /// A monitored electrode lost or regained contact with the subject.
     /// Appended, not inserted: the enumerators before it keep their values.
     ElectrodeContactChanged,
+
+    // The events of a device that ACTS on the patient rather than observing
+    // it. Generic on purpose - a ventilator's valve or a stimulator raises,
+    // acknowledges and overrides the same way - and appended after
+    // ElectrodeContactChanged for the same reason it was: no earlier
+    // enumerator changes value.
+
+    /// An alarm condition began. The record names it and its priority.
+    AlarmRaised,
+    /// An operator acknowledged or silenced an alarm. Who, and for how long,
+    /// belongs in the record: an alarm nobody can be shown to have seen is the
+    /// one the trail exists for.
+    AlarmAcknowledged,
+    /// The device began acting on the patient under a programme.
+    TherapyStarted,
+    /// It stopped - completed, paused, or interrupted by an alarm or a fault.
+    /// The record says which; an interruption is not a completion.
+    TherapyStopped,
+    /// An operator confirmed a value beyond a soft limit. Distinct from
+    /// SafetyLimitViolation, which is a value refused: this one was accepted,
+    /// on someone's word, and the trail has to say whose.
+    SafetyLimitOverridden,
+    /// The actuator failed, refused, or stopped answering. DeviceFault covers
+    /// the sensing path; an actuator that fails keeps acting or stops, and the
+    /// two must not be read as one event.
+    ActuatorFault,
 };
 
 const char* toString(Severity severity) noexcept;

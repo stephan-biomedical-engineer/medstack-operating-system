@@ -137,6 +137,12 @@ const char* toString(AuditEvent event) noexcept {
         case AuditEvent::DeviceFault:          return "DEVICE_FAULT";
         case AuditEvent::SecurityEvent:        return "SECURITY_EVENT";
         case AuditEvent::ElectrodeContactChanged: return "ELECTRODE_CONTACT_CHANGED";
+        case AuditEvent::AlarmRaised:          return "ALARM_RAISED";
+        case AuditEvent::AlarmAcknowledged:    return "ALARM_ACKNOWLEDGED";
+        case AuditEvent::TherapyStarted:       return "THERAPY_STARTED";
+        case AuditEvent::TherapyStopped:       return "THERAPY_STOPPED";
+        case AuditEvent::SafetyLimitOverridden: return "SAFETY_LIMIT_OVERRIDDEN";
+        case AuditEvent::ActuatorFault:        return "ACTUATOR_FAULT";
     }
     return "UNKNOWN";
 }
