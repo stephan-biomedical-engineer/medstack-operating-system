@@ -665,6 +665,39 @@ outras suítes ficaram iguais à base. Injeções feitas e vistas:
 - A regra F8 do `make check-layers` recusou o driver novo até ele ser declarado como transporte.
   É a regra funcionando: um commit saiu antes da correção e foi emendado.
 
+### Fase 3 — `infusion-sim` (2026-11-05)
+
+Commit `fdf590f`, só em `meta-med-app` (+ `tests/infusion-sim`, o `Makefile` e a classificação
+F5). Três partes: `syringe_model` (a física), `mechanism` (o lado do produtor no protocolo do
+atuador, com o homem-morto) e `simulator` (os soquetes de comando, de readback e de falhas).
+
+| Medida | Resultado (modelo) | Critério |
+|---|---|---|
+| Volume em 1 min a 100 mL/h, seringa de 50 mL | 1,6667 mL, igual à integral da taxa até um passo (0,56 µL) | `ε_vol`: 1% ou 1 passo |
+| Pressão de repouso a 100 mL/h | 20,0 mmHg (Q × R) | — |
+| Oclusão a 100 mL/h, 20 → 500 mmHg | 17,29 s (previsto: 17,28 s) | `T_occ` ≤ 30 s |
+| Janela do homem-morto, tempo injetado | não dispara em 600 ms, dispara em 601 ms | `T_hb × k` = 600 ms |
+| Homem-morto pelo soquete, drivers do framework | motor parado 641–642 ms depois do último sinal, em três execuções | ≤ janela + um período do simulador (50 ms a 20 Hz) |
+| Travamento | motor acionado, encoder parado | detectável (INF-05) |
+
+`tests/infusion-sim`: **109 verificações, 0 falhas**, com ASan e UBSan, já no `make test`.
+Injeções feitas e vistas:
+
+| Injeção | Falhas |
+|---|---|
+| homem-morto desligado no produtor | 11, nos níveis de protocolo e de processo |
+| disparo desfeito pelo próximo sinal de vida | 5 |
+| o estado seguro deixa de vencer uma taxa na mesma mensagem | 1 |
+
+Construído pelo bitbake (qemux86-64, zero avisos). Nenhuma imagem o instala ainda: isso é a Fase 6.
+
+Dois defeitos encontrados antes do commit, os dois do meu código:
+- **Uma mensagem recusada aplicava metade dela**: uma taxa válida seguida de uma chave inválida
+  era aplicada e depois recusada. Agora a mensagem é validada inteira antes de aplicar qualquer
+  parte.
+- **Corrida na reconexão**: o simulador aceitava a conexão nova antes de ler o fechamento da
+  antiga, e recusava o controlador que reconectava como se fosse um segundo controlador.
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)
