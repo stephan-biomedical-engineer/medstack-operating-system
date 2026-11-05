@@ -60,8 +60,27 @@ struct DeviceInfo {
     std::string driver;
     std::uint16_t channelCount = 0;
     double sampleRateHz = 0.0;
-    /// Physical unit of the values in SampleFrame::samples, e.g. "uV".
+    /// Physical unit of the values in SampleFrame::samples, e.g. "uV", when
+    /// every channel has the same one. Empty when they do not: a caller that
+    /// reads only this field must not take a mixed device's numbers as one
+    /// quantity.
     std::string unit;
+    /// One unit per channel, or empty when every channel is in `unit`.
+    ///
+    /// A device that measures several quantities in one frame - a pressure, a
+    /// position, a binary detector - cannot say what its numbers are with one
+    /// string. Appended after `unit` rather than replacing it, so a caller
+    /// written for a single-quantity device reads what it always read.
+    std::vector<std::string> channelUnits;
+
+    /// The unit of channel `c`, whichever of the two fields carries it; empty
+    /// for a channel the device does not have.
+    std::string unitOf(std::uint16_t c) const {
+        if (c >= channelCount) {
+            return {};
+        }
+        return channelUnits.empty() ? unit : channelUnits[c];
+    }
 };
 
 /// Electrode contact over one frame, one bit per channel input (bit c is
@@ -142,6 +161,13 @@ struct DeviceConfig {
     /// Samples per channel in one frame. Trades latency against syscall rate;
     /// 25 at 250 Hz is a 100 ms frame.
     std::uint32_t samplesPerFrame = 25;
+
+    /// One unit per channel for a device whose channels are different
+    /// quantities; empty (the default) leaves the unit to the driver. When it
+    /// is given it must name every channel - the factory refuses a list of
+    /// another length, because a channel with no unit is a number nobody can
+    /// read. The values are labels: no driver converts between units.
+    std::vector<std::string> channelUnits;
 
     /// Settings for the front-end, opaque to the framework as a whole.
     ///
@@ -233,8 +259,19 @@ using LeadOffBlock = ::med_amp_lead_off;
 void encodeFrame(const SampleFrame& frame, double sampleRateHz,
                  std::vector<unsigned char>& out);
 
+/// The same, at `scaleNanoUnitsPerLsb` nano-units per LSB instead of one, for a
+/// producer whose quantities are larger than +-2.147 units: the int32 carries
+/// +-2.147e9 LSBs, so a scale of 1000 (one micro-unit per LSB) spans
+/// +-2147 units - a line pressure in mmHg, a position in mm. The header has
+/// carried the scale since the first version and every decoder honours it;
+/// only the encoder had it fixed at 1. InvalidArgument for a scale that is not
+/// positive, and nothing is written.
+Status encodeFrame(const SampleFrame& frame, double sampleRateHz,
+                   std::int32_t scaleNanoUnitsPerLsb, std::vector<unsigned char>& out);
+
 /// Parse and verify one frame. Fails with IntegrityError on a short buffer, a
-/// bad magic, a truncated payload or a CRC that does not close, and with
+/// bad magic, a truncated payload, a CRC that does not close or a scale that is
+/// not positive, and with
 /// NotSupported on another version. On success the samples are in micro-units
 /// and *sampleRateHz, when given, receives the header's rate.
 ///

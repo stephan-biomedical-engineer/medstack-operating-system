@@ -410,4 +410,67 @@ void testAmpAbi() {
         CHECK_STATUS(amp::decodeControl(padded.data(), padded.size()).status(),
                      Status::IntegrityError);
     }
+
+    medtest::section("ABI do enlace AMP: a escala do quadro, para grandezas maiores que 2,147 unidades");
+
+    {
+        // Three channels that are three quantities: a line pressure of 500
+        // (mmHg), a position of 37.25 (mm) and a binary detector. In micro-units
+        // the pressure is 5e8, beyond what an int32 of nano-units carries.
+        SampleFrame mixedFrame;
+        mixedFrame.sequence = 7;
+        mixedFrame.timestamp = fromUnixMicros(1'700'000'000'000'000ULL);
+        mixedFrame.channelCount = 3;
+        mixedFrame.samplesPerChannel = 2;
+        mixedFrame.samples = {500e6, 37.25e6, 1e6, -12.5e6, 0.0, 0.0};
+
+        // At the default scale the pressure saturates: the limit the scale
+        // exists to lift, kept visible rather than assumed away.
+        std::vector<unsigned char> atOne;
+        amp::encodeFrame(mixedFrame, 10.0, atOne);
+        Result<SampleFrame> saturated = amp::decodeFrame(atOne.data(), atOne.size());
+        CHECK(saturated.isOk());
+        CHECK_NEAR(saturated.value().samples[0], 2147483.647, 1e-6);
+
+        // One micro-unit per LSB: every value comes back exactly.
+        std::vector<unsigned char> scaled;
+        CHECK_STATUS(amp::encodeFrame(mixedFrame, 10.0, 1000, scaled), Status::Ok);
+        amp::FrameHeader header;
+        std::memcpy(&header, scaled.data(), sizeof(header));
+        CHECK_EQ(static_cast<long long>(header.scaleNanoUnitsPerLsb), 1000LL);
+        Result<SampleFrame> scaledBack = amp::decodeFrame(scaled.data(), scaled.size());
+        CHECK(scaledBack.isOk());
+        for (std::size_t i = 0; i < mixedFrame.samples.size(); ++i) {
+            CHECK_NEAR(scaledBack.value().samples[i], mixedFrame.samples[i], 1e-9);
+        }
+        // The resolution is the scale: half an LSB rounds.
+        mixedFrame.samples[1] = 37.2500004e6;
+        CHECK_STATUS(amp::encodeFrame(mixedFrame, 10.0, 1000, scaled), Status::Ok);
+        CHECK_NEAR(amp::decodeFrame(scaled.data(), scaled.size()).value().samples[1], 37.25e6, 1e-9);
+
+        // The overload with scale 1 is the old encoder, byte for byte: the EEG
+        // link's frames do not change.
+        std::vector<unsigned char> explicitOne;
+        CHECK_STATUS(amp::encodeFrame(mixedFrame, 10.0, 1, explicitOne), Status::Ok);
+        std::vector<unsigned char> implicitOne;
+        amp::encodeFrame(mixedFrame, 10.0, implicitOne);
+        CHECK(explicitOne == implicitOne);
+
+        // A scale that is not positive is refused by the encoder and by the
+        // decoder. The CRC does not cover the header, so the decoder is the
+        // only place that can see a zero there.
+        std::vector<unsigned char> untouched = {0xAA};
+        CHECK_STATUS(amp::encodeFrame(mixedFrame, 10.0, 0, untouched), Status::InvalidArgument);
+        CHECK_STATUS(amp::encodeFrame(mixedFrame, 10.0, -1000, untouched), Status::InvalidArgument);
+        CHECK(untouched.size() == 1 && untouched[0] == 0xAA);
+        for (std::int32_t bad : {0, -1}) {
+            std::vector<unsigned char> forged = scaled;
+            amp::FrameHeader h;
+            std::memcpy(&h, forged.data(), sizeof(h));
+            h.scaleNanoUnitsPerLsb = bad;
+            std::memcpy(forged.data(), &h, sizeof(h));
+            CHECK_STATUS(amp::decodeFrame(forged.data(), forged.size()).status(),
+                         Status::IntegrityError);
+        }
+    }
 }

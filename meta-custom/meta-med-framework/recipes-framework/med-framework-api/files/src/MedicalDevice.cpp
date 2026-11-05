@@ -55,15 +55,25 @@ std::uint32_t crc32(const void* data, std::size_t length) noexcept {
 
 void encodeFrame(const SampleFrame& frame, double sampleRateHz,
                  std::vector<unsigned char>& out) {
+    (void)encodeFrame(frame, sampleRateHz, 1, out);
+}
+
+Status encodeFrame(const SampleFrame& frame, double sampleRateHz,
+                   std::int32_t scaleNanoUnitsPerLsb, std::vector<unsigned char>& out) {
+    if (scaleNanoUnitsPerLsb <= 0) {
+        return Status::InvalidArgument;
+    }
+    const double lsbPerMicroUnit = 1000.0 / scaleNanoUnitsPerLsb;
+
     const std::size_t sampleBytes = frame.samples.size() * sizeof(std::int32_t);
     out.resize(sizeof(FrameHeader) + sampleBytes + sizeof(LeadOffBlock));
 
     unsigned char* payload = out.data() + sizeof(FrameHeader);
     for (std::size_t i = 0; i < frame.samples.size(); ++i) {
-        // Micro-units to int32 nano-units, rounded, and saturated rather than
-        // wrapped: a wrapped sample is a spike of the opposite sign that the
-        // CRC then certifies.
-        const double nano = std::round(frame.samples[i] * 1000.0);
+        // Micro-units to int32 LSBs of the declared scale, rounded, and
+        // saturated rather than wrapped: a wrapped sample is a spike of the
+        // opposite sign that the CRC then certifies.
+        const double nano = std::round(frame.samples[i] * lsbPerMicroUnit);
         const std::int32_t raw =
             nano >= 2147483647.0    ? INT32_MAX
             : nano <= -2147483648.0 ? INT32_MIN
@@ -87,9 +97,10 @@ void encodeFrame(const SampleFrame& frame, double sampleRateHz,
     header.sampleRateMilliHz = static_cast<std::uint32_t>(std::lround(sampleRateHz * 1000.0));
     header.sequence = frame.sequence;
     header.timestampMicros = toUnixMicros(frame.timestamp);
-    header.scaleNanoUnitsPerLsb = 1;
+    header.scaleNanoUnitsPerLsb = scaleNanoUnitsPerLsb;
     header.crc32 = crc32(payload, sampleBytes + sizeof(block));
     std::memcpy(out.data(), &header, sizeof(header));
+    return Status::Ok;
 }
 
 Result<SampleFrame> decodeFrame(const void* data, std::size_t length, double* sampleRateHz) {
@@ -121,6 +132,13 @@ Result<SampleFrame> decodeFrame(const void* data, std::size_t length, double* sa
     if (crc32(payload, sampleBytes + sizeof(LeadOffBlock)) != header.crc32) {
         return Result<SampleFrame>::fail(Status::IntegrityError,
                                          "AMP frame failed its CRC check");
+    }
+    // The CRC does not cover the header, and a scale of zero turns every
+    // sample into a valid-looking flat line; a negative one inverts the trace.
+    // Neither is a frame anyone produced on purpose.
+    if (header.scaleNanoUnitsPerLsb <= 0) {
+        return Result<SampleFrame>::fail(Status::IntegrityError,
+                                         "AMP frame declares a scale that is not positive");
     }
 
     SampleFrame frame;
@@ -298,6 +316,21 @@ constexpr double kPi = 3.14159265358979323846;
 /// A whole-string number: no trailing text, no NaN, no infinity. An inline
 /// comment that reached a value ("24   # PGA") is therefore not a number,
 /// which is the behaviour a calibration value has to have.
+/// A configuration's per-channel units, laid over what a driver reports. The
+/// driver's own unit is the default and stays the answer for a single-quantity
+/// device; a configuration that names one unit per channel replaces it, and
+/// `unit` is then the common one or empty (DeviceInfo::unit says why).
+void applyChannelUnits(DeviceInfo& info, const DeviceConfig& config) {
+    if (config.channelUnits.empty()) {
+        return;
+    }
+    info.channelUnits = config.channelUnits;
+    const bool shared =
+        std::all_of(config.channelUnits.begin(), config.channelUnits.end(),
+                    [&](const std::string& u) { return u == config.channelUnits.front(); });
+    info.unit = shared ? config.channelUnits.front() : std::string();
+}
+
 bool parseNumber(const std::string& text, double& out) {
     if (text.empty()) {
         return false;
@@ -391,6 +424,7 @@ public:
         info.channelCount = config_.channelCount;
         info.sampleRateHz = config_.sampleRateHz;
         info.unit = options_.unit;
+        applyChannelUnits(info, config_);
         return info;
     }
 
@@ -714,6 +748,7 @@ public:
         info.channelCount = config_.channelCount;
         info.sampleRateHz = config_.sampleRateHz;
         info.unit = "uV";
+        applyChannelUnits(info, config_);
         return info;
     }
 
@@ -1121,6 +1156,7 @@ public:
         info.channelCount = config_.channelCount;
         info.sampleRateHz = config_.sampleRateHz;
         info.unit = "uV";
+        applyChannelUnits(info, config_);
         return info;
     }
 
@@ -1917,6 +1953,19 @@ Result<std::unique_ptr<MedicalDevice>> MedicalDeviceFactory::create(const Device
     }
     if (config.samplesPerFrame == 0) {
         return DeviceResult::fail(Status::InvalidArgument, "samplesPerFrame must be non-zero");
+    }
+    if (!config.channelUnits.empty() && config.channelUnits.size() != config.channelCount) {
+        return DeviceResult::fail(Status::InvalidArgument,
+                                  "channelUnits names " +
+                                      std::to_string(config.channelUnits.size()) +
+                                      " channels and the device has " +
+                                      std::to_string(config.channelCount));
+    }
+    for (const std::string& unit : config.channelUnits) {
+        if (unit.empty()) {
+            return DeviceResult::fail(Status::InvalidArgument,
+                                      "channelUnits leaves a channel without a unit");
+        }
     }
 
     Constructor constructor;

@@ -765,4 +765,62 @@ void testDevice() {
         flipped[5] ^= 0x01;
         CHECK(amp::crc32(clean, sizeof(clean)) != amp::crc32(flipped, sizeof(flipped)));
     }
+
+    medtest::section("Unidades por canal - um dispositivo, várias grandezas");
+
+    {
+        // A single-quantity device is what it always was: no list, the
+        // driver's unit, and unitOf() agrees with it.
+        Result<std::unique_ptr<MedicalDevice>> plain =
+            MedicalDeviceFactory::create(baseConfig("rpmsg"));
+        CHECK(plain.isOk());
+        const DeviceInfo plainInfo = plain.value()->info();
+        CHECK(plainInfo.unit == "uV");
+        CHECK(plainInfo.channelUnits.empty());
+        CHECK(plainInfo.unitOf(0) == "uV" && plainInfo.unitOf(7) == "uV");
+        CHECK(plainInfo.unitOf(8).empty());
+
+        // Three channels, three quantities, on every driver: each one reports
+        // the list, and `unit` is empty because no single unit is true.
+        for (const char* name : kAllDrivers) {
+            DeviceConfig mixed = baseConfig(name);
+            mixed.channelCount = 3;
+            mixed.channelUnits = {"mmHg", "mm", "1"};
+            if (std::string(name) == "simulated") {
+                mixed.driverOptions["unit"] = "uV";
+            }
+            Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(mixed);
+            if (std::string(name) == "iio") {
+                // iio is constructed against a device tree; only the factory's
+                // refusals below reach it on this path.
+                continue;
+            }
+            CHECK_MSG(created.isOk(), std::string(name) + ": " + created.message());
+            if (!created) {
+                continue;
+            }
+            const DeviceInfo info = created.value()->info();
+            CHECK_MSG(info.unit.empty(), std::string(name) + " deu uma unidade única a grandezas diferentes");
+            CHECK(info.channelUnits == mixed.channelUnits);
+            CHECK(info.unitOf(0) == "mmHg" && info.unitOf(1) == "mm" && info.unitOf(2) == "1");
+        }
+
+        // The same unit on every channel is that unit.
+        DeviceConfig same = baseConfig("rpmsg");
+        same.channelCount = 2;
+        same.channelUnits = {"mmHg", "mmHg"};
+        CHECK(MedicalDeviceFactory::create(same).value()->info().unit == "mmHg");
+
+        // A list of another length, or a channel left without a unit, is a
+        // number nobody can read: refused by the factory, for every driver.
+        for (const char* name : kAllDrivers) {
+            DeviceConfig shortList = baseConfig(name);
+            shortList.channelUnits = {"mmHg", "mm"};
+            CHECK_STATUS(MedicalDeviceFactory::create(shortList).status(), Status::InvalidArgument);
+            DeviceConfig blank = baseConfig(name);
+            blank.channelCount = 2;
+            blank.channelUnits = {"mmHg", ""};
+            CHECK_STATUS(MedicalDeviceFactory::create(blank).status(), Status::InvalidArgument);
+        }
+    }
 }
