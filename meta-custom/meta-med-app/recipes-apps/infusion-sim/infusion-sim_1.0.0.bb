@@ -10,6 +10,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://CMakeLists.txt;subdir=sources \
     file://src;subdir=sources \
+    file://infusion-sim.service \
 "
 
 S = "${WORKDIR}/sources"
@@ -17,10 +18,18 @@ S = "${WORKDIR}/sources"
 # The framework and nothing else (CLAUDE.md rule 6, F5 of make check-layers).
 DEPENDS = "med-framework-api"
 
-inherit cmake pkgconfig features_check
+inherit cmake pkgconfig systemd features_check
 
 REQUIRED_DISTRO_FEATURES = "systemd"
 
-# Its unit, the user it runs as and the image that installs it are phase 6 of
-# implementation_plan_infusion_pump.md; until then the recipe builds the
-# program and nothing installs it.
+SYSTEMD_SERVICE:${PN} = "infusion-sim.service"
+SYSTEMD_AUTO_ENABLE = "enable"
+
+do_install:append() {
+    install -d ${D}${systemd_system_unitdir}
+    install -m 0644 ${WORKDIR}/infusion-sim.service ${D}${systemd_system_unitdir}/
+}
+
+FILES:${PN} += "${systemd_system_unitdir}/infusion-sim.service"
+
+# The image that installs it is phase 6 of implementation_plan_infusion_pump.md.

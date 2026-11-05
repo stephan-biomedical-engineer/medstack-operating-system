@@ -1,0 +1,40 @@
+[Unit]
+Description=MedPlatform infusion pump - simulated mechanism
+# The producer the control service drives. It exists in the simulated profile
+# only; nothing names it from the controller's unit - the framework's driver
+# waits for its socket, as it waits for a co-processor.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/infusion-sim --syringe 50ml --rate-hz 10 /run/infusion-sim
+Restart=on-failure
+RestartSec=1s
+
+RuntimeDirectory=infusion-sim
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,53 @@
+[Unit]
+Description=MedPlatform infusion pump control service
+Documentation=file:/etc/medplatform/infusion.conf
+After=systemd-journald.service
+# The slot is confirmed only once the controller has driven its mechanism
+# through the self test (INF-15), the same contract as the EEG's acquisition.
+Before=boot-complete.target
+# A controller that keeps failing must reach "failed", where an operator and
+# the acceptance suite can see it, instead of looping for ever unseen.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/infusion-control-service --config /etc/medplatform/infusion.conf
+# A restart is allowed and is never a resumption: the service comes back with
+# the motor at rest and an alarm if a therapy was running (INF-11).
+Restart=on-failure
+RestartSec=2s
+
+RuntimeDirectory=medplatform
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+StateDirectory=medplatform
+StateDirectoryMode=0700
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=boot-complete.target

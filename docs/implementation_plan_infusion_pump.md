@@ -698,6 +698,66 @@ Dois defeitos encontrados antes do commit, os dois do meu código:
 - **Corrida na reconexão**: o simulador aceitava a conexão nova antes de ler o fechamento da
   antiga, e recusava o controlador que reconectava como se fosse um segundo controlador.
 
+### Fase 4 — `infusion-control-service` (2026-11-05)
+
+Só em `meta-med-app` (+ `tests/infusion-control`, o `Makefile` e a classificação F5). Três partes:
+- `controller`: a máquina de estados, o DERS, os alarmes e a supervisão do mecanismo, puro e com
+  o tempo injetado;
+- `library`: a configuração selada (`infusion.conf`) julgada por `SafetyLimit`, mais as
+  conferências cruzadas que só a aplicação conhece;
+- `main`: o controlador sobre os drivers `seqpacket` do framework, o `MedicalLogger`, o socket de
+  controle e o `READY=1`.
+
+Também ganharam units o serviço (`Type=notify`, `RequiredBy=boot-complete.target`,
+`StartLimitBurst=5`, `CapabilityBoundingSet=` vazio) e o simulador.
+
+**Critério da fase**: os testes de host cobrem toda transição, as proibidas incluídas, e uma
+configuração com fármaco fora do envelope recusa subir. **Cumprido**:
+- `tests/infusion-control`: **245 verificações, 0 falhas**, com ASan e UBSan, já no `make test`;
+- a tabela de transições exercita as **49** combinações estado × comando (7 situações, 7
+  comandos), e confere que um comando recusado não comanda nada;
+- configuração: 10 recusas nomeadas (soft acima do hard, hard acima do mecanismo, janela do
+  homem-morto acima de 2 s, oclusão fora da faixa, `missed_heartbeats` fracionário, biblioteca
+  vazia, id inválido, id duplicado, `producer_timeout` menor que dois quadros, fármaco sem nome);
+  todas as violações relatadas, não só a primeira; e a `infusion.conf` que a receita instala
+  passa na validação do próprio serviço.
+
+| Medida (modelo) | Resultado |
+|---|---|
+| VTBI 1 mL a 100 mL/h | parou em 1,0000 mL; excesso limitado a um período de leitura (2,8 µL) |
+| Falha de entrega | detectada com fluxo 0×, 0,9×, 1,2× e 2× o comandado; nenhuma a 0,99× em 20 s |
+| Oclusão, com reconhecimento | recusada enquanto a pressão persiste; depois, **pausada**, nunca infundindo |
+| Silêncio | dura 120 s e o alarme volta, com registro |
+
+Injeções:
+
+| Injeção | Falhas |
+|---|---|
+| reconhecer um alarme retoma a infusão | 4 |
+| sem limite rígido | 8 (antes da correção abaixo, o binário de teste travava) |
+| falha de entrega só no sentido "abaixo" | 4 |
+| silêncio que nunca expira | 4 |
+| comentário depois de um valor na biblioteca (build) | `do_seal_configuration` recusa e aponta a linha 55 |
+
+Construído pelo bitbake (zero avisos, nos dois programas). Pacote inspecionado: `infusion.conf`
+e o selo em `root:root 0640`, e o selo bate com o arquivo. **Não executado no alvo**: isso é a
+Fase 6 (imagem) e a 7 (suíte), e o `main` só compila com libsystemd, então não tem teste de host.
+
+Defeitos encontrados antes do commit:
+- **Leituras de repouso em trânsito**: depois de mandar o motor parar, quadros que já estavam na
+  fila ainda mostram o motor ligado. Sem a janela de acomodação (`restSettle`, 500 ms), eles
+  disparariam um falso "motor acionado sem terapia".
+- **Referência solta** no `main`: o adaptador do atuador guardava o objeto, e a reconexão depois
+  de um reconhecimento o substitui. Agora guarda o dono.
+- **Laço quente** com o produtor fora. Agora espera 10 ms quando a leitura falha por outro motivo
+  que não timeout.
+- **Teste que travava**: acessava um registro de auditoria inexistente, e assim escondia as
+  verificações seguintes. Os acessos agora devolvem vazio.
+
+**Limitação declarada**: o VTBI é imposto pelo controlador a partir da leitura do mecanismo. O
+excesso é limitado a um período de leitura na taxa programada, mas não é zero. Zero exigiria que
+o próprio mecanismo contasse o volume (Fase 10).
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)

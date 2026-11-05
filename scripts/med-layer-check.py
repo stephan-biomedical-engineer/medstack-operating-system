@@ -82,7 +82,7 @@ ABOVE_BSP = ('meta-med-distro', 'meta-med-framework', 'meta-med-app')
 # F5 - rule 6. Every recipe under meta-med-app/recipes-apps is either one of
 # the platform's own applications or third-party software packaged unmodified;
 # an unclassified one fails, so the question is asked when it is added.
-OWN_APPS = {'eeg-acquisition-service', 'eeg-hmi-gui', 'infusion-sim'}
+OWN_APPS = {'eeg-acquisition-service', 'eeg-hmi-gui', 'infusion-sim', 'infusion-control-service'}
 THIRD_PARTY_APPS = {
     'edfbrowser': 'EDFbrowser 2.15, packaged unmodified; not a MedFramework client',
     'med-review': 'launcher and sandbox for edfbrowser; links nothing',
