@@ -18,6 +18,7 @@ void testBiosignal();
 void testDevice();
 void testIio();
 void testAmpAbi();
+void testLink();
 #ifdef MED_TESTS_HAVE_SYSTEMD
 void testLogger();
 void testUpdate();
@@ -33,6 +34,7 @@ int main() {
     testDevice();
     testIio();
     testAmpAbi();
+    testLink();
 #ifdef MED_TESTS_HAVE_SYSTEMD
     testLogger();
     testUpdate();
@@ -56,7 +58,7 @@ int main() {
     std::printf("  - MedicalUpdate  (a metade D-Bus: connect, install, mark*;"
                 " precisa do daemon do RAUC no barramento)\n");
 #endif
-    std::printf("  - MedicalIPC     (o caminho socket é exercitado por make check, no alvo)\n");
+    std::printf("  - MedicalIPC     (rpmsg: só no alvo; o socket é exercitado aqui pelo driver seqpacket)\n");
     std::printf("  - atomicidade de MedicalStorage (precisa de corte de energia)\n");
     std::printf("  - qualquer coisa que dependa de hardware: ver README.md\n");
 

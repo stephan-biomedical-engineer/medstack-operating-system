@@ -18,6 +18,12 @@
 //   "rpmsg"     - AMP front-end: sample frames produced by firmware on the
 //                 real-time core, delivered over OpenAMP rpmsg via
 //                 MedicalIpcChannel.
+//   "seqpacket" - the same producer protocol as "rpmsg" - frames out, control
+//                 messages in, an answer owed to each - over a local
+//                 AF_UNIX SOCK_SEQPACKET socket, to a producer that is another
+//                 process: a simulated mechanism, on a target with no second
+//                 core. One implementation serves both, so a producer is held
+//                 to the same rules whichever link it is on.
 //   "iio"       - an analogue front-end the Linux kernel drives itself,
 //                 through the industrial I/O ABI: a character device for the
 //                 sample buffer and sysfs for scale, rate and settings. Used both
@@ -154,7 +160,8 @@ struct DeviceConfig {
     std::string id = "device0";
     /// Driver specific: for rpmsg the producer's channel and for iio the
     /// front-end's IIO device node, each by a stable udev link and never by
-    /// the kernel's numbered name; required by both, unused by simulated.
+    /// the kernel's numbered name; for seqpacket the path of the socket the
+    /// producer listens on. Required by all three, unused by simulated.
     std::string address;
     std::uint16_t channelCount = 8;
     double sampleRateHz = 250.0;

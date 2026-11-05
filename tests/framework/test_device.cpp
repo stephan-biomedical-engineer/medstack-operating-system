@@ -35,7 +35,7 @@ DeviceConfig baseConfig(const std::string& driver) {
     return config;
 }
 
-const char* const kAllDrivers[] = {"simulated", "rpmsg", "iio"};
+const char* const kAllDrivers[] = {"simulated", "rpmsg", "seqpacket", "iio"};
 
 }  // namespace
 
@@ -44,10 +44,10 @@ void testDevice() {
 
     {
         const std::vector<std::string> drivers = MedicalDeviceFactory::drivers();
-        // Three built-in drivers, each named after a TRANSPORT and never after
+        // Four built-in drivers, each named after a TRANSPORT and never after
         // a part. A driver called "ads1299" would end the portability claim
         // that implementation_plan_ads1299.md §3 checks with a grep.
-        CHECK_EQ(static_cast<long long>(drivers.size()), 3LL);
+        CHECK_EQ(static_cast<long long>(drivers.size()), 4LL);
         for (const char* name : kAllDrivers) {
             CHECK_MSG(std::find(drivers.begin(), drivers.end(), std::string(name)) !=
                           drivers.end(),
@@ -109,7 +109,7 @@ void testDevice() {
         // appear, so rpmsg and iio refuse an empty address at creation instead of
         // falling back to "/dev/rpmsg0" or "/dev/iio:device0". simulated has no
         // node and still accepts one.
-        for (const char* name : {"rpmsg", "iio"}) {
+        for (const char* name : {"rpmsg", "seqpacket", "iio"}) {
             DeviceConfig noAddress = baseConfig(name);
             noAddress.address.clear();
             Result<std::unique_ptr<MedicalDevice>> created = MedicalDeviceFactory::create(noAddress);

@@ -95,6 +95,7 @@ FRAMEWORK_DEPENDS = {'systemd', 'openssl', 'med-amp-abi'}
 TRANSPORTS = {
     'simulated': 'no transport: the framework generates the samples',
     'rpmsg': 'the OpenAMP rpmsg channel to a co-processor',
+    'seqpacket': 'an AF_UNIX SOCK_SEQPACKET socket to a producer process',
     'iio': 'the kernel IIO ABI',
 }
 

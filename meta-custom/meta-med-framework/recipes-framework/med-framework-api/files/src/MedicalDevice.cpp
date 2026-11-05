@@ -703,7 +703,19 @@ private:
 /// payload. With a 40 byte header that is 114 int32 samples, so 8 channels x
 /// 12 samples per frame fits and 8 x 25 does not. Frame geometry is a
 /// negotiated property of the firmware interface, not a free parameter.
-class RpmsgDevice : public MedicalDevice {
+/// A front-end behind a producer: something on the far side of a message
+/// channel that sends sample frames and answers control messages. The firmware
+/// of a real-time core over rpmsg is one; a process on the same Linux over a
+/// local socket is another, and that is the whole difference between them.
+/// One class with the transport as a parameter, so the two cannot drift apart:
+/// a producer is judged by the same code - the acknowledgement it owes, the
+/// rate it must keep, the sequence it must not break - whichever link it is on.
+///
+///   "rpmsg"     - IpcTransport::RpmsgChar, the co-processor's channel
+///   "seqpacket" - IpcTransport::UnixSeqpacket, a producer process listening
+///                 on a filesystem socket. A simulated mechanism on QEMU, and
+///                 the only way the host suite reaches this code at all.
+class LinkDevice : public MedicalDevice {
 public:
     /// No option is interpreted here. Their meaning belongs to the producer,
     /// which accepts or refuses each one in its acknowledgement - that is what
@@ -714,7 +726,10 @@ public:
     /// What IS checked here is that the set fits the control message, so a
     /// configuration that could never be sent fails at creation, identically on
     /// every target, rather than at the first start() against firmware.
-    static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config) {
+    static Result<std::unique_ptr<MedicalDevice>> create(const DeviceConfig& config,
+                                                         IpcTransport transport,
+                                                         const char* name,
+                                                         const char* model) {
         using DeviceResult = Result<std::unique_ptr<MedicalDevice>>;
 
         // No default node. The kernel numbers rpmsg channels in the order they
@@ -722,9 +737,12 @@ public:
         // right on some boots; the address is a name the platform gives the
         // channel, and a configuration without one is refused here.
         if (config.address.empty()) {
-            return DeviceResult::fail(Status::InvalidArgument,
-                                      "driver rpmsg needs device.address: the node of "
-                                      "the producer's channel, by a name udev gives it");
+            return DeviceResult::fail(
+                Status::InvalidArgument,
+                std::string("driver ") + name + " needs device.address: " +
+                    (transport == IpcTransport::RpmsgChar
+                         ? "the node of the producer's channel, by a name udev gives it"
+                         : "the path of the socket the producer listens on"));
         }
 
         if (!config.driverOptions.empty()) {
@@ -734,17 +752,20 @@ public:
             }
         }
 
-        return DeviceResult::ok(std::unique_ptr<MedicalDevice>(new RpmsgDevice(config)));
+        return DeviceResult::ok(
+            std::unique_ptr<MedicalDevice>(new LinkDevice(config, transport, name, model)));
     }
 
-    explicit RpmsgDevice(const DeviceConfig& config) : config_(config) {}
+    LinkDevice(const DeviceConfig& config, IpcTransport transport, const char* name,
+               const char* model)
+        : config_(config), transport_(transport), name_(name), model_(model) {}
 
     DeviceInfo info() const override {
         DeviceInfo info;
         info.id = config_.id;
-        info.model = "MedPlatform AMP front-end (rpmsg)";
+        info.model = model_;
         info.serialNumber = config_.address;
-        info.driver = "rpmsg";
+        info.driver = name_;
         info.channelCount = config_.channelCount;
         info.sampleRateHz = config_.sampleRateHz;
         info.unit = "uV";
@@ -758,7 +779,7 @@ public:
         }
 
         IpcEndpoint endpoint;
-        endpoint.transport = IpcTransport::RpmsgChar;
+        endpoint.transport = transport_;
         endpoint.address = config_.address;
 
         // A bounded reconnection window, not a single attempt.
@@ -971,6 +992,9 @@ private:
     static constexpr std::chrono::milliseconds kControlAckTimeout{1000};
 
     DeviceConfig config_;
+    IpcTransport transport_;
+    std::string name_;
+    std::string model_;
     std::unique_ptr<MedicalIpcChannel> channel_;
     std::uint64_t lastSequence_ = 0;
     std::string lastError_;
@@ -1872,7 +1896,14 @@ Registry& registry() {
 
 const bool kBuiltinDriversRegistered = [] {
     MedicalDeviceFactory::registerDriver("simulated", &SimulatedDevice::create);
-    MedicalDeviceFactory::registerDriver("rpmsg", &RpmsgDevice::create);
+    MedicalDeviceFactory::registerDriver("rpmsg", [](const DeviceConfig& config) {
+        return LinkDevice::create(config, IpcTransport::RpmsgChar, "rpmsg",
+                                  "MedPlatform AMP front-end (rpmsg)");
+    });
+    MedicalDeviceFactory::registerDriver("seqpacket", [](const DeviceConfig& config) {
+        return LinkDevice::create(config, IpcTransport::UnixSeqpacket, "seqpacket",
+                                  "MedPlatform producer link (seqpacket)");
+    });
     MedicalDeviceFactory::registerDriver("iio", &IioDevice::create);
     return true;
 }();

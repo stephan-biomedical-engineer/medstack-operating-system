@@ -66,7 +66,8 @@ TEST_SOURCES := \
 	test_biosignal.cpp \
 	test_device.cpp \
 	test_iio.cpp \
-	test_amp_abi.cpp
+	test_amp_abi.cpp \
+	test_link.cpp
 
 ifeq ($(HAVE_SYSTEMD),yes)
 LIB_SOURCES  += $(FRAMEWORK)/src/MedicalLogger.cpp $(FRAMEWORK)/src/MedicalUpdate.cpp
@@ -137,10 +138,16 @@ $(BINARY): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/%.o: %.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
 
 $(BUILD)/%.o: $(FRAMEWORK)/src/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
+
+# Every object depends on the headers it included. Without this, a change to
+# a struct in a framework header left the other objects built against the old
+# layout, and the suite crashed reading a DeviceConfig of the wrong size
+# (2026-11-05, when DeviceConfig gained channelUnits).
+-include $(OBJECTS:.o=.d)
 
 $(BUILD)/amp_abi_c_probe.o: $(ABI_PROBE) $(AMP_ABI)/med_amp_abi.h | $(BUILD)
 	$(CC) -std=c99 $(CFLAGS_ABI) -c -o $@ $<
