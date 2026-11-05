@@ -121,9 +121,9 @@ endif
 # Refused rather than ignored everywhere but the board image: the QEMU profile
 # assigns its link with "=", which beats a passthrough variable, so LINK there
 # would build green with the parameter silently dropped - the failure the KEY
-# comment above describes. And refused without KERNEL=med for the links Linux
-# drives, whose drivers exist only in ./linux-med: ST's kernel has neither, so
-# the image would build and the converter would never appear.
+# comment above describes. And refused without KERNEL=med for the usb link, whose
+# bridge driver exists only in ./linux-med: ST's kernel does not have it, so the
+# image would build and the converter would never appear.
 #
 # The host container (make host) takes LINK too, with its own two answers: a PC
 # carries the converter only behind the USB bridge, or no converter at all.
@@ -149,9 +149,12 @@ else
       $(error LINK=$(LINK) on parse/bundle needs BOARD=stm32)
     endif
   endif
-  ifneq ($(LINK),amp)
+  # Only the bridge is board code in ./linux-med. The converter's driver is
+  # built out of tree from ads1299-linux on every link (meta-med-afe-ads1299),
+  # so "spi" needs nothing but ST's kernel since 2026-10-28.
+  ifeq ($(LINK),usb)
     ifneq ($(KERNEL),med)
-      $(error LINK=$(LINK) needs KERNEL=med: its drivers live only in ./linux-med)
+      $(error LINK=usb needs KERNEL=med: the USB bridge's driver lives only in ./linux-med)
     endif
   endif
 endif

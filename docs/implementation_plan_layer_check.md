@@ -2,7 +2,7 @@
 
 > **Criado em:** 02/11/2026, a partir da revisão da introdução do TCC (`Dissertacao_PTBR/02-elementos-textuais/introducao.tex`).
 > **Para quem:** o agente (ou a pessoa) que vai trabalhar neste repositório (`yocto_workspace`).
-> **Estado:** **implementado em 02/11/2026** — níveis A e B, nível C pelo caminho 2 (caminho 1 testado, não implementado); resultados em `docs/RESULTS.md` §11, registro no §10. Falta o passo 9 no `CLAUDE.md` (patch preparado, aguardando o autor, §8) e o commit (passo 10). O "Estado atual" do §2 é a medição de antes, no `HEAD` = `0d7f5c5`, com a árvore de trabalho suja (ver §8).
+> **Estado:** **implementado em 02/11/2026** — níveis A e B, nível C pelo caminho 2 (caminho 1 testado, não implementado); resultados em `docs/RESULTS.md` §11, registro no §10. O passo 9 foi feito também no `CLAUDE.md`; falta o commit (passo 10). O "Estado atual" do §2 é a medição de antes, no `HEAD` = `0d7f5c5`, com a árvore de trabalho suja (ver §8).
 > **Resultado esperado:** um alvo `make check-layers` (e, se possível, uma falha do próprio `bitbake`) que **reprova** a construção quando uma regra de camada é violada. A checagem precisa ter sido **vista falhando** contra violações injetadas e contra as duas violações históricas reais.
 
 ---
@@ -398,3 +398,4 @@ O texto do TCC vai usar estes números e artefatos. Junte tudo num lugar só: um
 | 02/11/2026 | §6 passo 7: nível B | `scripts/med-layer-graph.py`, `make check-layers-graph`: 7 perfis, 0 violações; injeção I4-I10 contra o B: 8 achados, todos esperados (I7b só o B pega) | 2 falsos positivos do analisador corrigidos (fecho do `do_rootfs`; atribuição de F6 a uma referência vazia). `simulated` na placa não é um `LINK` aceito; ficou só nos perfis host |
 | 02/11/2026 | §6 passo 8: nível C | caminho 2: `med-layer-guard.bbclass`, tarefa antes do `do_rootfs` assinada pelo conteúdo (`[file-checksums]`); vista falhando e voltando. Caminho 1: tratador em `BuildStarted` testado por `bitbake -R`, para o build antes de qualquer tarefa | `[nostamp]` rejeitado: faria o `do_rootfs` rodar sempre |
 | 02/11/2026 | §6 passo 9 | `RESULTS.md` §11 e item no §9 escritos; `CLAUDE.md`: patch preparado, **não aplicado** (§8) | — |
+| 02/11/2026 | §6 passo 9: `CLAUDE.md` | aplicado com o aval do autor: regras 1, 6 e 9 dizem qual alvo as verifica; `LAYERDEPENDS` do BSP e da AFE corrigidos; F9 com o marcador `measured:` e a recusa de endereço vazio; `make check-layers`/`check-layers-graph` na seção de build; e a regra 1 deixa de dizer que uma adjunta "never consumes" (contradizia o `ADJUNCT_MAY_DEPEND`) | a linha 204 (descrição da AFE) mistura numa só linha esta mudança e uma do trabalho do driver fora da árvore |
