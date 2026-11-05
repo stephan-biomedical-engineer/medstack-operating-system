@@ -523,6 +523,7 @@ test:
 	@$(MAKE) --no-print-directory -C tests/hmi check
 	@$(MAKE) --no-print-directory -C tests/amp-bench check
 	@$(MAKE) --no-print-directory -C tests/derive check
+	@$(MAKE) --no-print-directory -C tests/infusion-sim check
 	@$(MAKE) --no-print-directory -C tests/layer-check check
 	@python3 scripts/med-layer-check.py
 
