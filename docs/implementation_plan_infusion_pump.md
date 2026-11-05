@@ -664,3 +664,37 @@ outras suítes ficaram iguais à base. Injeções feitas e vistas:
   avisos), mas o teste dela não rodou.
 - A regra F8 do `make check-layers` recusou o driver novo até ele ser declarado como transporte.
   É a regra funcionando: um commit saiu antes da correção e foi emendado.
+
+---
+
+## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)
+
+Levantado pelo autor ao discutir uma classe de imagem. **Princípio**: o framework transporta,
+guarda, confere e audita dados sem saber o que eles são, e quem produz e quem consome declara o
+formato quando o dado passa. É o padrão que o framework já usa para drivers (fábrica por nome),
+opções de front-end e setpoints de atuador, e que ainda não usa em dois lugares:
+
+1. **Quadro de forma fixa.** `SampleFrame` é sempre canais × amostras em `double`, e o fio é `int32`
+   mais um bloco de lead-off. O destino é um quadro com **descritor** (tipo do elemento,
+   dimensões, unidade por eixo ou por canal) mais os bytes. O framework confere só o que pode
+   conferir sem entender: tamanho = dimensões × tipo, CRC, sequência e tempo. Um descritor que não
+   fecha com os bytes é recusado.
+2. **Formato de arquivo dentro do framework.** O `BiosignalWriter` (BDF+) é código do framework. O
+   destino são **gravadores de formato registrados por nome** no `MedicalStorage`, com o BDF+ no
+   perfil do EEG e um DICOM, se houver, no de imagem.
+
+O que isso resolveria: o vocabulário de classe medido na Fase 0 (L3, M2b: 96 linhas de código),
+porque o `BiosignalWriter` sai e o `LeadOff` vira uma máscara genérica de **estado por canal**, que
+serve ao eletrodo do EEG e ao detector de ar da bomba. Resolveria também a classe de imagem
+(câmera por V4L2, `vivid` no QEMU) sem interface nova além de um transporte e um gravador.
+
+O custo: uma versão nova do `med-amp-abi`, que o firmware do M33 tem de aprender, e o EEG,
+validado na placa, muda de caminho. Por isso fica **depois** desta bomba: ela é medida sobre o
+framework de hoje, e a mudança, se feita, entra como fase própria com o seu número (quantas linhas
+de EEG saíram do framework).
+
+**Por que o tomógrafo não virou um equipamento** (registrado na mesma conversa): a aquisição em
+blocos e o formato de arquivo seriam resolvidos por este item. A reconstrução precisaria de
+computação acelerada, que o framework não abstrai e que a regra 6 impede a aplicação de trazer.
+E boa parte da dificuldade (física, reconstrução, intertravamentos de radiação) está fora da
+plataforma. Ele continua como o perfil de base, sem aplicação (D6).
