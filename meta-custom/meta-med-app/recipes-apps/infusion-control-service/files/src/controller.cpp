@@ -537,6 +537,7 @@ std::string Controller::statusText() const {
     out += "vtbi_ml=" + num(program_.vtbiMl) + "\n";
     out += "delivered_ml=" + num(deliveredMl(), 4) + "\n";
     out += "pressure_mmhg=" + num(last_.pressureMmHg, 1) + "\n";
+    out += "motor=" + std::string(last_.motor ? "1" : "0") + "\n";
     out += "alarms=" + (alarms.empty() ? std::string("none") : alarms) + "\n";
     out += "silenced=" + std::string(silenced() ? "1" : "0") + "\n";
     out += "therapy_active=" + std::string(therapyActive_ ? "1" : "0") + "\n";

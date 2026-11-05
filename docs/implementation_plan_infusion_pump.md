@@ -787,6 +787,66 @@ As quatro asserções desta fase dizem que o perfil sobe inteiro: os dois servi�
 `NRestarts=0`, a biblioteca selada e o controlador ocioso respondendo pela `infusion-ctl`. As
 asserções que veem cada controle de risco falhar com a sua falha injetada são a Fase 7.
 
+### Fase 7 — suíte de aceitação, perfil `infusion` (2026-11-05)
+
+`python3 scripts/med-check.py infusion`: **29 asserções**, sendo as 13 de plataforma sem mudar uma
+linha, as 4 da Fase 6 e **12 da bomba**, cada uma um cenário completo que termina ocioso. As
+falhas entram pelo canal de falhas do simulador (`infusion-sim-fault`). O homem-morto é testado
+congelando o controlador com `SIGSTOP`, e o próprio simulador registra o disparo, porque um
+controlador travado não relata nada. `update-blocked` não existe: depende de D7, que não foi
+decidida.
+
+**Resultado, disco novo: 29/29.** Em segundo boot: 28/29, com a única falha sendo
+`journal-sealed`, o falso positivo do systemd (conformidade A8), como no EEG.
+
+| Asserção | RT | Medido (modelo) |
+|---|---|---|
+| `ders-hard-limit` | INF-01 | recusada, `SAFETY_LIMIT_VIOLATION` na trilha, nada programado |
+| `ders-soft-limit` | INF-02 | recusada sem confirmação; aceita com ela, operador na trilha |
+| `delivery-volume` | INF-04 | 1,0142 mL em 10,18 s, erro de 0,39% (critério 3%) |
+| `vtbi-complete` | INF-08 | parou em 0,5018 mL de 0,5 (limite: um período de leitura, 0,5111) |
+| `occlusion-alarm` | INF-06 | alarme em 4,00 s a 400 mL/h (`T_occ` 30 s); reconhecimento recusado enquanto a causa persiste |
+| `air-alarm` | INF-07 | 0,17 s |
+| `delivery-fault` | INF-05 | motor travado: 0,96 s |
+| `alarm-silence` | INF-12 | silenciado; ainda silenciado aos 30 s; o alarme voltou aos 62 s (`T_sil` 60 s), com registro |
+| `producer-lost` | INF-10 | mecanismo mudo: alarme em 0,52 s |
+| `deadman` | INF-09 | controlador congelado: motor parado **604 ms** depois do último sinal (janela 600 ms) |
+| `no-auto-resume` | INF-11 | `SIGKILL` durante a infusão: voltou parado e em alarme (`therapy_interrupted`), ocioso só depois do reconhecimento |
+| `audit-trail` | INF-13 | 68 registros, cadeia íntegra, os 9 tipos de evento presentes; 137 registros e cadeia íntegra através de um reboot e de um reinício |
+
+**Injeção de falha no alvo** (`tests/infusion-target/inject.py`). Uma imagem por asserção custaria
+horas, então os defeitos entram em lotes. O critério é **o conjunto de asserções que falha ser
+exatamente o previsto antes da execução**:
+
+| Lote | Defeitos | Previsto = observado |
+|---|---|---|
+| 1 | sem limite rígido; sem limite flexível; sem oclusão; sem comparação de entrega; sem VTBI; silêncio sem prazo; reconhecimento não auditado; marcador de terapia ignorado | **igual**: as 8 asserções correspondentes |
+| 2a | sem ar; homem-morto desligado **no simulador**; escala de volume 8% errada | **igual**: `air-alarm`, `alarm-silence` (usa o ar), `deadman`, `delivery-volume`, e `vtbi-complete` e `occlusion-alarm`, porque com 8% (acima da tolerância de 5%) a falha de entrega alarma antes |
+| 2b | supervisão do mecanismo desligada no controlador | **igual**: só `producer-lost` |
+
+As 12 asserções da bomba foram vistas falhar com o seu defeito.
+
+**O que deu errado no caminho, e conta como resultado**:
+- **`delivery-volume` falhou na primeira execução por erro de medição.** O cronômetro do shell
+  incluía dois lançamentos do `infusion-ctl` (0,6 s no QEMU). A asserção passou a usar os horários
+  de `THERAPY_STARTED` e `THERAPY_STOPPED`, que o controlador grava depois de o mecanismo confirmar
+  o comando. Nenhum código do aparelho mudou.
+- **O primeiro lote 2 juntou dois defeitos que formam uma falha dupla**: a supervisão desligada no
+  controlador e o homem-morto desligado no mecanismo. O conjunto de falhas saiu diferente do
+  previsto. O motor continuou acionado depois do fim da terapia, porque nem o comando de parada
+  nem o temporizador do mecanismo o alcançavam. O controle que sobrou, "motor acionado sem
+  terapia" (INF-05 no sentido inverso), viu o problema e travou o aparelho em alarme, recusando
+  terapias novas. Mas **não parou o motor**: nada mais conseguia alcançar o mecanismo. É o
+  argumento da Fase 10 medido: com dois controles fora, o terceiro detecta e não age.
+- **Uma escala 4% errada passou** pela asserção (2,97% contra 3%) e passaria também pela tolerância
+  de 5% do controlador. Um erro sistemático entre ~3,6% (o limite da asserção somado ao ruído da
+  medida, ~0,6%) e 5% não é visto por nenhum dos dois. É uma lacuna dos parâmetros do modelo, e
+  fica declarada.
+
+Mudanças desta fase em `meta-med-app`: o simulador registra o disparo do homem-morto, o arquivo de
+estado ganha `motor=`, e `T_sil` caiu de 120 para 60 s, para caber numa asserção. É parâmetro do
+modelo, atualizado também no `docs/REQUISITOS_INFUSAO.md`.
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)

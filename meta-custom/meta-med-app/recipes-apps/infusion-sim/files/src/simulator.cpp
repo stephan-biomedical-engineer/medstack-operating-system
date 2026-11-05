@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
@@ -163,7 +164,19 @@ int runSimulator(const SimulatorConfig& config, const std::atomic<bool>& stop,
             answer(*controller, mechanism.handle(request.value(), Clock::now()));
         }
         if (!faults.silent) {
-            mechanism.tick(Clock::now());
+            const bool wasTripped = mechanism.tripped();
+            const auto checked = Clock::now();
+            mechanism.tick(checked);
+            if (mechanism.tripped() && !wasTripped) {
+                // The one event a hung controller cannot report, so the
+                // mechanism reports it: to stdout, which is the journal.
+                std::printf("infusion-sim: dead-man tripped %lld ms after the last message "
+                            "(window %lld ms); motor at rest\n",
+                            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                checked - mechanism.lastHeard()).count()),
+                            static_cast<long long>(mechanism.window().count()));
+                std::fflush(stdout);
+            }
         }
 
         // Accepted after the controller's messages were read, so a controller

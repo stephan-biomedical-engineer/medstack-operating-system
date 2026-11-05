@@ -905,6 +905,27 @@ campo acrescentado são detectados no registro em que ocorreram. **O que não de
 Um reinício legítimo da cadeia (estado perdido) é contado e não é quebra, e por isso também não
 prova nada. Na placa: não medido.
 
+### Bomba de infusão: os controles de risco vistos agir e vistos falhar (2026-11-05)
+
+`python3 scripts/med-check.py infusion`, imagem `med-image-infusion` num disco novo: **29/29**. São
+13 asserções de plataforma, sem uma linha mudada, mais 16 do perfil, das quais 12 dirigem um
+controle de risco cada (`docs/REQUISITOS_INFUSAO.md`) com a falha injetada pelo simulador.
+
+Alguns números, todos do **modelo**: homem-morto com o controlador congelado, motor parado 604 ms
+depois do último sinal (janela 600 ms); VTBI de 0,5 mL parado em 0,5018 mL; volume a 0,39% da
+integral da taxa comandada; oclusão alarmada em 4,0 s; um reinício no meio da infusão voltou
+parado e em alarme.
+
+Cada uma das 12 asserções foi vista falhar com o seu defeito, em três lotes de imagens injetadas.
+Em cada lote, o conjunto de falhas foi **igual ao previsto antes da execução**
+(`implementation_plan_infusion_pump.md` §13, Fase 7, onde também está o lote que não bateu e por
+quê).
+
+**O que não demonstra**: nada sobre uma bomba real, a exatidão de entrega de um mecanismo físico
+ou a eficácia de um alarme diante de um operador. Também não demonstra o caso de uma falha dupla:
+com a supervisão do controlador e o temporizador do mecanismo desligados juntos, o terceiro
+controle detectou o motor fora de controle e não conseguiu pará-lo.
+
 ---
 
 ## 6. Caminho de atualização A/B

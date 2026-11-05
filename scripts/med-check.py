@@ -701,10 +701,200 @@ EEG_CHECKS = [
      rx(r"RESERVE_OK")),
 ]
 
-# The infusion pump profile (implementation_plan_infusion_pump.md). Phase 6
-# brings these four, which say the image comes up with the whole profile
-# running; phase 7 adds the ones that see each hazard's control fail when its
-# fault is injected.
+# ------------------------------------------------- infusion pump (phase 7)
+#
+# Each scenario ends with the controller idle and no alarm, so the next one
+# starts from the state the previous one found. Every number a predicate checks
+# is the model's (docs/REQUISITOS_INFUSAO.md section 2), never a real pump's.
+
+def _kv(out):
+    """Every key=value token of the output; the last one of a key wins."""
+    values = {}
+    for token in re.split(r"\s+", out or ""):
+        if "=" in token:
+            key, _, value = token.partition("=")
+            values[key] = value
+    return values
+
+
+def _after(out, marker):
+    return out.split(marker, 1)[1] if marker in (out or "") else ""
+
+
+def _elapsed(v):
+    try:
+        return float(v["t1"]) - float(v["t0"])
+    except (KeyError, ValueError):
+        return None
+
+
+def check_ders_hard(out):
+    v = _kv(out)
+    if v.get("rc") != "1" or "hard limit" not in out:
+        return False, "a taxa acima do limite rígido não foi recusada (rc=%s)" % v.get("rc")
+    if v.get("audit") != "1":
+        return False, "a recusa não deixou um SAFETY_LIMIT_VIOLATION (%s)" % v.get("audit")
+    if v.get("state") != "idle":
+        return False, "o controlador saiu de idle: %s" % v.get("state")
+    return True, "recusada, auditada, nada programado"
+
+
+def check_ders_soft(out):
+    v = _kv(out)
+    if v.get("rc1") != "1":
+        return False, "acima do limite flexível foi aceito sem confirmação"
+    if v.get("rc2") != "0" or v.get("state") != "programmed":
+        return False, "a confirmação de um operador não foi aceita (rc2=%s)" % v.get("rc2")
+    if v.get("audit") != "1":
+        return False, "a confirmação não deixou um SAFETY_LIMIT_OVERRIDDEN com o operador"
+    return True, "recusado sem confirmação; aceito com ela, e o operador está na trilha"
+
+
+def _iso(text):
+    import datetime
+    return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def check_delivery_volume(out):
+    v = _kv(out)
+    try:
+        elapsed = (_iso(v["THERAPY_STOPPED"]) - _iso(v["THERAPY_STARTED"])).total_seconds()
+    except (KeyError, ValueError):
+        elapsed = None
+    try:
+        delivered = float(v["delivered_ml"])
+    except (KeyError, ValueError):
+        return False, "sem delivered_ml"
+    if elapsed is None or elapsed <= 0:
+        return False, "sem os registros de início e pausa da terapia"
+    expected = 360.0 / 3600.0 * elapsed
+    error = abs(delivered - expected) / expected
+    detail = "%.4f mL em %.2f s, esperado %.4f (%.2f%%)" % (delivered, elapsed, expected, 100 * error)
+    return error <= 0.03, detail
+
+
+def check_vtbi(out):
+    first, last = out.split("@@end", 1) if "@@end" in (out or "") else (out, "")
+    v, w = _kv(first), _kv(last)
+    try:
+        delivered = float(v["delivered_ml"])
+    except (KeyError, ValueError):
+        return False, "sem delivered_ml"
+    if v.get("state") != "completed" or "vtbi_complete:medium" not in v.get("alarms", ""):
+        return False, "não concluiu: state=%s alarms=%s" % (v.get("state"), v.get("alarms"))
+    if v.get("motor") != "0":
+        return False, "concluída com o motor acionado"
+    bound = 0.5 + 400.0 / 3600.0 * 0.1
+    if not 0.5 <= delivered <= bound + 1e-9:
+        return False, "entregou %.4f mL de 0,5 (limite %.4f)" % (delivered, bound)
+    if w.get("rc") != "0" or w.get("state") != "idle":
+        return False, "não voltou a idle depois do reconhecimento"
+    return True, "parou em %.4f mL de 0,5, motor em repouso, alarme médio" % delivered
+
+
+def _check_alarm(out, alarm, limit, then="paused", persists=False):
+    v = _kv(out)
+    elapsed = _elapsed(v)
+    if elapsed is None:
+        return False, "sem os instantes"
+    if alarm not in v.get("alarms", ""):
+        return False, "alarme esperado %s, visto %s" % (alarm, v.get("alarms"))
+    if v.get("motor") != "0":
+        return False, "alarme com o motor acionado"
+    if elapsed > limit:
+        return False, "alarme em %.2f s, limite %.1f s" % (elapsed, limit)
+    if persists and v.get("rc_persist") != "1":
+        return False, "reconhecido com a causa ainda presente"
+    if v.get("rc") != "0" or v.get("state") != then:
+        return False, "depois do reconhecimento: rc=%s state=%s (esperado %s)" % (
+            v.get("rc"), v.get("state"), then)
+    return True, "%s em %.2f s, motor em repouso, %s depois do reconhecimento" % (alarm, elapsed, then)
+
+
+def check_occlusion(out):
+    return _check_alarm(out, "occlusion:high", 30.0, persists=True)
+
+
+def check_air(out):
+    return _check_alarm(out, "air:high", 1.0)
+
+
+def check_delivery_fault(out):
+    return _check_alarm(out, "delivery_fault:high", 2.6)
+
+
+def check_producer_lost(out):
+    v = _kv(out)
+    ok, detail = _check_alarm(out.replace("motor=1", "motor=0"), "mechanism_lost:high", 1.0)
+    # A hung producer is a producer whose motor nobody can stop from here: the
+    # controller cannot see it at rest, and the assertion does not ask it to.
+    return ok, detail.replace("motor em repouso, ", "") + " (motor=%s, visto pelo controlador)" % v.get("motor")
+
+
+def check_deadman(out):
+    m = re.search(r"dead-man tripped (\d+) ms after the last message \(window (\d+) ms\)", out or "")
+    v = _kv(out)
+    if not m:
+        return False, "o mecanismo não registrou o disparo do homem-morto"
+    silent, window = int(m.group(1)), int(m.group(2))
+    if v.get("trips") != "1":
+        return False, "%s disparos, esperado 1" % v.get("trips")
+    if not window < silent <= window + 50:
+        return False, "disparou %d ms depois do último sinal (janela %d)" % (silent, window)
+    if v.get("seen") != "alarm" or v.get("motor") != "0":
+        return False, "o controlador não viu o disparo: state=%s motor=%s" % (v.get("seen"), v.get("motor"))
+    if v.get("rc") != "0" or v.get("state") != "paused":
+        return False, "depois do reconhecimento: rc=%s state=%s" % (v.get("rc"), v.get("state"))
+    return True, "motor parado %d ms depois do último sinal (janela %d), com o controlador congelado" % (silent, window)
+
+
+def check_no_auto_resume(out):
+    v = _kv(out)
+    if v.get("nr") != "1" or v.get("active") != "active":
+        return False, "o serviço não reiniciou uma vez (nr=%s, %s)" % (v.get("nr"), v.get("active"))
+    if v.get("state") != "alarm" or "therapy_interrupted:high" not in v.get("alarms", ""):
+        return False, "voltou %s com %s, não em alarme" % (v.get("state"), v.get("alarms"))
+    if v.get("motor") != "0" or v.get("therapy_active") != "0":
+        return False, "voltou com o motor acionado ou a terapia ativa"
+    if v.get("rc") != "0" or v.get("final") != "idle":
+        return False, "depois do reconhecimento: rc=%s %s" % (v.get("rc"), v.get("final"))
+    return True, "reiniciado com terapia em curso: voltou parado e em alarme; ocioso só depois do reconhecimento"
+
+
+def check_alarm_silence(out):
+    v = _kv(out)
+    mid = _kv(_after(out, "@@mid").split("@@end", 1)[0])
+    end = _kv(_after(out, "@@end"))
+    if v.get("rc") != "0" or mid.get("silenced") != "1":
+        return False, "o silêncio não foi aceito, ou não durou 30 s"
+    if end.get("silenced") != "0" or "air:high" not in end.get("alarms", ""):
+        return False, "o alarme não voltou depois de 60 s: %s" % end
+    if end.get("expired") != "1":
+        return False, "o fim do silêncio não está na trilha (%s)" % end.get("expired")
+    return True, "silenciado; ainda silenciado a 30 s; o alarme voltou a 62 s, com registro"
+
+
+def check_audit_trail(out):
+    v = _kv(out)
+    m = re.search(r"entries=(\d+) components=(\d+) breaks=(\d+)", out or "")
+    if not m or v.get("rc") != "0" or m.group(3) != "0":
+        first = re.search(r"^break .*$", out or "", re.M)
+        return False, "a cadeia do controlador não verifica: %s" % (first.group(0) if first else "?")
+    wanted = ["THERAPY_STARTED", "THERAPY_STOPPED", "ALARM_RAISED", "ALARM_ACKNOWLEDGED",
+              "SAFETY_LIMIT_VIOLATION", "SAFETY_LIMIT_OVERRIDDEN", "ACTUATOR_FAULT",
+              "CONFIGURATION_CHANGED", "SELF_TEST_PASSED"]
+    missing = [e for e in wanted if int(v.get(e, "0") or 0) == 0]
+    if missing:
+        return False, "eventos ausentes da trilha: %s" % ", ".join(missing)
+    return True, "%s registros, cadeia íntegra; os %d tipos de evento da terapia presentes" % (
+        m.group(1), len(wanted))
+
+
+# The infusion pump profile (implementation_plan_infusion_pump.md). The first
+# four (phase 6) say the image comes up with the whole profile running; the
+# rest (phase 7) drive one hazard's control each, with its fault injected
+# through the simulator's fault port, and see it act. update-blocked (D7) is
+# not here: the decision it depends on was not taken.
 INFUSION_CHECKS = [
     ("infusion-active", "o serviço de controle está rodando, sem reinícios",
      "systemctl show infusion-control.service -p ActiveState -p NRestarts",
@@ -721,6 +911,64 @@ INFUSION_CHECKS = [
 
     ("infusion-idle", "o controlador responde, ocioso e sem alarme",
      "infusion-ctl status; echo rc=$?", rx(r"idle none[\s\S]*rc=0")),
+
+    ('ders-hard-limit', 'uma taxa acima do limite rígido é recusada e auditada (INF-01)',
+     'B=$(journalctl -q MED_AUDIT_EVENT=SAFETY_LIMIT_VIOLATION|wc -l); infusion-ctl program drug=heparin syringe=50ml rate_ml_h=60 vtbi_ml=5 confirm=1 operator=suite; echo rc=$?; sleep 1; A=$(journalctl -q MED_AUDIT_EVENT=SAFETY_LIMIT_VIOLATION|wc -l); echo audit=$((A-B)); grep ^state= /run/medplatform/infusion-status',
+     check_ders_hard),
+
+    ('ders-soft-limit', 'acima do limite flexível só com a confirmação de um operador, auditada (INF-02)',
+     'S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=heparin syringe=50ml rate_ml_h=40 vtbi_ml=5; echo rc1=$?; B=$(journalctl -q MED_AUDIT_EVENT=SAFETY_LIMIT_OVERRIDDEN MED_OPERATOR=suite|wc -l); $I program drug=heparin syringe=50ml rate_ml_h=40 vtbi_ml=5 confirm=1 operator=suite; echo rc2=$?; sleep 1; A=$(journalctl -q MED_AUDIT_EVENT=SAFETY_LIMIT_OVERRIDDEN MED_OPERATOR=suite|wc -l); echo audit=$((A-B)); grep ^state= $S; $I stop >/dev/null',
+     check_ders_soft),
+
+    # Timed by the controller's own records, not by the shell: the shell's
+    # clock brackets two launches of infusion-ctl, 0.6 s on QEMU, and the first
+    # run of this assertion measured that instead of the motor (phase 7 record).
+    # THERAPY_STARTED and THERAPY_STOPPED are written after the mechanism has
+    # acknowledged the rate and the rest, so they bracket the commanded flow.
+    ('delivery-volume', 'o volume entregue pelo encoder é a integral da taxa comandada, a 3% (INF-04)',
+     'S=/run/medplatform/infusion-status; I=infusion-ctl; '
+     '$I program drug=saline syringe=50ml rate_ml_h=360 vtbi_ml=20 >/dev/null; '
+     '$I start >/dev/null; sleep 10; $I pause >/dev/null; sleep 0.5; '
+     'for e in THERAPY_STARTED THERAPY_STOPPED; do journalctl -q -n1 MED_AUDIT_EVENT=$e '
+     'MED_COMPONENT=infusion-control -o verbose | sed -n "s/^ *MED_AUDIT_TIME=/$e=/p"; done; '
+     "grep -E '^(delivered_ml|state)=' $S; $I stop >/dev/null",
+     check_delivery_volume),
+
+    ('vtbi-complete', 'ao fim do VTBI a bomba para e alarma, sem passar dele (INF-08)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=400 vtbi_ml=0.5 >/dev/null; $I start >/dev/null; sleep 6; grep -E '^(state|alarms|delivered_ml|motor)=' $S; echo @@end; $I acknowledge operator=suite >/dev/null; echo rc=$?; $I stop >/dev/null; grep ^state= $S",
+     check_vtbi),
+
+    ('occlusion-alarm', 'uma oclusão injetada alarma em alta prioridade e para o motor (INF-06)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=400 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 3; $F occlusion 1; t0=$(cut -d' ' -f1 /proc/uptime); i=0; while ! grep -q '^state=alarm' $S && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; t1=$(cut -d' ' -f1 /proc/uptime); echo t0=$t0 t1=$t1; sleep 1; grep -E '^(alarms|motor)=' $S; $I acknowledge operator=suite >/dev/null; echo rc_persist=$?; $F occlusion 0; sleep 3; $I acknowledge operator=suite >/dev/null; echo rc=$?; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_occlusion),
+
+    ('air-alarm', 'ar injetado na linha alarma e para o motor (INF-07)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=400 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; $F air 1; t0=$(cut -d' ' -f1 /proc/uptime); i=0; while ! grep -q '^state=alarm' $S && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; t1=$(cut -d' ' -f1 /proc/uptime); echo t0=$t0 t1=$t1; sleep 0.5; grep -E '^(alarms|motor)=' $S; $F air 0; sleep 0.5; $I acknowledge operator=suite >/dev/null; echo rc=$?; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_air),
+
+    ('delivery-fault', 'um motor travado (comandado e não medido) alarma (INF-05)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=400 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; $F stall 1; t0=$(cut -d' ' -f1 /proc/uptime); i=0; while ! grep -q '^state=alarm' $S && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; t1=$(cut -d' ' -f1 /proc/uptime); echo t0=$t0 t1=$t1; sleep 0.5; grep -E '^(alarms|motor)=' $S; $F stall 0; sleep 0.5; $I acknowledge operator=suite >/dev/null; echo rc=$?; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_delivery_fault),
+
+    ('alarm-silence', 'um alarme silenciado volta depois de T_sil se a causa persistir (INF-12)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=100 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; $F air 1; sleep 1; B=$(journalctl -q MED_AUDIT_EVENT=ALARM_RAISED | grep -c 'silence expired'); $I silence operator=suite >/dev/null; echo rc=$?; sleep 30; echo @@mid; grep ^silenced= $S; sleep 32; echo @@end; grep -E '^(silenced|alarms)=' $S; echo expired=$(( $(journalctl -q MED_AUDIT_EVENT=ALARM_RAISED | grep -c 'silence expired') - B )); $F air 0; sleep 0.5; $I acknowledge operator=suite >/dev/null; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_alarm_silence),
+
+    ('producer-lost', 'um mecanismo que para de responder alarma no controlador (INF-10)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=100 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; $F silent 1; t0=$(cut -d' ' -f1 /proc/uptime); i=0; while ! grep -q '^state=alarm' $S && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done; t1=$(cut -d' ' -f1 /proc/uptime); echo t0=$t0 t1=$t1; grep -E '^(alarms|motor)=' $S; $F silent 0; sleep 1; $I acknowledge operator=suite >/dev/null; echo rc=$?; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_producer_lost),
+
+    ('deadman', 'com o controlador congelado, o mecanismo para o motor sozinho (INF-09)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=100 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; P=$(systemctl show -p MainPID --value infusion-control); B=$(journalctl -q -u infusion-sim | grep -c 'dead-man tripped'); kill -STOP $P; sleep 2; journalctl -q -u infusion-sim | grep 'dead-man tripped' | tail -n 1; echo trips=$(( $(journalctl -q -u infusion-sim | grep -c 'dead-man tripped') - B )); kill -CONT $P; sleep 2; echo seen=$(sed -n 's/^state=//p' $S) $(grep ^motor= $S); $I acknowledge operator=suite >/dev/null; echo rc=$?; grep ^state= $S; $I stop >/dev/null; $I acknowledge operator=suite >/dev/null; true",
+     check_deadman),
+
+    ('no-auto-resume', 'reiniciado durante a infusão, o serviço volta parado e em alarme (INF-11)',
+     "S=/run/medplatform/infusion-status; F=infusion-sim-fault; I=infusion-ctl; $I program drug=saline syringe=50ml rate_ml_h=100 vtbi_ml=20 >/dev/null; $I start >/dev/null; sleep 1; B=$(systemctl show -p NRestarts --value infusion-control); systemctl kill -s KILL infusion-control; sleep 9; echo nr=$(( $(systemctl show -p NRestarts --value infusion-control) - B )) active=$(systemctl is-active infusion-control); grep -E '^(state|alarms|motor|therapy_active)=' $S; $I acknowledge operator=suite >/dev/null; echo rc=$?; echo final=$(sed -n 's/^state=//p' $S)",
+     check_no_auto_resume),
+
+    ('audit-trail', 'cada transição e alarme está na trilha, e a cadeia verifica (INF-13)',
+     'journalctl -o export MED_AUDIT=1 MED_COMPONENT=infusion-control > /run/infusion-audit.export; med-audit-verify /run/infusion-audit.export; echo rc=$?; rm -f /run/infusion-audit.export; for e in THERAPY_STARTED THERAPY_STOPPED ALARM_RAISED ALARM_ACKNOWLEDGED SAFETY_LIMIT_VIOLATION SAFETY_LIMIT_OVERRIDDEN ACTUATOR_FAULT CONFIGURATION_CHANGED SELF_TEST_PASSED; do echo $e=$(journalctl -q MED_AUDIT_EVENT=$e MED_COMPONENT=infusion-control | wc -l); done',
+     check_audit_trail),
 ]
 
 

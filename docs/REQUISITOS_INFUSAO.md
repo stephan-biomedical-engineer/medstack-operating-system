@@ -51,7 +51,7 @@ de configuração selado da bomba, com limites em `SafetyLimit`, e não no códi
 | `Q_test` | taxa de teste das asserções | 100 mL/h | |
 | `ε_vol` | tolerância de volume entregue (modelo) | 1 % ou 1 passo, o maior | testa o modelo e a contagem, não a exatidão de uma bomba |
 | `ε_del` | diferença comandado × medido que é falha de entrega | 5 % sustentado por 2 s | |
-| `T_sil` | duração máxima do silenciamento de um alarme | 120 s | IEC 60601-1-8 `[60601-1-8 §6.3?]` limita o silenciamento; o valor é do modelo |
+| `T_sil` | duração máxima do silenciamento de um alarme | 60 s | IEC 60601-1-8 `[60601-1-8 §6.3?]` limita o silenciamento; o valor é do modelo |
 
 ---
 

@@ -73,6 +73,7 @@ public:
     bool armed() const { return armed_; }
     bool tripped() const { return tripped_; }
     std::chrono::milliseconds window() const { return window_; }
+    Clock::time_point lastHeard() const { return lastHeard_; }
 
 private:
     void rest() { model_.setRate(0.0); }
