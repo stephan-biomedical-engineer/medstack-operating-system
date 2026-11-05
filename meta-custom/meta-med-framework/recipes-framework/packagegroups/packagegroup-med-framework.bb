@@ -13,6 +13,7 @@ inherit packagegroup
 
 RDEPENDS:${PN} = " \
     med-framework-api \
+    med-framework-api-audit-verify \
     dbus \
     rauc \
 "

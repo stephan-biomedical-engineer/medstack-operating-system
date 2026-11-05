@@ -45,6 +45,16 @@ inherit cmake pkgconfig features_check
 REQUIRED_DISTRO_FEATURES = "systemd"
 
 FILES:${PN} += "${libdir}/libmedframework.so.*"
+
+# The chain verifier, in a package of its own: an image that writes an audit
+# trail can carry the tool that checks it without every consumer of the
+# library getting a binary (packagegroup-med-framework installs it).
+PACKAGES =+ "${PN}-audit-verify"
+FILES:${PN}-audit-verify = "${bindir}/med-audit-verify"
+# A tool, not a part of the library: the Debian-style renaming that turns this
+# recipe's packages into libmedframework* would call it
+# "libmedframework-audit-verify", which reads as a library.
+DEBIAN_NOAUTONAME:${PN}-audit-verify = "1"
 FILES:${PN}-dev += " \
     ${includedir}/medplatform \
     ${libdir}/pkgconfig/medframework.pc \

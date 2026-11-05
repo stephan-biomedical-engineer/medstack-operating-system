@@ -46,6 +46,7 @@ add_library(medframework SHARED
     src/MedicalUpdate.cpp
     src/MedicalDevice.cpp
     src/MedicalActuator.cpp
+    src/AuditChain.cpp
 )
 
 target_compile_definitions(medframework
@@ -87,6 +88,17 @@ set_target_properties(medframework PROPERTIES
 
 install(TARGETS medframework
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# The verifier of the audit chain. Part of the framework because the chain is:
+# the canonical form it replays is the one MedicalLogger writes (AuditChain.h),
+# and two copies of "what a digest covers" would diverge without failing.
+add_executable(med-audit-verify src/med-audit-verify.cpp)
+target_include_directories(med-audit-verify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(med-audit-verify PRIVATE
+    -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-unused-parameter
+)
+target_link_libraries(med-audit-verify PRIVATE medframework)
+install(TARGETS med-audit-verify RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(DIRECTORY include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/medplatform

@@ -188,6 +188,33 @@ def check_sealed(out):
     return True, "%d selado(s): todos verificam com a chave, nenhum com uma errada" % n
 
 
+def check_audit_chain(out):
+    """The trail as written, and a copy with one field edited.
+
+    The first half reads the device's own audit records through the verifier
+    the framework ships. The second edits the first MESSAGE of a copy and runs
+    the same verifier over it: an assertion about tamper evidence that has
+    never seen tampering is a claim (implementation_plan_conformity.md, 2.1).
+    """
+    m = re.search(r"entries=(\d+) components=(\d+) breaks=(\d+)", out)
+    rc = re.search(r"rc=(\d+)", out)
+    edited = re.search(r"edited_rc=(\d+)", out)
+    if not m or not rc or not edited:
+        return False, out.strip().splitlines()[-1] if out.strip() else "(vazio)"
+    entries, components, breaks = map(int, m.groups())
+    verified = sum(int(v) for v in re.findall(r"verified=(\d+)", out))
+    legacy = sum(int(v) for v in re.findall(r"legacy=(\d+)", out))
+    if breaks or rc.group(1) != "0":
+        first = re.search(r"^break .*$", out, re.M)
+        return False, "%d quebra(s): %s" % (breaks, first.group(0) if first else "?")
+    if verified == 0:
+        return False, "nenhum registro no formato 2 foi verificado (%d entradas)" % entries
+    if edited.group(1) != "1":
+        return False, "a cópia com um campo alterado passou no verificador (rc=%s)" % edited.group(1)
+    return True, ("%d registro(s) em %d cadeia(s), %d verificados, %d legado; "
+                  "a cópia alterada foi recusada" % (entries, components, verified, legacy))
+
+
 def check_exposure(out):
     m = re.search(r"exposure level for .*?: ([0-9.]+)", out)
     if not m:
@@ -432,6 +459,17 @@ EEG_CHECKS = [
     ("sandbox-exposure", "o sandbox do serviço não regrediu",
      "systemd-analyze security eeg-acquisition.service --no-pager 2>&1 | tail -3",
      check_exposure),
+
+    # The application's half of tamper evidence (AUD-03): the hash chain
+    # MedicalLogger writes, replayed from the journal by the framework's
+    # verifier, and the same verifier refusing a copy with one field edited.
+    ("audit-chain", "a cadeia de auditoria verifica, e uma alteração é detectada",
+     "journalctl -o export MED_AUDIT=1 > /run/med-audit.export; "
+     "med-audit-verify /run/med-audit.export; echo rc=$?; "
+     "awk '!d && /^MESSAGE=/{sub(/^MESSAGE=/,\"MESSAGE=edited \");d=1}1' "
+     "/run/med-audit.export | med-audit-verify >/dev/null; echo edited_rc=$?; "
+     "rm -f /run/med-audit.export",
+     check_audit_chain),
 
     # O que o registro clínico precisa saber de uma sessão
     # (implementation_plan_bdf.md, Fase 1). O conversor que deriva o BDF não

@@ -104,6 +104,21 @@ void testLogger() {
         CHECK_EQ(static_cast<long long>(genesis.size()), 64LL);
         CHECK_EQ(logger.auditSequence(), static_cast<std::uint64_t>(0));
 
+        // Two values under one journal name cannot be verified: refused before
+        // anything is written, and the chain does not move (format 2,
+        // AuditChain.h). Checked first, so it holds with or without journald.
+        CHECK_STATUS(logger.audit(AuditEvent::SystemStart, "colisão",
+                                  {{"session_id", "1"}, {"session-id", "2"}}),
+                     Status::InvalidArgument);
+        CHECK_STATUS(logger.audit(AuditEvent::SystemStart, "colisão", {{"component", "x"}}),
+                     Status::InvalidArgument);
+        CHECK_STATUS(logger.audit(AuditEvent::SystemStart, "colisão", {{"audit_seq", "9"}}),
+                     Status::InvalidArgument);
+        CHECK_STATUS(logger.audit(AuditEvent::SystemStart, "colisão", {{"audit_hash", "0"}}),
+                     Status::InvalidArgument);
+        CHECK_EQ(logger.chainDigest(), genesis);
+        CHECK_EQ(logger.auditSequence(), static_cast<std::uint64_t>(0));
+
         const Status first = logger.audit(AuditEvent::SystemStart, "teste de cadeia",
                                           {{"phase", "1"}});
 

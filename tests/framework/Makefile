@@ -20,6 +20,9 @@ CXXFLAGS ?= -std=c++17 -g -O0
 # reads the output of.
 CXXFLAGS += -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-unused-parameter -Werror
 CXXFLAGS += -I$(FRAMEWORK)/include -I$(AMP_ABI) -I.
+# AuditChain.h is internal to the library and not installed; its verifier is
+# tested here directly.
+CXXFLAGS += -iquote $(FRAMEWORK)/src
 
 # The "iio" driver lists devices from a build-time directory; here it is a tree
 # of plain files test_iio.cpp builds, under this suite's own build directory.
@@ -57,6 +60,7 @@ LIB_SOURCES := \
 	$(FRAMEWORK)/src/MedicalStorageBiosignal.cpp \
 	$(FRAMEWORK)/src/MedicalDevice.cpp \
 	$(FRAMEWORK)/src/MedicalActuator.cpp \
+	$(FRAMEWORK)/src/AuditChain.cpp \
 	$(FRAMEWORK)/src/MedicalIPC.cpp
 
 TEST_SOURCES := \
@@ -69,7 +73,8 @@ TEST_SOURCES := \
 	test_iio.cpp \
 	test_amp_abi.cpp \
 	test_link.cpp \
-	test_actuator.cpp
+	test_actuator.cpp \
+	test_audit_chain.cpp
 
 ifeq ($(HAVE_SYSTEMD),yes)
 LIB_SOURCES  += $(FRAMEWORK)/src/MedicalLogger.cpp $(FRAMEWORK)/src/MedicalUpdate.cpp

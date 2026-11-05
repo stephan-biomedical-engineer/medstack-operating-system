@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "AuditChain.h"
 #include "MedDigest.h"
 
 namespace med {
@@ -35,26 +36,6 @@ std::string normaliseFieldName(const std::string& key) {
         }
     }
     return out;
-}
-
-/// The serialised form a record's digest is computed over. Field order is the
-/// caller's order, deliberately: a verifier replaying the journal reads the
-/// fields back in the order journald stored them.
-std::string serialiseRecord(std::uint64_t sequence, const std::string& timestamp,
-                            const char* event, const std::string& message,
-                            const std::vector<LogField>& fields) {
-    std::string record;
-    record.reserve(128 + message.size());
-    record.append(std::to_string(sequence)).push_back('|');
-    record.append(timestamp).push_back('|');
-    record.append(event).push_back('|');
-    record.append(message);
-    for (const LogField& field : fields) {
-        record.push_back('|');
-        record.append(field.key).push_back('=');
-        record.append(field.value);
-    }
-    return record;
 }
 
 Status writeFileAtomically(const std::string& path, const std::string& content) {
@@ -264,9 +245,36 @@ Status MedicalLogger::audit(AuditEvent event, const std::string& message,
     const char* const eventName = toString(event);
     const std::uint64_t sequence = impl_->sequence + 1;
 
-    const std::string record =
-        serialiseRecord(sequence, timestamp, eventName, message, fields);
-    const std::string digest = internal::sha256Hex(impl_->chainDigest + "|" + record);
+    // Every field the record will carry that the digest covers, by the name
+    // the journal stores it under (AuditChain.h, format 2). The framework's
+    // own first, so a caller's field cannot take one of their names.
+    audit::Fields record;
+    record["MESSAGE"] = message;
+    record["MED_COMPONENT"] = impl_->config.component;
+    record["MED_AUDIT"] = "1";
+    record["MED_AUDIT_FORMAT"] = audit::kFormat;
+    record["MED_AUDIT_EVENT"] = eventName;
+    record["MED_AUDIT_SEQ"] = std::to_string(sequence);
+    record["MED_AUDIT_TIME"] = timestamp;
+    record["MED_AUDIT_PREV"] = impl_->chainDigest;
+    if (!impl_->config.deviceId.empty()) {
+        record["MED_DEVICE_ID"] = impl_->config.deviceId;
+    }
+    if (!impl_->config.softwareVersion.empty()) {
+        record["MED_SW_VERSION"] = impl_->config.softwareVersion;
+    }
+    for (const LogField& field : fields) {
+        const std::string name = normaliseFieldName(field.key);
+        // Two fields under one journal name are two values for a verifier to
+        // choose between, and only one of them hashed: refused, and nothing is
+        // written. The same for a caller's field named like one of the
+        // framework's ("audit_seq" -> MED_AUDIT_SEQ), and for MED_AUDIT_HASH.
+        if (name == "MED_AUDIT_HASH" || !record.emplace(name, field.value).second) {
+            return Status::InvalidArgument;
+        }
+    }
+
+    const std::string digest = audit::digest(impl_->chainDigest, record);
     if (digest.empty()) {
         // No digest means no tamper evidence, and an audit record without
         // tamper evidence is worse than a loud failure.
@@ -274,28 +282,16 @@ Status MedicalLogger::audit(AuditEvent event, const std::string& message,
     }
 
     std::vector<std::string> storage;
-    storage.reserve(fields.size() + 12);
-    storage.push_back("MESSAGE=" + message);
+    storage.reserve(record.size() + 3);
+    for (const auto& field : record) {
+        storage.push_back(field.first + "=" + field.second);
+    }
     // Audit records are Notice: they are expected, not problems, and must not
-    // be filtered out by a severity threshold set for diagnostics.
+    // be filtered out by a severity threshold set for diagnostics. PRIORITY and
+    // SYSLOG_IDENTIFIER are the journal's, outside the digest by design.
     storage.push_back("PRIORITY=" + std::to_string(static_cast<int>(Severity::Notice)));
     storage.push_back("SYSLOG_IDENTIFIER=" + impl_->config.component);
-    storage.push_back("MED_COMPONENT=" + impl_->config.component);
-    storage.push_back("MED_AUDIT=1");
-    storage.push_back(std::string("MED_AUDIT_EVENT=") + eventName);
-    storage.push_back("MED_AUDIT_SEQ=" + std::to_string(sequence));
-    storage.push_back("MED_AUDIT_TIME=" + timestamp);
-    storage.push_back("MED_AUDIT_PREV=" + impl_->chainDigest);
     storage.push_back("MED_AUDIT_HASH=" + digest);
-    if (!impl_->config.deviceId.empty()) {
-        storage.push_back("MED_DEVICE_ID=" + impl_->config.deviceId);
-    }
-    if (!impl_->config.softwareVersion.empty()) {
-        storage.push_back("MED_SW_VERSION=" + impl_->config.softwareVersion);
-    }
-    for (const LogField& field : fields) {
-        storage.push_back(normaliseFieldName(field.key) + "=" + field.value);
-    }
 
     std::vector<struct iovec> iov;
     iov.reserve(storage.size());

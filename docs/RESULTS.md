@@ -857,6 +857,37 @@ um desligamento comum não distingue adulteração de rotina. A injeção de fal
 e o byte alterado num arquivo selado ainda não foram feitos. Na placa: não medido. O caminho está
 na decisão D11 daquele plano.
 
+### Cadeia de hash da aplicação (2026-11-05): o formato 1 não era verificável; o 2 é
+
+**Antes** (formato 1), medido sobre 42 registros reais do QEMU com `journalctl -o json MED_AUDIT=1`
+e um script que refaz o hash. O conteúdo de 5 registros verifica na ordem do journal, o de 3 em
+ordem alfabética e o de 21 com alguma permutação. O encadeamento verifica em 40 de 40. Ou seja,
+a cadeia provava a ordem e não o conteúdo: o hash cobria as chaves e a ordem do chamador, e o
+journal guarda nenhuma das duas.
+
+**Depois** (formato 2, `src/AuditChain.h` do framework):
+
+```bash
+journalctl -o export MED_AUDIT=1 | med-audit-verify     # no alvo; ou -D <dir> no host
+make check                                               # asserção audit-chain
+```
+
+| | Resultado |
+|---|---|
+| 1º boot de uma imagem nova | `make check` 40/40 |
+| 2º boot | 43 registros em 2 cadeias, **todos verificados**, a cadeia continua através do reboot; uma cópia com um `MESSAGE` alterado é recusada (rc=1) |
+| host | 46 verificações; o hash de referência vem do `hashlib` do Python, não do código testado |
+| injeções | conteúdo não conferido: 5 falhas; sequência não conferida: 2; sem prefixo de comprimento: 2, vistas só pelo vetor independente |
+
+**O que isso demonstra**: um campo alterado, um registro removido, dois trocados de ordem e um
+campo acrescentado são detectados no registro em que ocorreram. **O que não demonstra**:
+- que nada foi removido do **fim** da cadeia, porque uma cauda cortada parece uma cadeia que parou;
+- que a cadeia não foi recalculada por quem tem root. Ela é testemunha de integridade, não
+  assinatura. O mecanismo para isso é o selo do journal, que tem o falso positivo descrito acima.
+
+Um reinício legítimo da cadeia (estado perdido) é contado e não é quebra, e por isso também não
+prova nada. Na placa: não medido.
+
 ---
 
 ## 6. Caminho de atualização A/B

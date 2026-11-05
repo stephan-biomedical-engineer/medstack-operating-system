@@ -12,7 +12,11 @@
 //     trail instead of grepping it.
 //   * Tamper evident. Every audit record carries the SHA-256 of
 //     (previous digest || this record). Removing, reordering or editing a
-//     record breaks the chain at that point and every point after it. The OS
+//     record breaks the chain at that point, and med-audit-verify finds it:
+//     `journalctl -o export MED_AUDIT=1 | med-audit-verify`. "This record" is
+//     every MED_* field and the MESSAGE, under the names the journal keeps,
+//     in a canonical order (src/AuditChain.h, format 2) - so the digest can be
+//     recomputed from the journal, which format 1 could not. The OS
 //     complements this with journald Forward Secure Sealing (see
 //     meta-med-distro 10-journald-audit.conf); the chain here survives a
 //     journal rotation, the seal covers records this process never saw.
@@ -143,7 +147,11 @@ public:
     /// Emit an audit record and extend the hash chain.
     /// Returns IoError if the record could not be handed to journald - the
     /// caller decides whether that is fatal for its use case (for a safety
-    /// relevant event, it is).
+    /// relevant event, it is). Returns InvalidArgument, writing nothing, when
+    /// two fields reach the journal under one name: two of the caller's that
+    /// normalise alike ("session_id", "session-id"), or one named like the
+    /// framework's own (component, device_id, sw_version, audit_*). A record
+    /// with two values for one name cannot be verified.
     Status audit(AuditEvent event, const std::string& message,
                  const std::vector<LogField>& fields = {});
 

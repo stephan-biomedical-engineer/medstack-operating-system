@@ -114,7 +114,7 @@ As asserções citadas são de `scripts/med-check.py` (`make check`).
 |---|---|---|---|---|---|---|---|
 | AUD-01 | A trilha persiste entre reinicializações | `[62304 §5.2.2?]`, `[81001-5-1?]` | journald `Storage=persistent`; correção do `VOLATILE_LOG_DIR` | `journal-persistent`; `--list-boots` após reboot (`RESULTS.md` §5) | E2 | sim | ✅ |
 | AUD-02 | A alteração de um registro é detectável (selo do SO) | `[81001-5-1?]`, 524B(b)(2) | Forward Secure Sealing: `Seal=yes` + chave criada no 1º boot (`med-journal-seal.service`), chave de verificação fora do dispositivo | `journal-seal-key`, `journal-sealed`: no boot de provisionamento todo arquivo selado valida com a chave e é recusado com uma chave errada; nos boots seguintes 2 de 5 falham por falso positivo do systemd 255 (§5, A6 e A8; `RESULTS.md` §5) | E2 | — | ◐ falso positivo do systemd |
-| AUD-03 | A alteração de um registro é detectável (cadeia da aplicação) | idem | cadeia SHA-256 do `MedicalLogger` (`MED_AUDIT_PREV`/`MED_AUDIT_HASH`) | **não existe verificador**: a cadeia é escrita e nunca conferida (§5, A2) | E0 | — | ✗ |
+| AUD-03 | A alteração de um registro é detectável (cadeia da aplicação) | idem | cadeia SHA-256 do `MedicalLogger`, formato 2 (`src/AuditChain.h`), verificada por `med-audit-verify` | `audit-chain`: 43 registros em 2 cadeias, todos verificados através de um reboot, e uma cópia com um campo alterado recusada no alvo; 46 verificações de host com vetor independente e 3 injeções (§5, A2; `RESULTS.md` §5) | E2 | — | ✅ |
 | AUD-04 | Os eventos relevantes são registrados | `[62304 §5.2.2?]`, `[14971 §7.2?]` | 18 tipos de `AuditEvent` | 12 de 18 emitidos (§5, A3) | E0 | — | ◐ |
 | AUD-05 | O registro identifica quem agiu | `[81001-5-1?]` | `affirmed_operator` no metadado | o socket de controle não lê a credencial do requisitante; o uid não entra no registro | E2 | sim | ◐ |
 | AUD-06 | A trilha sobrevive a uma atualização | rastreabilidade | estado persistente fora do slot (Fase 5, D8) | o journal fica no rootfs, dentro do slot A/B (`BOOT_SLOT_AB_STM32MP2.md` §5.2) | — | — | ✗ |
@@ -172,7 +172,7 @@ As asserções citadas são de `scripts/med-check.py` (`make check`).
 | INV-03 | O código de kernel próprio não é SOUP não controlado | `[62304 §3.29?]` | driver derivado de `ti-ads1298.c` (mainline) e submetido à revisão pública | submissão à `linux-iio` (data e Message-ID a registrar) | E1 | — | ✅ |
 | INV-04 | Vulnerabilidades conhecidas são identificadas | 524B(b)(1) | `cve-check` (não habilitado) | — | — | — | ✗ |
 
-**Contagem provisória**: 34 RTs. **17 ✅, 8 ◐ e 9 ✗**; 10 em E3 e 10 em E2 (2026-11-05: AUD-02 passou de ✗/E1 a ◐/E2). Ela muda na Fase 1, e os números do
+**Contagem provisória**: 34 RTs. **18 ✅, 8 ◐ e 8 ✗**; 10 em E3 e 11 em E2 (2026-11-05: AUD-02 passou de ✗/E1 a ◐/E2, e AUD-03 de ✗/E0 a ✅/E2). Ela muda na Fase 1, e os números do
 texto saem da tabela final, não desta.
 
 ---
@@ -199,6 +199,21 @@ e `verify` em scripts, testes e receitas). O teste de host (`tests/framework/tes
 confere que a cadeia avança, não que uma alteração é detectada. É "medir estado não é medir
 função" aplicado à trilha de auditoria. O selo do journal (AUD-02) está um degrau acima: é
 conferido (`journal-integro`), mas nunca foi visto falhar.
+**Medido em 2026-11-05, e pior que "sem verificador"**: o formato 1 **não admitia** verificador. O
+hash cobria as chaves do chamador (`session_id`) na ordem do chamador. O journal guarda a chave
+normalizada (`MED_SESSION_ID`), sem inversa, e não preserva a ordem dos campos. Sobre 42 registros
+reais do QEMU:
+
+| Como refazer o hash | Verificam |
+|---|---|
+| campos na ordem do journal | 5 de 42 |
+| campos em ordem alfabética | 3 de 42 |
+| qualquer permutação (até 6 campos) | 21 de 42 |
+| só o encadeamento (`PREV` = `HASH` anterior) | 40 de 40 possíveis |
+
+O encadeamento era verificável e o conteúdo não, porque um campo alterado era indistinguível de
+um campo reordenado. Além disso, a atribuição (`MED_DEVICE_ID`, `MED_SW_VERSION`) ficava fora do
+hash. Corrigido pelo formato 2 (Fase 2.1, §10).
 
 **A3. 12 dos 18 eventos de auditoria declarados são emitidos.** Busca por `AuditEvent::<nome>` nos
 `.cpp`, excluindo o próprio logger:
@@ -511,6 +526,16 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-05**, Fase 2.1 (AUD-03): formato 2 da cadeia (`src/AuditChain.h`). O hash agora cobre
+  `MESSAGE` e todo `MED_*` exceto o próprio `MED_AUDIT_HASH`, em ordem alfabética e com o comprimento
+  de cada valor como prefixo. O `MedicalLogger` recusa dois campos com o mesmo nome no journal.
+  Verificador `med-audit-verify` (lê `journalctl -o export`, sem libsystemd, no pacote
+  `med-framework-api-audit-verify`, instalado pelo `packagegroup-med-framework`). Host: 46
+  verificações, com o vetor de referência calculado pelo `hashlib` do Python. Injeções: aceitar
+  qualquer conteúdo (5 falhas), não conferir a sequência (2), tirar o prefixo de comprimento (2,
+  pegas **só** pelo vetor independente). Alvo: `audit-chain`, nova no `make check`, 40/40 no
+  primeiro boot; no segundo, 43 registros em 2 cadeias, todos verificados, e a cópia com um
+  `MESSAGE` alterado recusada (39/40, só `journal-sealed`, pelo A8).
 - **2026-11-03**, D10: `med-journal-seal` implementado; `make check` 38/39 no boot de provisionamento
   com `journal-seal-key` e `journal-sealed` verdes (a falha foi `journal-integro`, que verificava sem
   chave um arquivo selado; o predicado foi corrigido). No boot seguinte, 38/39 com `journal-sealed`
