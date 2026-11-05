@@ -19,6 +19,7 @@ void testDevice();
 void testIio();
 void testAmpAbi();
 void testLink();
+void testActuator();
 #ifdef MED_TESTS_HAVE_SYSTEMD
 void testLogger();
 void testUpdate();
@@ -35,6 +36,7 @@ int main() {
     testIio();
     testAmpAbi();
     testLink();
+    testActuator();
 #ifdef MED_TESTS_HAVE_SYSTEMD
     testLogger();
     testUpdate();

@@ -45,6 +45,7 @@ add_library(medframework SHARED
     src/MedicalConfiguration.cpp
     src/MedicalUpdate.cpp
     src/MedicalDevice.cpp
+    src/MedicalActuator.cpp
 )
 
 target_compile_definitions(medframework

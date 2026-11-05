@@ -56,6 +56,7 @@ LIB_SOURCES := \
 	$(FRAMEWORK)/src/MedicalStorage.cpp \
 	$(FRAMEWORK)/src/MedicalStorageBiosignal.cpp \
 	$(FRAMEWORK)/src/MedicalDevice.cpp \
+	$(FRAMEWORK)/src/MedicalActuator.cpp \
 	$(FRAMEWORK)/src/MedicalIPC.cpp
 
 TEST_SOURCES := \
@@ -67,7 +68,8 @@ TEST_SOURCES := \
 	test_device.cpp \
 	test_iio.cpp \
 	test_amp_abi.cpp \
-	test_link.cpp
+	test_link.cpp \
+	test_actuator.cpp
 
 ifeq ($(HAVE_SYSTEMD),yes)
 LIB_SOURCES  += $(FRAMEWORK)/src/MedicalLogger.cpp $(FRAMEWORK)/src/MedicalUpdate.cpp
