@@ -847,6 +847,18 @@ Mudanças desta fase em `meta-med-app`: o simulador registra o disparo do homem-
 estado ganha `motor=`, e `T_sil` caiu de 120 para 60 s, para caber numa asserção. É parâmetro do
 modelo, atualizado também no `docs/REQUISITOS_INFUSAO.md`.
 
+**Injeção em execução das 4 asserções da Fase 6** (2026-11-06,
+`tests/infusion-target/inject_runtime.py`): cada uma passou antes e reprovou depois.
+`drug-library-seal` reprovou com um limite alterado no aparelho, e o serviço, reiniciado assim,
+**recusou subir** ("could not be loaded or verified"): o INF-03 visto em execução.
+`infusion-idle` reprovou com o controlador em alarme, `infusion-active` com o simulador ausente,
+e `infusion-sim-active` com o simulador morto e reiniciado. Com isso, **as 16 asserções do perfil
+foram vistas falhar**. O mesmo roteiro cobre as duas do selo do journal, registradas no plano de
+conformidade. Uma ocorrência sem explicação: duas vezes, em seis discos novos, o boot de
+provisionamento não chegou ao login dentro de 420 s, sem deixar rastro. O roteiro agora guarda o
+console quando isso acontece (`build/infusion-inject/boot-timeout.log`), e não houve nova
+ocorrência.
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)
