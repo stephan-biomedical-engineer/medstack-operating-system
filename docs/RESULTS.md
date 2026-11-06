@@ -102,7 +102,10 @@ Resumo das métricas de `implementation_plan_infusion_pump.md` §13, Fase 8:
 - **Build**: 98,9% das tarefas vieram do cache.
 - **Requisitos**: dos 26 dos 34 que se aplicam, **23 herdados sem uma linha de plataforma**, 1 exigiu
   trabalho (AUD-04) e 2 ficaram sem atender. Um deles, o ATU-02, não vale entre classes de
-  dispositivo, porque a `compatible` do RAUC é por máquina.
+  dispositivo. O defeito não é da ferramenta: a plataforma decide a identidade de compatibilidade da
+  atualização por máquina e não deixa o perfil declarar a classe. O mecanismo de atualização (RAUC,
+  na implementação de referência) é escolha do integrador, e a plataforma ainda não permite
+  trocá-lo (`implementation_plan_infusion_pump.md` §14.2).
 
 **O que não significa**: que o framework é independente de classe. Ele ainda tem 96 linhas de
 código com vocabulário de biopotencial, e a bomba é a primeira medida de quanto custa a segunda

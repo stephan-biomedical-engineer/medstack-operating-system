@@ -885,7 +885,7 @@ intervalo, 2 de conformidade), com o método declarado na §11.1.
 | herdado, 0 linhas | 19 | AUD-01, AUD-02, AUD-03, AUD-05, AUD-06, DAD-02, DAD-03, INT-03, ATU-01, ATU-03, ATU-05, ACE-01, ACE-02, ACE-03, SIS-01, SIS-02, INV-01, INV-02, INV-04 |
 | herdado com configuração do perfil | 4 | INT-02 (o armazém selado, mas a tarefa de selagem foi **copiada** na receita), ATU-04 (`RequiredBy=boot-complete.target` + `READY=1`), SEG-02 (sandbox na unit), SEG-04 (classificação F5) |
 | exigiu trabalho na plataforma | 1 | AUD-04: seis eventos de auditoria (D5, `7528cd4`, +32 linhas) |
-| não atendido no perfil | 2 | TMP-01 (o perfil não declara se o relógio é confiável, como o `metadata.json` do EEG declara); **ATU-02**: a `compatible` do RAUC é `${DISTRO}-${MACHINE}` para todo perfil, então um bundle da bomba seria aceito por um EEG da mesma placa (lido no código, não observado: a bomba não tem bundle) |
+| não atendido no perfil | 2 | TMP-01 (o perfil não declara se o relógio é confiável, como o `metadata.json` do EEG declara); **ATU-02**: a identidade de compatibilidade da atualização é decidida pela plataforma, por máquina, sem ponto de configuração para o perfil; na implementação de referência ela é `${DISTRO}-${MACHINE}` para todo perfil, e um pacote da bomba seria aceito por um EEG da mesma placa (lido no código, não observado: a bomba não tem pacote de atualização) |
 | não se aplica | 8 | DAD-01, DAD-04, DAD-05, INT-01 (o perfil não grava registro clínico em `/data`: a terapia fica na trilha); INT-04 (uma leitura perdida vira o alarme de mecanismo perdido, não marca num registro); SEG-01 e SEG-03 (o mecanismo roda no Linux, sem tempo real; Fase 10); INV-03 (sem código de kernel próprio) |
 
 A afirmação defensável: **dos 26 requisitos que se aplicam, a bomba herdou 23 sem escrever uma
@@ -895,10 +895,16 @@ linha de plataforma, e 1 exigiu trabalho** (AUD-04). Ela herdou também o **esta
 ACE-01 é mais grave que para o EEG (H8: um comando não autorizado muda uma taxa).
 
 **Achados da medição** (não estavam no plano):
-- **ATU-02 não vale entre classes de dispositivo.** A plataforma distingue máquina, não classe. A
-  correção seria a `compatible` incluir a classe, por exemplo `${DISTRO}-${MACHINE}-<perfil>`:
-  pouca linha, mas no `meta-med-distro` e nas receitas de bundle. Fica como dívida revelada pela
-  segunda classe.
+- **ATU-02 não vale entre classes de dispositivo, e o defeito não é da ferramenta.** O mecanismo de
+  atualização e o bootloader são escolha do integrador e dependem da placa. Qualquer que seja o
+  mecanismo, ele tem uma identidade de compatibilidade (no RAUC `compatible`, no Mender
+  `device_type`, no SWUpdate `hardware-compatibility`), e o requisito de recusar uma atualização
+  feita para outro aparelho vale para todos. O achado é que **a plataforma decide essa identidade
+  sozinha, por máquina, e não oferece ao perfil um ponto onde declarar a classe do aparelho.** Na
+  implementação de referência, o `rauc-conf.bbappend` escreve `${DISTRO}-${MACHINE}` e o bundle do
+  EEG repete o mesmo valor. A correção é uma variável do perfil, com o valor por máquina como
+  padrão, que o backend do mecanismo escolhido traduz para a sua identidade. Ela entra junto com o
+  item 14.2 do backlog, não antes. Dívida revelada pela segunda classe.
 - **A selagem da configuração não é da plataforma.** Cada perfil copia a tarefa
   `do_seal_configuration`, e a da bomba é uma cópia reduzida da do EEG. Uma classe `bbclass` no
   `meta-med-framework` a tornaria herdada. Dívida revelada, não corrigida.
@@ -908,7 +914,9 @@ ACE-01 é mais grave que para o EEG (H8: um comando não autorizado muda uma tax
 
 ---
 
-## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)
+## 14. Backlog
+
+### 14.1 O framework agnóstico ao formato (decidido em 2026-11-05, não executado)
 
 Levantado pelo autor ao discutir uma classe de imagem. **Princípio**: o framework transporta,
 guarda, confere e audita dados sem saber o que eles são, e quem produz e quem consome declara o
@@ -939,3 +947,41 @@ blocos e o formato de arquivo seriam resolvidos por este item. A reconstrução 
 computação acelerada, que o framework não abstrai e que a regra 6 impede a aplicação de trazer.
 E boa parte da dificuldade (física, reconstrução, intertravamentos de radiação) está fora da
 plataforma. Ele continua como o perfil de base, sem aplicação (D6).
+
+### 14.2 O mecanismo de atualização como escolha (decidido em 2026-11-06, não executado)
+
+Levantado pelo autor na Fase 8. **Premissa**: o pacote de atualização, o bootloader e o mecanismo
+que os une dependem do hardware e são escolha do engenheiro que integra o produto (RAUC, Mender,
+SWUpdate, ...). A arquitetura já trata o bootloader assim (`MED_BOOTLOADER`, por máquina, no
+`meta-med-bsp`), e **não** trata o mecanismo:
+- o `MedicalUpdate.h` é "um cliente tipado da interface D-Bus do RAUC";
+- o `med-os.conf` exige o recurso `rauc` em toda distro (`MED_DISTRO_FEATURES`);
+- 16 arquivos de `meta-med-distro`, `meta-med-bsp` e `meta-med-framework` citam o RAUC (busca de
+  2026-11-06), entre eles o `rauc-conf.bbappend`, o `system.conf`, a confirmação de slot e o
+  ambiente do U-Boot.
+
+Até isto ser feito, a tese diz **"o RAUC é a implementação de referência"**, e não que a
+plataforma é neutra quanto ao mecanismo de atualização.
+
+**Destino**, pelo mesmo padrão dos drivers de dispositivo:
+1. `MedicalUpdate` como interface, com backends registrados por nome (`rauc` hoje; `mender` e
+   `swupdate` como exemplos), sem que a aplicação mude: ela pede instalação, estado e
+   confirmação de slot, e não sabe qual mecanismo responde.
+2. Uma variável `MED_UPDATE_ENGINE`, como `MED_BOOTLOADER`, que escolhe o backend e o que a
+   camada de SO instala. A configuração específica de cada mecanismo vai para onde a dependência
+   de placa já está: `meta-med-bsp`, quando a configuração é de placa, ou uma camada adjunta por
+   mecanismo, quando é do mecanismo.
+3. **A identidade de compatibilidade** (achado do ATU-02, Fase 8) passa a ser uma variável do
+   perfil, com o valor por máquina como padrão, que cada backend traduz para a sua.
+4. A confirmação de slot (`boot-complete.target` + `READY=1`, ATU-04) já é independente do
+   mecanismo do lado da aplicação, e fica.
+
+**Custo estimado**, por leitura e não medido: a interface e o backend `rauc` extraídos do
+`MedicalUpdate.cpp` atual (402 linhas), sem segundo backend, cerca de 1,5 dia; a variável e a
+reorganização das receitas, cerca de 1 dia; as asserções `rauc-*` do `med-check.py` passam a
+depender do backend. Um segundo backend real (Mender ou SWUpdate) é trabalho à parte, e é ele que
+provaria a troca. Sem ele, a interface é um argumento.
+
+**Por que depois**: como o 14.1, mexe no caminho de atualização, validado na placa
+(`implementation_plan_uboot_ab.md` §8), e não é exigido pela bomba.
+
