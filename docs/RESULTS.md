@@ -92,6 +92,23 @@ também +651 −19 linhas no framework (a interface de atuador e seus satélites
 os perfis e não aparecem nesta diferença. O número de pacotes mede o que o **perfil** acrescenta, e
 o M1 daquele plano mede o que a **classe** custou à plataforma. Os dois vão juntos.
 
+### A segunda classe, medida (2026-11-06)
+
+Resumo das métricas de `implementation_plan_infusion_pump.md` §13, Fase 8:
+- **Camadas**: `meta-med-bsp`, `meta-med-distro` e as adjuntas, **0 linhas**; o framework,
+  +651 −19 (a interface de atuador, um transporte, unidades por canal e seis eventos), tudo
+  genérico e nada usado pelo EEG; o resto na aplicação.
+- **Asserções de plataforma**: 13/13 sem mudar uma linha.
+- **Build**: 98,9% das tarefas vieram do cache.
+- **Requisitos**: dos 26 dos 34 que se aplicam, **23 herdados sem uma linha de plataforma**, 1 exigiu
+  trabalho (AUD-04) e 2 ficaram sem atender. Um deles, o ATU-02, não vale entre classes de
+  dispositivo, porque a `compatible` do RAUC é por máquina.
+
+**O que não significa**: que o framework é independente de classe. Ele ainda tem 96 linhas de
+código com vocabulário de biopotencial, e a bomba é a primeira medida de quanto custa a segunda
+classe de uma **categoria** nova (atuador). A segunda de uma categoria que já existe custaria
+menos, e isso não foi medido.
+
 ### O que isso significa — e o que não significa
 
 **Não** apresente como "os dois perfis compartilham 98,6%". O tomógrafo **não instala nenhuma

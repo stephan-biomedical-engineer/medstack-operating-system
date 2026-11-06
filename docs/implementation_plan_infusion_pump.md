@@ -859,6 +859,53 @@ provisionamento não chegou ao login dentro de 420 s, sem deixar rastro. O rotei
 console quando isso acontece (`build/infusion-inject/boot-timeout.log`), e não houve nova
 ocorrência.
 
+### Fase 8 — medição (2026-11-06)
+
+Todos os números são de `base-infusao..HEAD`, sem os commits `Profile: conformity` (18 commits no
+intervalo, 2 de conformidade), com o método declarado na §11.1.
+
+| ID | Métrica | Resultado | O que **não** significa |
+|---|---|---|---|
+| M1 | Linhas por camada | `meta-med-bsp` 0; `meta-med-distro` 0; adjuntas 0; **`meta-med-framework` +651 −19** em 7 arquivos; `meta-med-app` +2715 −16 em 22; `kas/` +17 | não mede esforço; o framework pequeno é argumento, não prova de bom desenho |
+| M2 | Mudanças no framework | 4 commits, um por decisão (D4, D2, D3, D5), **todos genéricos**, nenhum usado pelo EEG (§13, Fase 2) | "genérico" é argumento, defendido mudança a mudança |
+| M2b | Vocabulário de classe no framework | bomba: **0** arquivos; EEG: 136 → 137 linhas, e a linha a mais é um comentário da D5 que **cita** o enumerador `ElectrodeContactChanged` já existente | não mede o vocabulário de EEG que existe (L3, backlog §14) |
+| M3 | Pacotes, três perfis | tomógrafo 208, bomba 210, EEG 240; em comum aos três, 205. Tomógrafo ⊂ bomba **estrito**, diferença = os 2 pacotes do perfil. Tomógrafo ⊄ EEG, por causa do weston contra o desktop de bancada (§13, Fase 0) | não é similaridade em percentual (`RESULTS.md` §2). As listas do EEG são da imagem de `ba2a1ca`, e depois dela só mudaram receitas da bomba |
+| M4 | Linhas de código próprias (sem comentário) | framework 4478 → **5122**, somando bomba (+391) e conformidade; aplicação EEG **4608**; aplicação da bomba **1785** | linhas não medem complexidade nem risco; a bomba é simulada e não tem HMI |
+| M5 | Reuso de build | **98,9%** (5753 de 5815 tarefas do sstate) | depende do cache; medido depois dos builds do EEG e do tomógrafo |
+| M6 | APIs usadas | serviço do EEG: `Configuration`, `Device`, `IPC`, `Logger`, `Storage`, `Types`, `Update`. Serviço da bomba: `Actuator`, `Configuration`, `Device`, `IPC`, `Logger`, `Types`, `Update`. A bomba não usa `MedicalStorage`, e o EEG não usa `MedicalActuator` | não usar pode ser lacuna da aplicação: a bomba não grava registro clínico (ver M9) |
+| M7 | Asserções de plataforma no perfil novo | **13/13 sem mudar uma linha** | — |
+| M8 | Não regressão do EEG | `make check` 39/39 (Fase 2) e 40/40 (Fase 2.1 da conformidade); `make test` verde em toda fase | — |
+| M9 | Requisitos técnicos herdados | tabela abaixo | — |
+| M10 | Superfície de adaptação do perfil | o projeto KAS da bomba define **0** variáveis `MED_EEG_*` | a variável continua existindo na plataforma (`kas-base.yml`, L5) |
+
+**M9: os 34 requisitos técnicos de `implementation_plan_conformity.md` §4, para a bomba**:
+
+| Categoria | n | RTs |
+|---|---|---|
+| herdado, 0 linhas | 19 | AUD-01, AUD-02, AUD-03, AUD-05, AUD-06, DAD-02, DAD-03, INT-03, ATU-01, ATU-03, ATU-05, ACE-01, ACE-02, ACE-03, SIS-01, SIS-02, INV-01, INV-02, INV-04 |
+| herdado com configuração do perfil | 4 | INT-02 (o armazém selado, mas a tarefa de selagem foi **copiada** na receita), ATU-04 (`RequiredBy=boot-complete.target` + `READY=1`), SEG-02 (sandbox na unit), SEG-04 (classificação F5) |
+| exigiu trabalho na plataforma | 1 | AUD-04: seis eventos de auditoria (D5, `7528cd4`, +32 linhas) |
+| não atendido no perfil | 2 | TMP-01 (o perfil não declara se o relógio é confiável, como o `metadata.json` do EEG declara); **ATU-02**: a `compatible` do RAUC é `${DISTRO}-${MACHINE}` para todo perfil, então um bundle da bomba seria aceito por um EEG da mesma placa (lido no código, não observado: a bomba não tem bundle) |
+| não se aplica | 8 | DAD-01, DAD-04, DAD-05, INT-01 (o perfil não grava registro clínico em `/data`: a terapia fica na trilha); INT-04 (uma leitura perdida vira o alarme de mecanismo perdido, não marca num registro); SEG-01 e SEG-03 (o mecanismo roda no Linux, sem tempo real; Fase 10); INV-03 (sem código de kernel próprio) |
+
+A afirmação defensável: **dos 26 requisitos que se aplicam, a bomba herdou 23 sem escrever uma
+linha de plataforma, e 1 exigiu trabalho** (AUD-04). Ela herdou também o **estado** deles: dos 23,
+8 continuam abertos (AUD-06, DAD-02, ATU-05, ACE-01, ACE-03, SIS-01, SIS-02, INV-04) e 5 parciais
+(AUD-02, AUD-05, ACE-02, INV-01, INV-02). Herdar um requisito aberto não o fecha. Para a bomba,
+ACE-01 é mais grave que para o EEG (H8: um comando não autorizado muda uma taxa).
+
+**Achados da medição** (não estavam no plano):
+- **ATU-02 não vale entre classes de dispositivo.** A plataforma distingue máquina, não classe. A
+  correção seria a `compatible` incluir a classe, por exemplo `${DISTRO}-${MACHINE}-<perfil>`:
+  pouca linha, mas no `meta-med-distro` e nas receitas de bundle. Fica como dívida revelada pela
+  segunda classe.
+- **A selagem da configuração não é da plataforma.** Cada perfil copia a tarefa
+  `do_seal_configuration`, e a da bomba é uma cópia reduzida da do EEG. Uma classe `bbclass` no
+  `meta-med-framework` a tornaria herdada. Dívida revelada, não corrigida.
+- **O perfil não grava registro clínico.** A terapia existe só na trilha de auditoria. Uma bomba
+  real teria um histórico de infusão, e o `MedicalStorage` serviria a ele sem mudança. A ausência
+  é escolha de escopo, e é ela que põe DAD-01/04/05 e INT-01 em "não se aplica".
+
 ---
 
 ## 14. Backlog: o framework agnóstico ao formato (decidido em 2026-11-05, não executado)
