@@ -874,6 +874,19 @@ um desligamento comum não distingue adulteração de rotina. A injeção de fal
 e o byte alterado num arquivo selado ainda não foram feitos. Na placa: não medido. O caminho está
 na decisão D11 daquele plano.
 
+### Selo e alteração, vistos falhar (2026-11-06)
+
+`tests/infusion-target/inject_runtime.py`, num disco novo (boot de provisionamento):
+- `journal-sealed` reprova quando a chave guardada no host não é a do aparelho;
+- `journal-seal-key` reprova num provisionamento sem testemunha;
+- numa cópia de um arquivo selado com **exatamente um** byte alterado (provado: tamanhos
+  iguais, primeira diferença na posição 947.137, o resto idêntico), o `journalctl --verify`
+  com a chave dá `FAIL`, e o original continua `PASS`.
+
+**O que não demonstra**: que foi o selo que pegou o byte. A cópia também falha sem a chave,
+pelo hash do objeto de dados. Contra quem altera **e** recalcula os hashes, que é o caso que só o
+selo cobre, não houve teste. E vale o falso positivo descrito acima.
+
 ### Cadeia de hash da aplicação (2026-11-05): o formato 1 não era verificável; o 2 é
 
 **Antes** (formato 1), medido sobre 42 registros reais do QEMU com `journalctl -o json MED_AUDIT=1`

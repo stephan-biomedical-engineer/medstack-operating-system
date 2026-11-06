@@ -254,8 +254,11 @@ journal para que o arquivo novo nasça selado e entrega a chave de verificação
 arquivo em `/run` (tmpfs, `0400`). O `make check` a recolhe para `build/med-journal-keys/<machine-id>.key`
 (asserção `journal-seal-key`) e verifica cada arquivo selado com ela e com uma chave errada
 (`journal-sealed`). No boot de provisionamento as duas passam. Nos seguintes, ver A8.
-**Ainda não feito**: a injeção de falha das duas asserções (tirar a chave do host) e o byte alterado
-num arquivo selado (Fase 2, item 2).
+**Feito em 2026-11-06** (`tests/infusion-target/inject_runtime.py`, num disco novo): as duas
+asserções passam e reprovam com a falha injetada. `journal-sealed` reprova com uma chave errada no
+host (3 de 3 selados recusados). `journal-seal-key` reprova num provisionamento sem testemunha,
+com a chave fora do host e do `/run` do aparelho. E o byte alterado da Fase 2.2 foi detectado
+(ver §10).
 
 **A8. O selo do systemd 255 reprova arquivos que ninguém alterou.** Medido em 2026-11-03 no QEMU
 (systemd 255.21, poky `70500d37`), no segundo boot depois do provisionamento: **2 de 5** arquivos
@@ -526,6 +529,17 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-06**, Fase 2.2 (AUD-02) e as injeções do selo: numa cópia de um arquivo selado que
+  verifica, **um** byte alterado dentro de um `MESSAGE=`. Isso foi provado antes do veredito:
+  tamanhos iguais, primeira diferença na posição 947.137 e o resto com o mesmo md5.
+  `journalctl --verify --verify-key=` dá `FAIL: ... File corruption detected` (rc=1), e o original
+  continua `PASS`. **Ressalva**: a cópia também falha **sem** a chave (`nokey_rc=1`), pelo hash do
+  objeto de dados. O teste prova que a adulteração é detectada, não que foi o selo que a detectou.
+  O selo é o que resta contra quem altera o conteúdo e recalcula os hashes, e esse caso não foi
+  testado. Três tentativas anteriores deram veredito sobre uma cópia que **não** tinha um byte
+  só alterado: o `dd` do BusyBox não aceita `conv=notrunc`, o `head` dele não aceita `-c`, e uma
+  linha de mais de 1024 caracteres travou o `ash`. A prova de "exatamente um byte" passou a
+  condicionar o veredito.
 - **2026-11-05**, Fase 2.1 (AUD-03): formato 2 da cadeia (`src/AuditChain.h`). O hash agora cobre
   `MESSAGE` e todo `MED_*` exceto o próprio `MED_AUDIT_HASH`, em ordem alfabética e com o comprimento
   de cada valor como prefixo. O `MedicalLogger` recusa dois campos com o mesmo nome no journal.
