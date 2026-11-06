@@ -136,13 +136,19 @@ As asserções citadas são de `scripts/med-check.py` (`make check`).
 
 ### 4.3 Atualização
 
+Os requisitos valem para qualquer mecanismo de atualização. O mecanismo e o bootloader são
+escolha de quem integra o produto (RAUC, Mender, SWUpdate) e dependem da placa. A coluna
+"Mecanismo" descreve a **implementação de referência medida**, o RAUC com U-Boot na placa e GRUB
+no QEMU, e não uma exigência da plataforma. Que a plataforma ainda não deixa trocar o mecanismo
+é uma dívida registrada no backlog do plano da bomba (§14.2).
+
 | RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
 | ATU-01 | Só se instala atualização autenticada | 524B(b)(2), `[81001-5-1?]` | RAUC, bundle verity assinado, `check-purpose=codesign` | bundle recusado com certificado inadequado; instalado com o certo (`RESULTS.md` §6) | E3 | sim | ✅ |
-| ATU-02 | Uma atualização de outro aparelho é recusada | 524B(b)(2) | string `compatible` | defeito encontrado e corrigido (`implementation_plan_rauc.md` §8) | E1 | sim | ✅ (injeção a registrar) |
+| ATU-02 | Uma atualização de outro aparelho é recusada | 524B(b)(2) | a identidade de compatibilidade do mecanismo (no RAUC, `compatible`; no Mender, `device_type`; no SWUpdate, `hardware-compatibility`) | defeito encontrado e corrigido (`implementation_plan_rauc.md` §8) | E1 | sim | ✅ (injeção a registrar) |
 | ATU-03 | A atualização é atômica e recuperável | `[14971 §7.1?]`, 524B(b)(2) | A/B + contadores do U-Boot | fallback por falha injetada: 3→0, sobe em B (`implementation_plan_uboot_ab.md` §8) | E3 | sim | ✅ (pânico de kernel não testado) |
 | ATU-04 | Um slot só é confirmado se o dispositivo funciona | `[14971 §7.2?]` | `boot-complete.target` + `READY=1` após `device.start()` | slot sem aquisição nunca é confirmado (observado sem ajuda, 2026-10-08) | E3 | sim | ✅ |
-| ATU-05 | A atualização é registrada na trilha | `[62304 §6?]`, `[81001-5-1?]` | — | `UpdateStarted/Succeeded/Failed` nunca são emitidos (§5, A3) | — | — | ✗ |
+| ATU-05 | A atualização é registrada na trilha | `[62304 §6?]`, `[81001-5-1?]` | — | `UpdateStarted/Succeeded/Failed` nunca são emitidos (§5, A3); para a segunda classe, ver o achado do ATU-02 em `implementation_plan_infusion_pump.md` §13, Fase 8 | — | — | ✗ |
 
 ### 4.4 Segregação e confinamento
 
