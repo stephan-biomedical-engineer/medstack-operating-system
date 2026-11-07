@@ -15,7 +15,7 @@
 
 ## 1. Classe de segurança: C, como hipótese declarada (D8)
 
-A IEC 62304 `[62304 §4.3?]` classifica o sistema de software pelo pior dano a que uma falha dele
+A IEC 62304 (§4.3 a), p. 16) classifica o sistema de software pelo pior dano a que uma falha dele
 pode contribuir, depois dos controles de risco **externos** ao software.
 
 - **Dano possível**: a sobreinfusão de um fármaco de alta vigilância (insulina, heparina,
@@ -30,9 +30,12 @@ pode contribuir, depois dos controles de risco **externos** ao software.
 Isso é hipótese pelo mesmo motivo que a classe B do EEG é: a classificação de um produto real
 depende do uso pretendido e da análise de risco do fabricante, e este trabalho não tem nenhum dos
 dois. O que a hipótese faz é **escolher o caso mais exigente** para o teste da plataforma. A
-diferença de classe obriga mais atividades da IEC 62304 (projeto detalhado `[62304 §5.4?]`,
-critérios adicionais de verificação de unidade `[62304 §5.5.4?]`), e é o argumento para a Fase 10
-(o laço de segurança no Cortex-M33, particionamento `[62304 §5.3.5?]`).
+diferença de classe obriga mais atividades da IEC 62304 (projeto detalhado, §5.4.2–5.4.4, p. 23–24;
+critérios adicionais de verificação de unidade, §5.5.4, p. 24, ambos só na classe C), e é o argumento para a Fase 10
+(o laço de segurança no Cortex-M33: a segregação da §5.3.5, p. 23, que a 62304 exige na classe C).
+As cláusulas desta seção e da §3 foram conferidas em 2026-11-07 (`SystematicReview/IEC62304_extracao.md`,
+`ISO14971_extracao.md`, `IEC81001-5-1_extracao.md`); as das normas 60601 e da guia da FDA, que não
+estão em mãos, continuam com `?`.
 
 ---
 
@@ -65,7 +68,7 @@ documento acrescenta estão marcadas *(nova)*.
 |---|---|---|---|---|---|
 | INF-01 | Uma taxa acima do limite **rígido** do fármaco é recusada e a recusa é auditada | `[60601-2-24?]`, orientação FDA para bombas `[?]` | DERS: `SafetyLimit` sobre a biblioteca selada | `ders-hard-limit` | H1 |
 | INF-02 | Uma taxa acima do limite **flexível** só é aceita com confirmação explícita do operador, e a confirmação é auditada com quem confirmou | idem | DERS; evento `SafetyLimitOverridden` (D5) | `ders-soft-limit` | H1 |
-| INF-03 | A biblioteca de fármacos é selada na construção e o serviço não sobe com ela alterada | `[62304 §5.1?]`, 81001-5-1 `[?]` | `do_seal_configuration`, `MedicalConfiguration` | `drug-library-seal` | H1, H7 |
+| INF-03 | A biblioteca de fármacos é selada na construção e o serviço não sobe com ela alterada | 14971 §7.1 b) p. 12–13; 81001-5-1 §5.8.3 p. 27 (integridade dos arquivos relevantes) | `do_seal_configuration`, `MedicalConfiguration` | `drug-library-seal` | H1, H7 |
 | INF-04 | O volume entregue (medido pelo *encoder*) é a integral da taxa comandada, dentro de `ε_vol` | `[60601-2-24?]` | contagem do serviço sobre a leitura de volta do atuador | `delivery-volume` | H1, H2 |
 | INF-05 | Comandado ≠ medido por mais de `ε_del` gera alarme de alta prioridade e para o motor, **nos dois sentidos** (motor travado e motor disparado) | `[60601-2-24?]` | `MedicalActuator::readback()` comparado ao comando | `delivery-fault` | H1, H2 |
 | INF-06 | Pressão acima de `P_occ` gera alarme de oclusão de alta prioridade e para o motor em até `T_occ` na taxa de teste | `[60601-2-24?]` | canal de pressão do simulador; limite em `SafetyLimit` | `occlusion-alarm` | H2 |
@@ -73,18 +76,18 @@ documento acrescenta estão marcadas *(nova)*.
 | INF-08 | Ao fim do VTBI a bomba para e alarma (média prioridade); nunca entrega além do VTBI | `[60601-2-24?]` | contagem de volume do serviço | `vtbi-complete` | H1 |
 | INF-09 | Sem sinal de vida do controlador por `T_hb × k`, o **atuador** para o motor sozinho | IEC 62304 classe C, `[60601-1 §14?]` (PEMS) | homem-morto do lado do produtor, obrigatório no contrato de `MedicalActuator` (D3) | `deadman` | H1 |
 | INF-10 | Sem resposta do atuador por `T_prod`, o controlador entra em alarme de alta prioridade e não comanda mais nada até reconhecimento | idem | o simétrico de INF-09, no serviço | `producer-lost` *(nova)* | H2 |
-| INF-11 | Um reinício do serviço de controle (falha, reboot, atualização) durante a infusão volta **parado e em alarme**, nunca infundindo | `[62304 §5.2?]` (requisito de risco) | estado de terapia não persistido como "em curso"; marcador de terapia interrompida | `no-auto-resume` | H4 |
+| INF-11 | Um reinício do serviço de controle (falha, reboot, atualização) durante a infusão volta **parado e em alarme**, nunca infundindo | 62304 §5.2.3 p. 21 (medida de controle de risco em software entra nos requisitos) | estado de terapia não persistido como "em curso"; marcador de terapia interrompida | `no-auto-resume` | H4 |
 | INF-12 | Alarmes têm prioridade (alta, média, baixa); o silenciamento dura no máximo `T_sil` e o alarme volta se a causa persistir | `[60601-1-8?]` | gerenciador de alarmes do serviço | `alarm-silence` *(nova)* | H5 |
-| INF-13 | Toda transição de estado, alarme, reconhecimento e confirmação está na trilha, e a cadeia verifica | `[62304 §5.1.1?]`, `[81001-5-1?]` | `MedicalLogger`, eventos de D5; verificador da cadeia (conformidade, Fase 2.1) | `audit-trail` | H6 |
+| INF-13 | Toda transição de estado, alarme, reconhecimento e confirmação está na trilha, e a cadeia verifica | 62304 §5.2.2 e) p. 21 (trilha de auditoria) | `MedicalLogger`, eventos de D5; verificador da cadeia (conformidade, Fase 2.1) | `audit-trail` | H6 |
 | INF-14 | Uma atualização não é instalada durante a terapia | requisito de produto | D7 (*handler* do RAUC + declaração pelo `MedicalUpdate`) | `update-blocked` | H4 |
-| INF-15 | Um slot cuja bomba não passa o autoteste do mecanismo não é confirmado | `[62304 §5.8?]` | `Type=notify`, `READY=1` depois do autoteste, `boot-complete.target` | `infusion-active` | H2 |
+| INF-15 | Um slot cuja bomba não passa o autoteste do mecanismo não é confirmado | 14971 §7.1 b) p. 12–13; 62304 §5.5.4 f) p. 24 (autodiagnóstico, classe C) | `Type=notify`, `READY=1` depois do autoteste, `boot-complete.target` | `infusion-active` | H2 |
 | INF-16 | Uma configuração com parâmetro fora do envelope (por exemplo, `T_hb × k` maior que o permitido) recusa subir | DERS | `SafetyLimit` sobre a configuração do serviço | teste de host (Fase 4) | H1, H2 |
 
 ---
 
 ## 4. Análise de perigos
 
-Formato reduzido da ISO 14971 `[14971 §5?]`: perigo → situação perigosa → causa no software ou no
+Formato reduzido da ISO 14971 (cl. 5, p. 10–12, e cl. 7, p. 12–14): perigo → situação perigosa → causa no software ou no
 mecanismo → controle de risco → RT que o verifica. **Severidade** é qualitativa (catastrófica,
 crítica, séria); **probabilidade** não é estimada, porque não há dado de campo nem modelo de falha
 de um mecanismo real, e inventar uma seria pior que declarar a ausência.

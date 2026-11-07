@@ -230,7 +230,7 @@ Os nomes seguem a regra dos drivers: o framework só ganha nomes de **transporte
   plataforma que as duas classes usam, contado à parte em M1 como "melhoria revelada".
 - **D8. Classe C como hipótese declarada**, como a B do EEG em
   `implementation_plan_conformity.md` (D5 daquele plano). Ela leva mais cláusulas da IEC 62304 a se
-  aplicar (projeto detalhado `[62304 §5.4?]`, critérios adicionais de unidade `[§5.5.4?]`).
+  aplicar (projeto detalhado, 62304 §5.4.2–5.4.4, p. 23–24; critérios adicionais de unidade, §5.5.4, p. 24; ambos só na classe C, conferidos em 2026-11-07).
 - **D9. Fora do escopo clínico** (§4.1), declarado.
 - **D10. A dívida `MED_EEG_LINK`** (L5) não é corrigida por este plano. Se for corrigida, o commit
   é separado e não entra na contagem da bomba.
