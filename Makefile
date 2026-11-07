@@ -535,6 +535,7 @@ test:
 	@$(MAKE) --no-print-directory -C tests/infusion-control check
 	@$(MAKE) --no-print-directory -C tests/layer-check check
 	@python3 scripts/med-layer-check.py
+	@python3 scripts/med-conformity-check.py
 
 # Boots the tomograph and runs only the platform assertions - the ones that
 # profile inherits without writing a line. It is what turns "the platform

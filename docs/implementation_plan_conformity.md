@@ -128,97 +128,13 @@ diagnóstico: uma falha pode levar a diagnóstico errado, com lesão não grave.
 
 ## 4. Os requisitos técnicos
 
-Situação: **✅** atendido · **◐** parcial · **✗** aberto · **—** não se aplica.
-As asserções citadas são de `scripts/med-check.py` (`make check`).
+**Desde a Fase 1 (2026-11-07), a tabela viva está em `docs/CONFORMIDADE.md` §2**, e a matriz
+normativa em §3 do mesmo documento. As tabelas que estavam aqui foram para lá, com as correções da
+auditoria de evidência da Fase 1 (§10), para que não existam duas cópias que divirjam. A história delas
+está no git.
 
-### 4.1 Auditoria e rastreabilidade
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| AUD-01 | A trilha persiste entre reinicializações | 62304 §5.2.2 e) p. 21 ("*audit trail*"; a persistência é interpretação, não texto) | journald `Storage=persistent`; correção do `VOLATILE_LOG_DIR` | `journal-persistent`; `--list-boots` após reboot (`RESULTS.md` §5) | E2 | sim | ✅ |
-| AUD-02 | A alteração de um registro é detectável (selo do SO) | 62304 §5.2.2 e) p. 21; 81001-5-1 §7.2 e §7.4 p. 30–31 ◐ (ameaça de adulteração no modelo de ameaças); 524B(b)(2) `[?]` | Forward Secure Sealing: `Seal=yes` + chave criada no 1º boot (`med-journal-seal.service`), chave de verificação fora do dispositivo | `journal-seal-key`, `journal-sealed`: no boot de provisionamento todo arquivo selado valida com a chave e é recusado com uma chave errada; nos boots seguintes 2 de 5 falham por falso positivo do systemd 255 (§5, A6 e A8; `RESULTS.md` §5) | E2 | — | ◐ falso positivo do systemd |
-| AUD-03 | A alteração de um registro é detectável (cadeia da aplicação) | idem AUD-02 | cadeia SHA-256 do `MedicalLogger`, formato 2 (`src/AuditChain.h`), verificada por `med-audit-verify` | `audit-chain`: 43 registros em 2 cadeias, todos verificados através de um reboot, e uma cópia com um campo alterado recusada no alvo; 46 verificações de host com vetor independente e 3 injeções (§5, A2; `RESULTS.md` §5) | E2 | — | ✅ |
-| AUD-04 | Os eventos relevantes são registrados | 62304 §5.2.2 e) p. 21 | 18 tipos de `AuditEvent` | 12 de 18 emitidos (§5, A3) | E0 | — | ◐ |
-| AUD-05 | O registro identifica quem agiu | 62304 §5.2.2 e) p. 21 (autenticação, trilha); 81001-5-1 §3.31 e §5.4.3 f) ◐ | `affirmed_operator` no metadado | o socket de controle não lê a credencial do requisitante; o uid não entra no registro | E2 | sim | ◐ |
-| AUD-06 | A trilha sobrevive a uma atualização | 62304 §5.2.2 e) p. 21 e §8.3 (histórico recuperável) ◐ | estado persistente fora do slot (Fase 5, D8) | o journal fica no rootfs, dentro do slot A/B (`BOOT_SLOT_AB_STM32MP2.md` §5.2) | — | — | ✗ |
-| TMP-01 | O registro carrega uma hora confiável, ou declara que não carrega | sem cláusula nas três normas (rastreabilidade do registro) | `clock_synchronized` no `metadata.json` | a placa não tem RTC inicializado; o registro declara a falta | E2 | sim | ◐ |
-
-### 4.2 Proteção e integridade dos dados
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| DAD-01 | Dado de paciente cifrado em repouso | LGPD `[art. 46?]`; 81001-5-1 §7.2 e §7.4 ◐; 14971 Tabela C.2 p. 34 ("*Data without encryption*", informativa) | LUKS2 em `/data`; o `MedicalStorage` exige `dm/uuid` começando em `CRYPT-` | `data-encrypted`, `storage-requires-encryption`, `no-encryption-waiver` | E3 | sim | ✅ mecanismo |
-| DAD-02 | A chave fica sob custódia fora da mídia | 81001-5-1 §7.4 ◐ (§5.8.4 trata de chave de assinatura, não de chave de dados) | `MED_DATA_KEY_SOURCE` | chave de desenvolvimento no mesmo disco; `tpm2` inalcançável (`implementation_plan_luks.md` §9) | E1 | sim | ✗ |
-| DAD-03 | Uma falha de armazenamento não destrói dado | 14971 §7.1 b) p. 12–13; Tabela C.1 p. 32 (dados: disponibilidade, integridade) | salvaguarda do `med-data-provision.sh` | cabeçalho LUKS zerado: recusa reformatar (`RESULTS.md` §7) | E3 | — | ✅ |
-| DAD-04 | Disco cheio não corrompe a sessão nem impede atualização | 14971 §7.1 a) ou b) p. 12–13; Tabela C.1 (dados: disponibilidade) | `storage.reserve_mib` | `storage-reserve` | E2 | sim | ✅ |
-| DAD-05 | O acesso a dado de paciente é restrito por papel | LGPD `[art. 46?]`; 81001-5-1 §5.3.2 b) p. 22 (menor privilégio), §5.4.3 c) e f) | usuário `med-review`, permissões | `review-reach`, `desktop-reach` (EACCES medido e injetado) | E3 | sim | ✅ |
-| INT-01 | O registro clínico tem integridade verificável | 62304 §3.22 e §5.2.2 e) e g) p. 21 ◐ | arquivo `.sha256` ao lado de cada arquivo (`MedicalStorage`) | `session-closed`, `record-bdf` | E2 | sim | ✅ (injeção a registrar) |
-| INT-02 | Configuração e calibração não podem ser adulteradas | 14971 §7.1 b) p. 12–13; Tabela C.1 (dados: integridade; medição) | armazém selado na construção | `config-seal`, `config-seal-owner`; recusa de configuração adulterada (teste de host) | E3 | sim | ✅ |
-| INT-03 | Parâmetro fora do envelope de segurança impede a operação | 14971 §7.1 b) p. 12–13 e §5.3 p. 11 (limites das características ligadas à segurança) | `SafetyLimit` do `MedicalConfiguration` | recusa ao iniciar (teste de host); guardas do `do_seal_configuration` | E3 | — | ✅ |
-| INT-04 | Perda de amostra deixa marca no registro | 62304 §5.2.2 b) e d) p. 21, §5.5.4 d) p. 24, §7.1.2 d) p. 30 ◐ | CRC por quadro, salto de sequência (`med_producer_on_lost`) | `acq-sample-rate` (falha injetada: `SOCK_NONBLOCK`) | E3 | sim | ✅ |
-
-### 4.3 Atualização
-
-Os requisitos valem para qualquer mecanismo de atualização. O mecanismo e o bootloader são
-escolha de quem integra o produto (RAUC, Mender, SWUpdate) e dependem da placa. A coluna
-"Mecanismo" descreve a **implementação de referência medida**, o RAUC com U-Boot na placa e GRUB
-no QEMU, e não uma exigência da plataforma. Que a plataforma ainda não deixa trocar o mecanismo
-é uma dívida registrada no backlog do plano da bomba (§14.2).
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| ATU-01 | Só se instala atualização autenticada | 81001-5-1 §5.8.3 p. 27, §6.3.3 p. 29, §5.8.4; 62304 §5.8.8 p. 27–28; 14971 Tabela C.2 ("*Software updates without authenticity confirmation*"); 524B(b)(2) `[?]` | RAUC, bundle verity assinado, `check-purpose=codesign` | bundle recusado com certificado inadequado; instalado com o certo (`RESULTS.md` §6) | E3 | sim | ✅ |
-| ATU-02 | Uma atualização de outro aparelho é recusada | 524B(b)(2) `[?]`; nas três normas, só 62304 §5.8.8 p. 27–28 ◐ (entrega sem alteração não autorizada) | a identidade de compatibilidade do mecanismo (no RAUC, `compatible`; no Mender, `device_type`; no SWUpdate, `hardware-compatibility`) | defeito encontrado e corrigido (`implementation_plan_rauc.md` §8) | E1 | sim | ✅ (injeção a registrar) |
-| ATU-03 | A atualização é atômica e recuperável | 14971 §7.1 a) p. 12–13 e §7.5 p. 14 (o retorno pode reinstalar versão vulnerável); 524B(b)(2) `[?]` | A/B + contadores do U-Boot | fallback por falha injetada: 3→0, sobe em B (`implementation_plan_uboot_ab.md` §8) | E3 | sim | ✅ (pânico de kernel não testado) |
-| ATU-04 | Um slot só é confirmado se o dispositivo funciona | 14971 §7.1 b) p. 12–13 (medida) e §7.2 p. 13 (eficácia verificada) | `boot-complete.target` + `READY=1` após `device.start()` | slot sem aquisição nunca é confirmado (observado sem ajuda, 2026-10-08) | E3 | sim | ✅ |
-| ATU-05 | A atualização é registrada na trilha | 62304 §5.2.2 e) p. 21 e §8.3; 81001-5-1 E.2.5 d) p. 50 ◐ (informativo) | — | `UpdateStarted/Succeeded/Failed` nunca são emitidos (§5, A3); para a segunda classe, ver o achado do ATU-02 em `implementation_plan_infusion_pump.md` §13, Fase 8 | — | — | ✗ |
-
-### 4.4 Segregação e confinamento
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| SEG-01 | O item de aquisição fica segregado do sistema de uso geral | 62304 §5.3.5 p. 23 (exigida na classe C) e §4.3 d) p. 17; 81001-5-1 §5.3.3 a) p. 23 (sem classe) | AMP: o conversor só no M33, periféricos atribuídos por RIF | aquisição pelo link `amp` com o Linux sem acesso ao conversor (`BRINGUP_STM32MP2.md` §9.16) | E2 | sim | ✅ (só link `amp`) |
-| SEG-02 | O processo de aquisição roda confinado | 62304 B.4.3 p. 43; 81001-5-1 §5.3.3 a) p. 23, §5.3.2 b) e f) p. 22 | sandbox do systemd | `sandbox-exposure`: 3.7; falta `CapabilityBoundingSet=` (`RESULTS.md` §4) | E2 | — | ◐ |
-| SEG-03 | A aquisição tem prioridade de tempo real garantida | 62304 §5.2.2 a) p. 21 (requisitos de tempo), §5.5.4 c) p. 24 ◐ | `SCHED_RR` 50 | `acq-realtime` | E2 | — | ✅ |
-| SEG-04 | A fronteira entre camadas é verificada | 62304 §5.3.6 p. 23 (verificação da arquitetura) e §5.3.1 | `make check-layers` (F1–F9), `med-layer-guard.bbclass` | falha o build de imagem na violação (`RESULTS.md` §11) | E3 | — | ✅ |
-
-### 4.5 Controle de acesso e endurecimento
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| ACE-01 | Comandos ao serviço vêm de requisitante identificado | 81001-5-1 §5.4.3 d) e f) p. 23–24, §3.43 (autenticação na fronteira de confiança) | socket `0660 root` | quem alcança o socket comanda; sem credencial do requisitante | E2 | sim | ✗ |
-| ACE-02 | Cada processo roda com o menor privilégio | 81001-5-1 §5.3.2 b) p. 22 (literal) | usuários de serviço | a HMI roda como root, não como `med-hmi` | — | — | ◐ |
-| ACE-03 | O produto não oferece login remoto nem depuração | 81001-5-1 §5.3.2 g) e h) p. 22, §7.2 g) e h) p. 31; 14971 Tabela C.2 ("*Unsecured data ports*") | `med-image-prod` remove `debug-tweaks`, ssh, login de root | **a imagem de produção nunca foi construída**; tudo o que foi medido é imagem de desenvolvimento (§5, A1; Fase 5) | E0 | — | ✗ |
-| SIS-01 | O sistema de arquivos raiz é imutável | 81001-5-1 §5.3.1 e §5.3.2 f) p. 22 ◐ (não exigido nominalmente) | `read-only-rootfs` | só em `med-image-prod`; as imagens medidas têm rootfs gravável, e com ele somente leitura a trilha e o estado da cadeia não teriam onde ser gravados (§5, A1 e A7; Fase 5) | E0 | — | ✗ |
-| SIS-02 | Controle de acesso obrigatório | 81001-5-1 §5.3.1 e §5.3.2 b) p. 22 ◐ (não exigido nominalmente) | AppArmor (`implementation_plan_mac.md`) | não implementado | — | — | ✗ |
-
-### 4.6 Inventário de software e terceiros
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| INV-01 | Cada imagem tem SBOM | 524B(b)(3) `[?]`; 81001-5-1 cl. 8 p. 32 (lista reproduzível de componentes), §5.7.3 d) | `INHERIT += "create-spdx"` (`med-os.conf`) | `med-image-eeg-qemux86-64.rootfs.spdx.tar.zst` existe e nunca foi aberto nem contado | E1 | — | ◐ |
-| INV-02 | Cada componente de terceiros (SOUP) tem nome, versão e licença | 62304 §8.1.2 p. 32 (título, fabricante, versão; **licença não é exigida**); 81001-5-1 cl. 8, E.2.1 b) | SPDX + `buildhistory` | a medir na Fase 4 | E0 | — | ◐ |
-| INV-03 | O código de kernel próprio não é SOUP não controlado | 62304 §3.29 p. 14 (deixa de ser SOUP o que foi feito para o dispositivo **e** tem registros do processo) | driver derivado de `ti-ads1298.c` (mainline) e submetido à revisão pública | submissão à `linux-iio` (data e Message-ID a registrar) | E1 | — | ✅ |
-| INV-04 | Vulnerabilidades conhecidas são identificadas | 524B(b)(1) `[?]`; 81001-5-1 §5.7.3 p. 25, §6.2.1, §4.1.7; 62304 §7.1.3 p. 30 | `cve-check` (não habilitado) | — | — | — | ✗ |
-
-### 4.7 O que a IEC 81001-5-1 exige e o plano não tinha (Fase 0)
-
-São requisitos de **processo e documentação**, por isso o mecanismo é, em geral, um documento.
-Fonte: `IEC81001-5-1_extracao.md` §11.
-
-| RT | Requisito | Origem | Mecanismo | Evidência hoje | Nível | Placa | Sit. |
-|---|---|---|---|---|---|---|---|
-| THR-01 | Todo produto tem modelo de ameaças, com fluxo de dados, fronteiras de confiança, portas físicas e de depuração e dependências de terceiros | 81001-5-1 §4.2 p. 20, §7.2 p. 30–31, §5.4.2 | DFD + STRIDE (Anexo C) | não existe; só menções soltas em `BRINGUP_STM32MP2.md` §9 | — | — | ✗ |
-| THR-02 | O contexto de segurança está declarado (posição na rede, segurança física, isolamento, impacto na segurança do paciente) | 81001-5-1 §7.1.2 p. 30 | um parágrafo por perfil | não existe | — | — | ✗ |
-| THR-03 | Cada interface, física e lógica, está caracterizada: fronteira de confiança, papéis, ameaças, validação de entrada | 81001-5-1 §5.4.3 a)–j) p. 23–24 | tabela de interfaces (socket de controle, `rpmsg`, SPI/USB do conversor, `/data`, serial, USB de atualização) | não existe | — | — | ✗ |
-| THR-04 | A chave privada de assinatura do código tem controles de proteção declarados | 81001-5-1 §5.8.4 p. 27 | `pki/` fora do git; `MOK.priv` não rastreado | a chave de desenvolvimento fica na árvore de trabalho, não rastreada; nada a protege além disso | E1 | — | ◐ |
-| INV-05 | Cada componente de terceiros está classificado como *maintained*, *supported* ou *required* | 81001-5-1 §4.3 p. 20, A.3 p. 37 | uma coluna na tabela de SOUP (Fase 4) | não existe | — | — | ✗ |
-| INV-06 | O código é compilado com opções de compilação seguras | 81001-5-1 B.5.4 p. 41–42, §5.7.3 d) | `security_flags.inc` (`med-os.conf`) | implementado, não inspecionado no artefato | E0 | — | ◐ |
-| TST-01 | A superfície de ataque da imagem é testada (portas abertas, serviços com privilégio elevado) | 81001-5-1 §5.7.3 b) p. 25 | `ss -tlnp`, `systemd-analyze security` | `sandbox-exposure` mede um serviço; a superfície da imagem não | E2 | — | ◐ |
-| TST-02 | As interfaces externas passam por casos de abuso e *fuzzing* | 81001-5-1 §5.7.3 a) e e) p. 25 | — | nada; trabalho futuro | — | — | ✗ |
-
-**Contagem provisória**: **42 RTs** depois da Fase 0 (34 + 8 da §4.7). **18 ✅, 11 ◐ e 13 ✗**; 10 em E3 e 12 em E2. Antes da Fase 0: 34 RTs, 18 ✅, 8 ◐ e 8 ✗ (2026-11-05: AUD-02 passou de ✗/E1 a ◐/E2, e AUD-03 de ✗/E0 a ✅/E2). Ela muda na Fase 1, e os números do
-texto saem da tabela final, não desta.
+`python3 scripts/med-conformity-check.py` (também em `make test`) confere as regras da Fase 1 e
+imprime a contagem: **42 RTs, 18 ✅, 11 ◐, 13 ✗**; **67 cláusulas, A 14, B 1, C 15, D 10, E 27**.
 
 ---
 
@@ -574,6 +490,18 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, **Fase 1**: `docs/CONFORMIDADE.md`, gerado da tabela do §4 e conferido por
+  `scripts/med-conformity-check.py`. O verificador confere quatro regras: todo RT cita uma cláusula
+  conferida; toda cláusula nomeia um RT ou é E, nos dois sentidos; a categoria é **calculada** dos
+  RTs e não escolhida; e toda evidência acima de E0 aponta uma asserção, seção do `RESULTS.md` ou
+  arquivo que existe. Quatro injeções no documento, uma por regra, foram vistas, e cada uma pegou
+  só a sua. **A auditoria de evidência corrigiu a tabela**: AUD-05 caiu de E2 para E1 e TMP-01 de E2
+  para E0, porque nenhuma asserção os confere; ACE-01 caiu de E2 para "—", porque não há mecanismo;
+  AUD-04 subiu para E3, pela suíte da bomba; o TMP-01 ganhou uma âncora interpretativa (◐), porque
+  não citava cláusula nenhuma; o AUD-03 citava "idem". Também ganharam ponteiro de evidência
+  INT-03, ATU-04, ACE-02, ACE-03, SIS-01, SIS-02, INV-01, INV-02, INV-03, THR-04 e INV-06.
+  **Contagem**: 42 RTs (18 ✅, 11 ◐, 13 ✗; E3 11, E2 9, E1 7, E0 5, sem evidência 10); 67 cláusulas,
+  das quais 40 técnicas: **14 A, 1 B, 15 C, 10 D**; 27 são processo do fabricante (E).
 - **2026-11-07**, **Fase 0**: as origens dos 34 RTs foram trocadas pelas cláusulas conferidas nas
   extrações do autor, com página. As âncoras fracas foram substituídas ou marcadas ◐: AUD-01,
   AUD-04 e ATU-05 passaram da 81001-5-1 e da 14971 para a 62304 §5.2.2 e); SEG-03 de 62304 §5.3
