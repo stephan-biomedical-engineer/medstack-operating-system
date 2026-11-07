@@ -188,7 +188,9 @@ Leitura de cada ausência, para não contar errado:
 - **Update\*** (3): uma atualização não entra na trilha estruturada. O RAUC registra no journal, mas
   fora dos campos e da cadeia do `MedicalLogger`. É lacuna real (ATU-05).
 - **PatientDataExported**: a exportação **é** auditada, mas com o tipo errado. `export_main.cpp:172`
-  emite `PatientDataWritten` ("clinical file written"). A correção é de uma linha.
+  emite `PatientDataWritten` ("clinical file written"). A correção é de uma linha. **Corrigido em
+  2026-11-07** (Fase 2.3): o exportador emite `PatientDataExported`, e a asserção `export-audited` o
+  confere; ela foi vista falhar na imagem anterior (`exported=0 misfiled=1`). O EEG passa a 13 de 18.
 - **PatientDataRead**: o revisor (EDFbrowser) é de terceiros e não é modificado. A leitura não é
   auditada, e o máximo alcançável sem modificá-lo é registrar a abertura da sessão de revisão.
 - **CalibrationChanged**: não existe caminho de mudança de calibração em execução, porque o
@@ -491,6 +493,10 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, **THR-01 e Fase 2.3**: o modelo de ameaças (`MODELO_DE_AMEACAS.md` §4, 25 ameaças) e
+  os dois requisitos que ele revelou (ATU-06, SIS-03). O exportador passou a emitir
+  `PatientDataExported`, com a asserção `export-audited`, vista falhar antes da correção. `make
+  check` do EEG: 43/43.
 - **2026-11-07**, **Fase 5.1, primeira metade** (D8): `/var/log/journal` e `/var/lib/medplatform` são
   montagens de bind de `/data/state/{journal,medplatform}`. Elas são criadas, e na primeira vez
   copiadas do rootfs, por `med-state.service`, depois do `data.mount`; tudo no `med-data-volume`, na

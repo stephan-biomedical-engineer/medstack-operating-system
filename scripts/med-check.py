@@ -601,6 +601,16 @@ EEG_CHECKS = [
      'echo BDF_OK',
      rx(r"BDF_OK")),
 
+    # The clinical file leaving the raw record is an export, and the trail must
+    # say so in its own vocabulary: until 2026-11-07 the exporter recorded it as
+    # PATIENT_DATA_WRITTEN, the same event as closing a session, so the trail
+    # could not tell "recorded" from "exported" (conformity plan, finding A3).
+    ("export-audited", "a exportação da sessão está na trilha como PATIENT_DATA_EXPORTED",
+     'S=$(ls -d /data/eeg/session-* | tail -n 1); I=${S##*/session-}; '
+     'echo exported=$(journalctl -q MED_AUDIT_EVENT=PATIENT_DATA_EXPORTED MED_SESSION=$I | wc -l) '
+     'misfiled=$(journalctl -q -o cat MED_AUDIT_EVENT=PATIENT_DATA_WRITTEN MED_SESSION=$I | grep -c "clinical file written")',
+     rx(r"exported=[1-9]\d* misfiled=0")),
+
     # O que o revisor alcança, medido tentando - como med-review, e não lendo
     # permissões (implementation_plan_hmi_desktop.md, Fase A3). O arquivo
     # clínico da sessão que a record-bdf acabou de conferir tem de abrir pelo

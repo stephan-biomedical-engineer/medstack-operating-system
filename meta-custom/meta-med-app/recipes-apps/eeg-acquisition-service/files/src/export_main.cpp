@@ -169,7 +169,9 @@ int main(int argc, char** argv) {
 
         const eeg::ExportSummary& summary = exported.value();
         for (const eeg::ExportedFile& file : summary.files) {
-            logger.audit(med::AuditEvent::PatientDataWritten, "clinical file written",
+            // An export, not a write: the session record was written when it
+            // closed, and the trail must tell the two apart.
+            logger.audit(med::AuditEvent::PatientDataExported, "clinical file written",
                          {{"session", id},
                           {"file", file.name},
                           {"sha256", file.sha256},
