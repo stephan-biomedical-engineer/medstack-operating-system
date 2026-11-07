@@ -878,7 +878,7 @@ intervalo, 2 de conformidade), com o método declarado na §11.1.
 | M9 | Requisitos técnicos herdados | tabela abaixo | — |
 | M10 | Superfície de adaptação do perfil | o projeto KAS da bomba define **0** variáveis `MED_EEG_*` | a variável continua existindo na plataforma (`kas-base.yml`, L5) |
 
-**M9: os 34 requisitos técnicos de `implementation_plan_conformity.md` §4, para a bomba**:
+**M9: os 34 requisitos técnicos de `implementation_plan_conformity.md` §4 (desde a Fase 1 de conformidade, `docs/CONFORMIDADE.md` §2, onde são 42 com os 8 da Fase 0), para a bomba**:
 
 | Categoria | n | RTs |
 |---|---|---|
