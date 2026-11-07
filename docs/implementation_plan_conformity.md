@@ -134,7 +134,8 @@ auditoria de evidência da Fase 1 (§10), para que não existam duas cópias que
 está no git.
 
 `python3 scripts/med-conformity-check.py` (também em `make test`) confere as regras da Fase 1 e
-imprime a contagem: **42 RTs, 18 ✅, 11 ◐, 13 ✗**; **67 cláusulas, A 14, B 1, C 15, D 10, E 27**.
+imprime a contagem. Ela não é repetida aqui, para não envelhecer: o número vale o que o verificador
+imprime, e a §4 do `CONFORMIDADE.md` é reescrita e conferida por ele (`--fix`).
 
 ---
 
@@ -490,6 +491,17 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, os quatro RTs baratos da §4.7: **THR-02, THR-03 e INV-05** em
+  `docs/MODELO_DE_AMEACAS.md` (contexto de segurança por perfil; 19 interfaces, 3 sem controle
+  nenhum, 12 com lacuna, 4 sem lacuna; *maintained*/*required*/*supported*), todos ✅ em E1. **TST-01**
+  é a asserção nova de plataforma `attack-surface` (toda porta fora do loopback declarada, com motivo),
+  vista falhar no alvo com uma porta não declarada aberta: ✅ em E3. As asserções de plataforma
+  passam de 13 a 14. O ACE-02 ganhou a medida: 14 de 17 serviços rodam como root na imagem da bomba.
+  **Achado do INV-05**: o kernel, o *device tree* e a cadeia de boot ficam fora dos slots A/B nos dois
+  alvos, então o kernel é *required*, não *maintained*. Os módulos vão no rootfs e a imagem do kernel
+  não, e um pacote para outra versão do kernel traria módulos que o kernel em campo recusaria. O
+  verificador ganhou a quinta regra (a contagem escrita bate com as tabelas) e `--fix`, vistos
+  falhar. **Contagem**: 42 RTs, 22 ✅, 10 ◐, 10 ✗; das 40 cláusulas técnicas, A 14, B 3, C 16, D 7.
 - **2026-11-07**, **Fase 1**: `docs/CONFORMIDADE.md`, gerado da tabela do §4 e conferido por
   `scripts/med-conformity-check.py`. O verificador confere quatro regras: todo RT cita uma cláusula
   conferida; toda cláusula nomeia um RT ou é E, nos dois sentidos; a categoria é **calculada** dos

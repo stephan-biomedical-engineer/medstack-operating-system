@@ -91,7 +91,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
 | ACE-01 | Comandos ao serviço vêm de requisitante identificado | 81001-5-1 §5.4.3 d) e f) p. 23–24, §3.43 (autenticação na fronteira de confiança) | socket `0660 root` | quem alcança o socket comanda; sem credencial do requisitante | — | sim | ✗ |
-| ACE-02 | Cada processo roda com o menor privilégio | 81001-5-1 §5.3.2 b) p. 22 (literal) | usuários de serviço | a HMI do EEG roda como root, não como `med-hmi` (`implementation_plan_hmi_desktop.md`); os serviços da bomba têm `CapabilityBoundingSet=` vazio e rodam como root (`infusion-control.service`) | E1 | — | ◐ |
+| ACE-02 | Cada processo roda com o menor privilégio | 81001-5-1 §5.3.2 b) p. 22 (literal) | usuários de serviço | a HMI do EEG roda como root, não como `med-hmi` (`implementation_plan_hmi_desktop.md`); **14 de 17 serviços em execução rodam como root** na imagem da bomba (`attack-surface`), os da bomba entre eles, com `CapabilityBoundingSet=` vazio | E2 | — | ◐ |
 | ACE-03 | O produto não oferece login remoto nem depuração | 81001-5-1 §5.3.2 g) e h) p. 22, §7.2 g) e h) p. 31; 14971 Tabela C.2 ("*Unsecured data ports*") | `med-image-prod` remove `debug-tweaks`, ssh, login de root | **a imagem de produção nunca foi construída** (`med-image-prod.bb`); tudo o que foi medido é imagem de desenvolvimento (§5 A1 do plano; Fase 5) | E0 | — | ✗ |
 | SIS-01 | O sistema de arquivos raiz é imutável | 81001-5-1 §5.3.1 e §5.3.2 f) p. 22 ◐ (não exigido nominalmente) | `read-only-rootfs` | só em `med-image-prod.bb`; as imagens medidas têm rootfs gravável, e com ele somente leitura a trilha e o estado da cadeia não teriam onde ser gravados (§5 A1 e A7 do plano; Fase 5) | E0 | — | ✗ |
 | SIS-02 | Controle de acesso obrigatório | 81001-5-1 §5.3.1 e §5.3.2 b) p. 22 ◐ (não exigido nominalmente) | AppArmor (`implementation_plan_mac.md`) | não implementado (`implementation_plan_mac.md`) | — | — | ✗ |
@@ -104,7 +104,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | INV-02 | Cada componente de terceiros (SOUP) tem nome, versão e licença | 62304 §8.1.2 p. 32 (título, fabricante, versão; **licença não é exigida**); 81001-5-1 cl. 8, E.2.1 b) | SPDX + `buildhistory` | SPDX (`med-os.conf`) e `buildhistory`; a medir na Fase 4 | E0 | — | ◐ |
 | INV-03 | O código de kernel próprio não é SOUP não controlado | 62304 §3.29 p. 14 (deixa de ser SOUP o que foi feito para o dispositivo **e** tem registros do processo) | driver derivado de `ti-ads1298.c` (mainline) e submetido à revisão pública | submetido à `linux-iio` (`implementation_plan_ads1299_upstream.md`; data e Message-ID a registrar) | E1 | — | ✅ |
 | INV-04 | Vulnerabilidades conhecidas são identificadas | 81001-5-1 §5.7.3 p. 25, §6.2.1, §4.1.7; 62304 §7.1.3 p. 30 | `cve-check` (não habilitado) | — | — | — | ✗ |
-| INV-05 | Cada componente de terceiros está classificado como *maintained*, *supported* ou *required* | 81001-5-1 §4.3 p. 20, A.3 p. 37 | uma coluna na tabela de SOUP (Fase 4) | não existe | — | — | ✗ |
+| INV-05 | Cada componente de terceiros está classificado como *maintained*, *supported* ou *required* | 81001-5-1 §4.3 p. 20, A.3 p. 37 | critério: *maintained* é o que o pacote A/B entrega | `MODELO_DE_AMEACAS.md` §3: todo o rootfs é *maintained* (240 pacotes no EEG, 210 na bomba); **o kernel, o device tree, o TF-A, o FIP e o GRUB são *required***, porque ficam fora dos slots A/B | E1 | — | ✅ |
 | INV-06 | O código é compilado com opções de compilação seguras | 81001-5-1 B.5.4 p. 41–42, §5.7.3 d) | `security_flags.inc` (`med-os.conf`) | herdado em `med-os.conf`, não inspecionado no artefato | E0 | — | ◐ |
 
 ### Ameaças e testes de segurança (Fase 0)
@@ -112,10 +112,10 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
 | THR-01 | Todo produto tem modelo de ameaças, com fluxo de dados, fronteiras de confiança, portas físicas e de depuração e dependências de terceiros | 81001-5-1 §4.2 p. 20, §7.2 p. 30–31, §5.4.2 | DFD + STRIDE (Anexo C) | não existe; só menções soltas em `BRINGUP_STM32MP2.md` §9 | — | — | ✗ |
-| THR-02 | O contexto de segurança está declarado (posição na rede, segurança física, isolamento, impacto na segurança do paciente) | 81001-5-1 §7.1.2 p. 30 | um parágrafo por perfil | não existe | — | — | ✗ |
-| THR-03 | Cada interface, física e lógica, está caracterizada: fronteira de confiança, papéis, ameaças, validação de entrada | 81001-5-1 §5.4.3 a)–j) p. 23–24 | tabela de interfaces (socket de controle, `rpmsg`, SPI/USB do conversor, `/data`, serial, USB de atualização) | não existe | — | — | ✗ |
+| THR-02 | O contexto de segurança está declarado (posição na rede, segurança física, isolamento, impacto na segurança do paciente) | 81001-5-1 §7.1.2 p. 30 | um parágrafo por perfil | `MODELO_DE_AMEACAS.md` §1: rede, segurança física, isolamento, impacto, hardware dedicado, para o EEG na placa, a bomba e a estação no PC; a segurança física é **suposição declarada**, e o atacante com acesso físico não é mitigado | E1 | — | ✅ |
+| THR-03 | Cada interface, física e lógica, está caracterizada: fronteira de confiança, papéis, ameaças, validação de entrada | 81001-5-1 §5.4.3 a)–j) p. 23–24 | tabela de interfaces | `MODELO_DE_AMEACAS.md` §2: 19 interfaces, todas cruzando fronteira de confiança; 3 sem controle nenhum (console, SWD, sshd), 12 com lacuna declarada, 4 sem lacuna | E1 | — | ✅ |
 | THR-04 | A chave privada de assinatura do código tem controles de proteção declarados | 81001-5-1 §5.8.4 p. 27 | `pki/` fora do git; `MOK.priv` não rastreado | a chave de desenvolvimento é gerada por `med-pki.sh` e fica na árvore de trabalho, fora do git; nada a protege além disso | E1 | — | ◐ |
-| TST-01 | A superfície de ataque da imagem é testada (portas abertas, serviços com privilégio elevado) | 81001-5-1 §5.7.3 b) p. 25 | `ss -tlnp`, `systemd-analyze security` | `sandbox-exposure` mede um serviço; a superfície da imagem não | E2 | — | ◐ |
+| TST-01 | A superfície de ataque da imagem é testada (portas abertas, serviços com privilégio elevado) | 81001-5-1 §5.7.3 b) p. 25 | `attack-surface` no `make check` (plataforma): toda porta fora do loopback tem de estar declarada, com motivo | `attack-surface`, vista falhar no alvo com uma porta não declarada aberta (`tests/infusion-target/inject_runtime.py`); medido na bomba: expostas `22/tcp` (sshd, desenvolvimento) e `68/udp` (DHCP), loopback `53` | E3 | — | ✅ |
 | TST-02 | As interfaces externas passam por casos de abuso e *fuzzing* | 81001-5-1 §5.7.3 a) e e) p. 25 | — | nada; trabalho futuro | — | — | ✗ |
 
 ## 3. A matriz normativa
@@ -176,7 +176,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 |---|---|---|---|---|---|
 | 81001-5-1 | 4.1 (p. 18–20) | gestão da qualidade, divulgação de vulnerabilidades | — | E | do fabricante |
 | 81001-5-1 | 4.2 (p. 20) | risco de segurança com modelagem de ameaças | THR-01 | D |  |
-| 81001-5-1 | 4.3 (p. 20) | itens *maintained*, *supported*, *required* | INV-05 | D |  |
+| 81001-5-1 | 4.3 (p. 20) | itens *maintained*, *supported*, *required* | INV-05 | B |  |
 | 81001-5-1 | 5.1 (p. 21) | planejamento, ambiente de desenvolvimento, codificação segura | — | E | processo; o build em contêiner é a parte técnica do §5.1.2 |
 | 81001-5-1 | 5.2 (p. 21–22) | requisitos de segurança e sua revisão | — | E | processo |
 | 81001-5-1 | 5.3.1 (p. 22) | arquitetura de defesa em profundidade | SIS-01, SIS-02 | D |  |
@@ -185,7 +185,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 81001-5-1 | 5.3.2 g)–h) (p. 22) | remover acesso e informação de depuração | ACE-03 | D |  |
 | 81001-5-1 | 5.3.3 a) (p. 23) | segregação eficaz dos itens | SEG-01, SEG-02 | C |  |
 | 81001-5-1 | 5.4.2 (p. 23) | projeto cobre as ameaças do modelo | THR-01 | D |  |
-| 81001-5-1 | 5.4.3 (p. 23–24) | interfaces seguras, fronteiras de confiança | THR-03, ACE-01 | D |  |
+| 81001-5-1 | 5.4.3 (p. 23–24) | interfaces seguras, fronteiras de confiança | THR-03, ACE-01 | C |  |
 | 81001-5-1 | 5.5 (p. 24–25) | implementação e revisão | — | E | processo |
 | 81001-5-1 | 5.7.2 (p. 25) | teste de mitigação: tentar derrotá-la | — | E | processo; a injeção de falha deste trabalho é a mesma ideia (nível E3) |
 | 81001-5-1 | 5.7.3 (p. 25) | teste de vulnerabilidades, superfície de ataque, *fuzzing*, composição | INV-04, TST-01, TST-02, INV-06, INV-01 | C |  |
@@ -196,7 +196,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 81001-5-1 | 6.1.1, 6.3.2 (p. 28–29) | prazos e disponibilização de atualizações de segurança | — | E | processo; o mecanismo que as entrega é o ATU-01 |
 | 81001-5-1 | 6.2.1 (p. 28) | monitorar fontes de vulnerabilidades | INV-04 | D |  |
 | 81001-5-1 | 6.3.3 (p. 29) | atualização com integridade verificável pelo usuário | ATU-01 | A |  |
-| 81001-5-1 | 7.1.2 (p. 30) | contexto de segurança | THR-02 | D |  |
+| 81001-5-1 | 7.1.2 (p. 30) | contexto de segurança | THR-02 | B |  |
 | 81001-5-1 | 7.2 (p. 30–31) | identificação de ameaças e impactos | THR-01, AUD-02, DAD-01 | C |  |
 | 81001-5-1 | 7.3–7.5 (p. 31) | estimar, controlar e monitorar o risco de segurança | — | E | processo |
 | 81001-5-1 | 8 (p. 32) | lista reproduzível de componentes externos | INV-01, INV-02 | C |  |
@@ -208,13 +208,15 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **42**: 18 ✅, 11 ◐, 13 ✗ |
-| Por nível | E3 11 · E2 9 · E1 7 · E0 5 · sem evidência 10 |
-| Cláusulas na matriz | **67**: A 14 · B 1 · C 15 · D 10 · E 27 |
+| Requisitos técnicos | **42**: 22 ✅, 10 ◐, 10 ✗ |
+| Por nível | E3 12 · E2 9 · E1 9 · E0 5 · sem evidência 7 |
+| Cláusulas na matriz | **67**: A 14 · B 3 · C 16 · D 7 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 14 · só por inspeção (B) 3 · parcialmente (C) 16 · não (D) 7 |
 
-**A afirmação que este documento sustenta**: das 40 cláusulas técnicas das três normas (as que não são
-processo do fabricante), 14 são atendidas por mecanismos com evidência que falha sozinha (A), 1 só por
-inspeção (B), 15 parcialmente (C) e 10 não (D), e cada número aponta o comando que o produziu.
+**A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
+das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número
+apontando o comando que o produziu. Os números da tabela são reescritos pelo verificador
+(`--fix`) e conferidos por ele, então não ficam para trás de uma mudança numa linha.
 **O que não sustenta**: conformidade a qualquer das três, nem prontidão para certificação.
 
 ## 5. Fontes citadas e não conferidas

@@ -15,8 +15,12 @@ docs/implementation_plan_conformity.md sets for it, and print its counts.
   4. Every piece of evidence below the "nothing ran" levels points at
      something that exists: an assertion of scripts/med-check.py, a section
      of docs/RESULTS.md, or a file of this repository.
+  5. The counts written in section 4 are the counts of the tables, so a
+     number in the text cannot stay behind a change to a row.
 
-Exit 0 when the document holds, 1 when it does not. Python 3, no build.
+--fix rewrites the categories (rule 3) and the counts (rule 5) from the
+tables; nothing else is ever rewritten. Exit 0 when the document holds, 1
+when it does not. Python 3, no build.
 """
 import importlib.util
 import os
@@ -66,9 +70,26 @@ def status_of(cell):
     return cell.split()[0] if cell else "?"
 
 
+def counts_block(rts, counts, matrix_len):
+    st = {}
+    lv = {}
+    for r in rts.values():
+        st[r["status"]] = st.get(r["status"], 0) + 1
+        lv[r["level"]] = lv.get(r["level"], 0) + 1
+    return [
+        "| Requisitos técnicos | **%d**: %d ✅, %d ◐, %d ✗ |" % (len(rts), st.get("✅", 0), st.get("◐", 0), st.get("✗", 0)),
+        "| Por nível | E3 %d · E2 %d · E1 %d · E0 %d · sem evidência %d |" % tuple(lv.get(k, 0) for k in ("E3", "E2", "E1", "E0", "—")),
+        "| Cláusulas na matriz | **%d**: A %d · B %d · C %d · D %d · E %d |" % ((matrix_len,) + tuple(counts.get(k, 0) for k in "ABCDE")),
+        "| Cláusulas técnicas (sem as E) | **%d**: atendidas com evidência que falha sozinha (A) %d · só por inspeção (B) %d · parcialmente (C) %d · não (D) %d |" % (
+            (matrix_len - counts.get("E", 0),) + tuple(counts.get(k, 0) for k in "ABCD")),
+    ]
+
+
 def main():
+    fix = "--fix" in sys.argv[1:]
     text = open(DOC).read()
     failures = []
+    fixed_lines = {}
 
     rts = {}
     for c in table_rows(text, r"[A-Z]{3}-\d\d"):
@@ -114,7 +135,10 @@ def main():
             else:
                 expected = "C"
             if cat != expected:
-                failures.append("matriz, %s %s: categoria %s, os RTs dão %s" % (norm, clause, cat, expected))
+                if fix:
+                    fixed_lines[(norm, clause)] = expected
+                else:
+                    failures.append("matriz, %s %s: categoria %s, os RTs dão %s" % (norm, clause, cat, expected))
         counts[expected] = counts.get(expected, 0) + 1
     for rt in rts:
         if rt not in named:
@@ -137,6 +161,25 @@ def main():
                 failures.append("%s: RESULTS.md §%s não existe" % (rt, sec))
         if r["level"] not in ("—", "E0") and pointers == 0:
             failures.append("%s: nível %s sem nenhum ponteiro de evidência que exista" % (rt, r["level"]))
+
+    # 5. the counts in section 4
+    block = counts_block(rts, counts, len(matrix))
+    if fix:
+        lines = text.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            c = [x.strip() for x in line.strip().strip("|").split("|")]
+            if len(c) == 6 and (c[0], c[1]) in fixed_lines:
+                c[4] = fixed_lines[(c[0], c[1])]
+                lines[i] = "| " + " | ".join(c) + " |\n"
+            for new in block:
+                if line.startswith(new.split("|")[1].join("||")[:-1]):
+                    lines[i] = new + "\n"
+        text = "".join(lines)
+        open(DOC, "w").write(text)
+        print("--fix: %d categoria(s) e a contagem reescritas" % len(fixed_lines))
+    for new in block:
+        if new not in text:
+            failures.append("§4 não bate com as tabelas: esperado `%s`" % new)
 
     by_status = {}
     by_level = {}

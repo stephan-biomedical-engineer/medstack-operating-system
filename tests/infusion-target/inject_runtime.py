@@ -11,7 +11,8 @@ conformity plan): regenerate it with
 (-C, not -f -c: the latter rewrites the .wic and leaves the deployed link on
 the old one, so the boot finds the old disk).
 
-Usage: python3 tests/infusion-target/inject_runtime.py
+Usage: python3 tests/infusion-target/inject_runtime.py [CASE ...]
+  with no CASE, all of them; "seal" needs a fresh disk, the others do not.
 """
 import importlib.util
 import os
@@ -73,6 +74,34 @@ def main():
         con.send(f"dmesg -n 1 2>/dev/null; PS1='{mc.PROMPT}\\n'; export PS1")
         con.expect(re.escape(mc.PROMPT), 30, "prompt")
         con.run("settle", "sleep 25; systemctl is-system-running --wait")
+
+        wanted = set(sys.argv[1:])
+
+        def want(name):
+            return not wanted or name in wanted
+
+        # The attack surface (81001-5-1 5.7.3 b): a socket unit nobody declared,
+        # created at runtime - the realistic defect, a listener left in an image.
+        if want("attack-surface"):
+            def open_port():
+                con.run("port", "printf '[Socket]\\nListenStream=4444\\nAccept=yes\\n' > "
+                        "/run/systemd/system/inject.socket; printf '[Service]\\nExecStart=/bin/cat\\n"
+                        "StandardInput=socket\\n' > '/run/systemd/system/inject@.service'; "
+                        "systemctl daemon-reload; systemctl start inject.socket; sleep 1")
+
+            def close_port():
+                con.run("unport", "systemctl stop inject.socket; rm -f /run/systemd/system/inject.socket "
+                        "'/run/systemd/system/inject@.service'; systemctl daemon-reload")
+
+            case(con, "attack-surface", open_port, close_port, "uma porta não declarada aberta")
+
+        if not want("seal") and wanted:
+            con.buf = ""
+            con.send("poweroff")
+            con.expect(r"Power down", 90, "poweroff")
+            seen = sum(1 for r in results if r[4])
+            print("\n%d de %d injeções vistas" % (seen, len(results)))
+            return 0 if seen == len(results) else 1
 
         # The seal. journal-seal-key first: it collects the key the others use.
         ok, detail, _ = assertion(con, "journal-seal-key")

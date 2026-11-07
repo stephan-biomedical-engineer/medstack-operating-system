@@ -215,6 +215,46 @@ def check_audit_chain(out):
                   "a cópia alterada foi recusada" % (entries, components, verified, legacy))
 
 
+# Listeners an image may have outside the loopback, each with its reason - the
+# same rule as EXPECTED_FAILED: an allowance nobody justifies is a muted alarm.
+# Every image this suite runs is a development image; a product image must
+# leave this list empty of 22.
+ALLOWED_LISTENERS = {
+    "tcp:22": "sshd.socket, perfil de desenvolvimento (med-image-dev.inc); some no produto",
+    "udp:68": "cliente DHCP do systemd-networkd",
+}
+
+
+def check_attack_surface(out):
+    """IEC 81001-5-1 5.7.3 b): the ports the image exposes, and its root services.
+
+    Every listener off the loopback must be declared in ALLOWED_LISTENERS; the
+    loopback ones (the local resolver) are reported. Services running as root
+    are counted and reported - that is ACE-02's measurement, not a pass/fail here.
+    """
+    exposed, local = [], []
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) < 4 or cols[0] not in ("tcp", "tcp6", "udp", "udp6"):
+            continue
+        address, _, port = cols[3].rpartition(":")
+        key = "%s:%s" % (cols[0].rstrip("6"), port)
+        if address.startswith("127.") or address in ("::1", "[::1]"):
+            local.append(key)
+        else:
+            exposed.append(key)
+    if not exposed and not local:
+        return False, "não li nenhum socket (netstat falhou?)"
+    surprise = sorted(set(exposed) - set(ALLOWED_LISTENERS))
+    roots = re.findall(r"^(\S+\.service)=(\S*)$", out, re.M)
+    as_root = [u for u, user in roots if user in ("", "0", "root")]
+    detail = "expostas %s; loopback %s; %d de %d serviços como root" % (
+        ",".join(sorted(set(exposed))), ",".join(sorted(set(local))), len(as_root), len(roots))
+    if surprise:
+        return False, "porta exposta não declarada: %s (%s)" % (",".join(surprise), detail)
+    return True, detail
+
+
 def check_exposure(out):
     m = re.search(r"exposure level for .*?: ([0-9.]+)", out)
     if not m:
@@ -245,6 +285,11 @@ def rx(pattern, flags=0):
 PLATFORM_CHECKS = [
     ("system-state", "o sistema atingiu um estado terminal",
      "systemctl is-system-running || true", rx(r"^(running|degraded)$", re.M)),
+
+    ("attack-surface", "nenhuma porta exposta além das declaradas (81001-5-1 §5.7.3 b)",
+     "netstat -ltun; for u in $(systemctl list-units --type=service --state=running --no-legend "
+     "--plain | awk '{print $1}'); do echo $u=$(systemctl show -p User --value $u); done",
+     check_attack_surface),
 
     ("failed-units", "nenhuma unidade falha além das previstas",
      "systemctl list-units --state=failed --no-legend --plain | awk '{print $1}'",
