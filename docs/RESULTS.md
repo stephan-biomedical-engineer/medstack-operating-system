@@ -907,6 +907,26 @@ na decisão D11 daquele plano.
 pelo hash do objeto de dados. Contra quem altera **e** recalcula os hashes, que é o caso que só o
 selo cobre, não houve teste. E vale o falso positivo descrito acima.
 
+### A trilha fora dos slots A/B (2026-11-07)
+
+`/var/log/journal` e `/var/lib/medplatform` passam a ser montagens de bind de `/data/state`, o volume
+cifrado que nenhuma atualização escreve (`med-data-volume`, `implementation_plan_conformity.md`
+Fase 5.1). No QEMU, com `tests/conformity/slot_rewrite.py`:
+
+| | Antes | Depois de regravar o slot A |
+|---|---|---|
+| `machine-id` | `ffd276c1…` | `b60f3b13…` |
+| diretórios de journal em `/data` | 1 | 2 |
+| registros de auditoria do serviço do EEG | 42 | 45 |
+| cabeça da cadeia | 42 | 45 |
+| `med-audit-verify` | — | 45 verificados, 0 quebras, 0 reinícios |
+
+**O que demonstra**: uma atualização que regrava o rootfs não leva a trilha nem o estado da cadeia,
+e a cadeia continua através dela. **O que não demonstra**: a troca real de slot pelo bootloader, que
+o QEMU não faz (`MED_BOOTLOADER = "noop"`; a regravação faz com o disco o que a atualização faria), nem
+o comportamento na placa, que não foi medido. Cada slot tem o seu `machine-id`, e por isso um
+`journalctl` sem `-m` mostra só a trilha do slot em uso.
+
 ### Cadeia de hash da aplicação (2026-11-05): o formato 1 não era verificável; o 2 é
 
 **Antes** (formato 1), medido sobre 42 registros reais do QEMU com `journalctl -o json MED_AUDIT=1`

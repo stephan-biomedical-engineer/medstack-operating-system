@@ -1,0 +1,16 @@
+[Unit]
+Description=MedOS persistent state on /data (audit trail, application state)
+Documentation=file:/usr/libexec/medplatform/med-state.sh
+DefaultDependencies=no
+Requires=data.mount
+After=data.mount
+Before=var-log-journal.mount var-lib-medplatform.mount local-fs.target
+Conflicts=umount.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/medplatform/med-state.sh
+
+[Install]
+WantedBy=local-fs.target

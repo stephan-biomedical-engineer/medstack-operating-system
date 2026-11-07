@@ -491,6 +491,23 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, **Fase 5.1, primeira metade** (D8): `/var/log/journal` e `/var/lib/medplatform` são
+  montagens de bind de `/data/state/{journal,medplatform}`. Elas são criadas, e na primeira vez
+  copiadas do rootfs, por `med-state.service`, depois do `data.mount`; tudo no `med-data-volume`, na
+  camada de SO. A ordem com o journal não precisou ser forçada: o `systemd-journal-flush` já exige
+  `/var/log/journal` montado, e a trilha fica em `/run` até lá. **AUD-06 demonstrado no QEMU** pelo
+  que uma atualização faz ao disco (`tests/conformity/slot_rewrite.py`): o slot A foi regravado com
+  um rootfs limpo entre dois boots, o `machine-id` mudou, os 42 registros de antes continuaram, e a
+  cadeia seguiu de 42 para 45 com 0 quebras e 0 reinícios. `journal-persistent` (reescrita) e
+  `state-persistent` (nova) foram vistas falhar numa imagem sem o bind. `make check` do EEG:
+  **42/42**. Ficam para a outra metade: a chave de selo (D10, já feita em 2026-11-03), o
+  `machine-id` (D9) e a imagem de produção. **Erro registrado**: a primeira versão das duas
+  asserções usava `findmnt`, que não existe nesta imagem. Elas reprovaram tanto na imagem sem o
+  bind quanto **na imagem com ele**, e a primeira reprovação foi lida como a injeção de falha. Ela
+  não provava nada, porque o comando ausente reprovaria qualquer imagem. Agora as asserções leem o
+  `/proc/self/mountinfo`, e a injeção foi refeita. **Achado para a Fase 5**: num rootfs somente
+  leitura, o `var-volatile-lib.service` do OE monta um tmpfs sobre `/var/lib`; a montagem do estado
+  foi ordenada depois dele, para não ser coberta. Na placa, não medido.
 - **2026-11-07**, os quatro RTs baratos da §4.7: **THR-02, THR-03 e INV-05** em
   `docs/MODELO_DE_AMEACAS.md` (contexto de segurança por perfil; 19 interfaces, 3 sem controle
   nenhum, 12 com lacuna, 4 sem lacuna; *maintained*/*required*/*supported*), todos ✅ em E1. **TST-01**

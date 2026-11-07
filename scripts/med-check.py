@@ -295,8 +295,23 @@ PLATFORM_CHECKS = [
      "systemctl list-units --state=failed --no-legend --plain | awk '{print $1}'",
      check_failed_units),
 
-    ("journal-persistent", "/var/log/journal é diretório real, não tmpfs",
-     "test -d /var/log/journal && test ! -L /var/log && echo OK", rx(r"OK")),
+    # Persistent is not enough: a trail on the rootfs is inside an A/B slot, and
+    # the next update rewrites it (AUD-06). Both must be bind mounts of the
+    # /data volume, which no update writes (implementation_plan_conformity.md
+    # 5.1). The VOLATILE_LOG_DIR regression this assertion was first written for
+    # (/var/log a symlink to a tmpfs) is still checked by the NOLINK half.
+    ("journal-persistent", "/var/log/journal está no volume /data, fora dos slots A/B",
+     # mountinfo, not findmnt: the image carries only parts of util-linux, and a
+     # missing command prints nothing - which this assertion first read as "not
+     # mounted" on an image where the mount was there.
+     "awk '$5==\"/var/log/journal\" {print \"src=\" $(NF-1) \" root=\" $4}' /proc/self/mountinfo; "
+     "test ! -L /var/log && echo NOLINK",
+     rx(r"src=/dev/mapper/med-data root=/state/journal[\s\S]*NOLINK")),
+
+    ("state-persistent", "/var/lib/medplatform está no volume /data, fora dos slots A/B",
+     "awk '$5==\"/var/lib/medplatform\" {print \"src=\" $(NF-1) \" root=\" $4}' /proc/self/mountinfo; "
+     "echo end",
+     rx(r"src=/dev/mapper/med-data root=/state/medplatform")),
 
     # O --rotate é o que torna esta asserção determinística. Sem ele o resultado
     # depende de o journal ter rotacionado sozinho durante o boot: numas rodadas

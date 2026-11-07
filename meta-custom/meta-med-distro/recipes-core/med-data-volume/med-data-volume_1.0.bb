@@ -12,6 +12,10 @@ SRC_URI = " \
     file://crypttab \
     file://med-data-provision.sh \
     file://med-data-provision.service \
+    file://med-state.sh \
+    file://med-state.service \
+    file://var-log-journal.mount \
+    file://var-lib-medplatform.mount \
 "
 
 S = "${WORKDIR}"
@@ -35,7 +39,7 @@ PACKAGE_ARCH = "${MACHINE_ARCH}"
 # MED_OS_INSTALL, but the package that needs them should say so.
 RDEPENDS:${PN} = "cryptsetup util-linux-blkid e2fsprogs-mke2fs"
 
-SYSTEMD_SERVICE:${PN} = "med-data-provision.service data.mount"
+SYSTEMD_SERVICE:${PN} = "med-data-provision.service data.mount med-state.service var-log-journal.mount var-lib-medplatform.mount"
 SYSTEMD_AUTO_ENABLE = "enable"
 
 # Where the volume key comes from. Defaults to tpm2 rather than development,
@@ -101,6 +105,15 @@ do_install() {
     # The mountpoint has to exist in the image: with a read-only rootfs it
     # cannot be created at runtime.
     install -d -m 0750 ${D}/data
+
+    # The persistent state the next update must not take: the audit trail and
+    # the applications' state, bind-mounted from /data (med-state.sh says why).
+    # Their mountpoints exist in the image for the same reason /data does.
+    install -m 0644 ${WORKDIR}/med-state.service ${D}${systemd_system_unitdir}/med-state.service
+    install -m 0644 ${WORKDIR}/var-log-journal.mount ${D}${systemd_system_unitdir}/var-log-journal.mount
+    install -m 0644 ${WORKDIR}/var-lib-medplatform.mount ${D}${systemd_system_unitdir}/var-lib-medplatform.mount
+    install -m 0750 ${WORKDIR}/med-state.sh ${D}${libexecdir}/medplatform/med-state.sh
+    install -d -m 0700 ${D}${localstatedir}/lib/medplatform
 }
 
 FILES:${PN} += " \
@@ -109,6 +122,11 @@ FILES:${PN} += " \
     ${libexecdir}/medplatform/med-data-provision.sh \
     ${sysconfdir}/crypttab \
     /data \
+    ${systemd_system_unitdir}/med-state.service \
+    ${systemd_system_unitdir}/var-log-journal.mount \
+    ${systemd_system_unitdir}/var-lib-medplatform.mount \
+    ${libexecdir}/medplatform/med-state.sh \
+    ${localstatedir}/lib/medplatform \
 "
 
 CONFFILES:${PN} = "${sysconfdir}/crypttab"

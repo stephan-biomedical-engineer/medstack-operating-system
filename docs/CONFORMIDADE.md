@@ -45,12 +45,12 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
-| AUD-01 | A trilha persiste entre reinicializações | 62304 §5.2.2 e) p. 21 ("*audit trail*"; a persistência é interpretação, não texto) | journald `Storage=persistent`; correção do `VOLATILE_LOG_DIR` | `journal-persistent`; `--list-boots` após reboot (`RESULTS.md` §5) | E2 | sim | ✅ |
+| AUD-01 | A trilha persiste entre reinicializações | 62304 §5.2.2 e) p. 21 ("*audit trail*"; a persistência é interpretação, não texto) | journald `Storage=persistent`; correção do `VOLATILE_LOG_DIR` | `journal-persistent`: `/var/log/journal` vem de `/data` e `/var/log` não é link; `--list-boots` após reboot (`RESULTS.md` §5) | E2 | sim | ✅ |
 | AUD-02 | A alteração de um registro é detectável (selo do SO) | 62304 §5.2.2 e) p. 21; 81001-5-1 §7.2 e §7.4 p. 30–31 ◐ (ameaça de adulteração no modelo de ameaças) | Forward Secure Sealing: `Seal=yes` + chave criada no 1º boot (`med-journal-seal.service`), chave de verificação fora do dispositivo | `journal-seal-key`, `journal-sealed`: no boot de provisionamento todo arquivo selado valida com a chave e é recusado com uma chave errada; nos boots seguintes 2 de 5 falham por falso positivo do systemd 255 (§5, A6 e A8; `RESULTS.md` §5) | E2 | — | ◐ falso positivo do systemd |
 | AUD-03 | A alteração de um registro é detectável (cadeia da aplicação) | 62304 §5.2.2 e) p. 21; 81001-5-1 §7.2 e §7.4 p. 30–31 ◐ (ameaça de adulteração no modelo de ameaças) | cadeia SHA-256 do `MedicalLogger`, formato 2 (`src/AuditChain.h`), verificada por `med-audit-verify` | `audit-chain`: 43 registros em 2 cadeias, todos verificados através de um reboot, e uma cópia com um campo alterado recusada no alvo; 46 verificações de host com vetor independente e 3 injeções (§5, A2; `RESULTS.md` §5) | E2 | — | ✅ |
 | AUD-04 | Os eventos relevantes são registrados | 62304 §5.2.2 e) p. 21 | 24 tipos de `AuditEvent` (18, mais 6 da bomba) | a bomba emite e a suíte confere 9 tipos (`audit-trail`, vista falhar no lote 1 de `tests/infusion-target/inject.py`); o EEG emite 12 dos seus 18 (§5 A3 de `implementation_plan_conformity.md`) | E3 | — | ◐ |
 | AUD-05 | O registro identifica quem agiu | 62304 §5.2.2 e) p. 21 (autenticação, trilha); 81001-5-1 §3.31 e §5.4.3 f) ◐ | `affirmed_operator` no metadado | `affirmed_operator` gravado e rotulado como afirmado (`implementation_plan_eeg_control.md` §13); o socket de controle não lê a credencial do requisitante; nenhuma asserção confere o campo | E1 | sim | ◐ |
-| AUD-06 | A trilha sobrevive a uma atualização | 62304 §5.2.2 e) p. 21 e §8.3 (histórico recuperável) ◐ | estado persistente fora do slot (Fase 5, D8) | o journal fica no rootfs, dentro do slot A/B (`BOOT_SLOT_AB_STM32MP2.md` §5.2) | — | — | ✗ |
+| AUD-06 | A trilha sobrevive a uma atualização | 62304 §5.2.2 e) p. 21 e §8.3 (histórico recuperável) ◐ | `/var/log/journal` e `/var/lib/medplatform` montados (bind) de `/data/state`, que nenhuma atualização escreve (`med-state.sh`, `med-data-volume`) | `journal-persistent` e `state-persistent`, vistas falhar numa imagem sem o bind; no QEMU, o slot A regravado com um rootfs limpo entre dois boots: os 42 registros de antes continuam, a cadeia segue de 42 para 45 sem quebra nem reinício (`tests/conformity/slot_rewrite.py`); na placa, não medido | E3 | — | ✅ |
 | TMP-01 | O registro carrega uma hora confiável, ou declara que não carrega | 62304 §5.2.2 e) p. 21 ◐ (interpretação: uma trilha sem hora confiável é incompleta) | `clock_synchronized` no `metadata.json` | `clock_synchronized` no `metadata.json` (`MedicalTypes.h`); nenhuma asserção o confere; a bomba não o declara (`implementation_plan_infusion_pump.md` §13, Fase 8) | E0 | sim | ◐ |
 
 ### Proteção e integridade dos dados
@@ -152,7 +152,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 62304 | 7.3.3 (p. 31) | rastreabilidade perigo → medida → verificação | — | E | processo; feita para a bomba em `REQUISITOS_INFUSAO.md`, ilustrativa |
 | 62304 | 8.1.2 (p. 32) | identificação do SOUP | INV-02 | C |  |
 | 62304 | 8.1.3 (p. 32) | configuração do sistema documentada | INV-01 | C |  |
-| 62304 | 8.3 | histórico recuperável da configuração | AUD-06, ATU-05 | D |  |
+| 62304 | 8.3 | histórico recuperável da configuração | AUD-06, ATU-05 | C |  |
 | 62304 | 9 (p. 33–34) | resolução de problemas | — | E | processo do fabricante |
 | 62304 | B.4.3 (p. 43) | segregação por qualquer mecanismo que impeça um item de afetar outro | SEG-02 | C |  |
 
@@ -208,10 +208,10 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **42**: 22 ✅, 10 ◐, 10 ✗ |
-| Por nível | E3 12 · E2 9 · E1 9 · E0 5 · sem evidência 7 |
-| Cláusulas na matriz | **67**: A 14 · B 3 · C 16 · D 7 · E 27 |
-| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 14 · só por inspeção (B) 3 · parcialmente (C) 16 · não (D) 7 |
+| Requisitos técnicos | **42**: 23 ✅, 10 ◐, 9 ✗ |
+| Por nível | E3 13 · E2 9 · E1 9 · E0 5 · sem evidência 6 |
+| Cláusulas na matriz | **67**: A 14 · B 3 · C 17 · D 6 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 14 · só por inspeção (B) 3 · parcialmente (C) 17 · não (D) 6 |
 
 **A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
 das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número

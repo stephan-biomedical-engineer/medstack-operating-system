@@ -1,0 +1,17 @@
+[Unit]
+Description=MedOS persistent state: /var/log/journal on /data
+# the audit trail (journald). systemd-journal-flush.service RequiresMountsFor= this path, so the trail stays in /run until it is mounted, and journald lets go of it before it is unmounted.
+DefaultDependencies=no
+Requires=med-state.service
+After=med-state.service
+Conflicts=umount.target
+Before=umount.target local-fs.target
+
+[Mount]
+What=/data/state/journal
+Where=/var/log/journal
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

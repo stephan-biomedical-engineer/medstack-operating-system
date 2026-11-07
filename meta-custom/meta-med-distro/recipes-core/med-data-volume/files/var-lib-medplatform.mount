@@ -1,0 +1,21 @@
+[Unit]
+Description=MedOS persistent state: /var/lib/medplatform on /data
+# the applications' state. Units with StateDirectory=medplatform are ordered after it by systemd itself.
+DefaultDependencies=no
+Requires=med-state.service
+# On a read-only rootfs, OE's var-volatile-lib.service mounts a tmpfs copy over
+# /var/lib; mounted after it, this stays on top, otherwise the tmpfs would cover
+# it and the state would be lost on every boot. It does nothing on a writable
+# rootfs (ConditionPathIsReadWrite=!/var/lib).
+After=med-state.service var-volatile-lib.service
+Conflicts=umount.target
+Before=umount.target local-fs.target
+
+[Mount]
+What=/data/state/medplatform
+Where=/var/lib/medplatform
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target
