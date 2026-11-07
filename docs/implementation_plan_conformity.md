@@ -493,6 +493,11 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, **Fase 4** (INV-01, INV-02): o SBOM aberto e contado pela primeira vez
+  (`scripts/med-sbom-report.py`, `RESULTS.md` §12). São 240 de 240 pacotes com documento, licença, versão e
+  fornecedor, e **0 com a origem da fonte**; 119 de 126 receitas têm CPE. INV-01 ✅. O INV-02 fica ◐,
+  porque o fornecedor é `OpenEmbedded` em todos, não o fabricante. O `cve-check`, opcional, não foi
+  rodado (primeiro item da ordem de corte, §8).
 - **2026-11-07**, **Fase 3** (SEG-02): o serviço de aquisição sem capacidade nenhuma, mais `UMask`,
   `ProtectProc`, `ProcSubset` e `IPAddressDeny`. *Exposure* de 3.7 para 1.3, com `SCHED_RR` 50 e a taxa
   mantidos; `make check` 43/43. O limite de `sandbox-exposure` baixou para 1.3, e um *drop-in* que

@@ -102,8 +102,8 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
-| INV-01 | Cada imagem tem SBOM | 81001-5-1 cl. 8 p. 32 (lista reproduzível de componentes), §5.7.3 d) | `INHERIT += "create-spdx"` (`med-os.conf`) | `create-spdx` herdado em `med-os.conf`; o SPDX da imagem existe e nunca foi aberto nem contado | E1 | — | ◐ |
-| INV-02 | Cada componente de terceiros (SOUP) tem nome, versão e licença | 62304 §8.1.2 p. 32 (título, fabricante, versão; **licença não é exigida**); 81001-5-1 cl. 8, E.2.1 b) | SPDX + `buildhistory` | SPDX (`med-os.conf`) e `buildhistory`; a medir na Fase 4 | E0 | — | ◐ |
+| INV-01 | Cada imagem tem SBOM | 81001-5-1 cl. 8 p. 32 (lista reproduzível de componentes), §5.7.3 d) | `INHERIT += "create-spdx"` (`med-os.conf`); contado por `med-sbom-report.py` | `med-sbom-report.py`: os **240 de 240** pacotes do EEG têm documento SPDX, com licença, versão e fornecedor; **0 de 240 dizem de onde veio a fonte** (`downloadLocation`); 119 de 126 receitas têm CPE (as 7 sem são *packagegroups* e `glibc-locale`) (`RESULTS.md` §12) | E1 | — | ✅ |
+| INV-02 | Cada componente de terceiros (SOUP) tem nome, versão e licença | 62304 §8.1.2 p. 32 (título, fabricante, versão; **licença não é exigida**); 81001-5-1 cl. 8, E.2.1 b) | SPDX + `buildhistory` | nome e versão em 240 de 240; o fornecedor é `Organization: OpenEmbedded` em todos, genérico, e não o fabricante de cada componente (62304 §8.1.2 b)); a origem da fonte falta em todos (`med-sbom-report.py`, `RESULTS.md` §12) | E1 | — | ◐ |
 | INV-03 | O código de kernel próprio não é SOUP não controlado | 62304 §3.29 p. 14 (deixa de ser SOUP o que foi feito para o dispositivo **e** tem registros do processo) | driver derivado de `ti-ads1298.c` (mainline) e submetido à revisão pública | submetido à `linux-iio` (`implementation_plan_ads1299_upstream.md`; data e Message-ID a registrar) | E1 | — | ✅ |
 | INV-04 | Vulnerabilidades conhecidas são identificadas | 81001-5-1 §5.7.3 p. 25, §6.2.1, §4.1.7; 62304 §7.1.3 p. 30 | `cve-check` (não habilitado) | — | — | — | ✗ |
 | INV-05 | Cada componente de terceiros está classificado como *maintained*, *supported* ou *required* | 81001-5-1 §4.3 p. 20, A.3 p. 37 | critério: *maintained* é o que o pacote A/B entrega | `MODELO_DE_AMEACAS.md` §3: todo o rootfs é *maintained* (240 pacotes no EEG, 210 na bomba); **o kernel, o device tree, o TF-A, o FIP e o GRUB são *required***, porque ficam fora dos slots A/B | E1 | — | ✅ |
@@ -153,7 +153,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 62304 | 7.1.3 (p. 30) | anomalias publicadas do SOUP | INV-04 | D |  |
 | 62304 | 7.3.3 (p. 31) | rastreabilidade perigo → medida → verificação | — | E | processo; feita para a bomba em `REQUISITOS_INFUSAO.md`, ilustrativa |
 | 62304 | 8.1.2 (p. 32) | identificação do SOUP | INV-02 | C |  |
-| 62304 | 8.1.3 (p. 32) | configuração do sistema documentada | INV-01 | C |  |
+| 62304 | 8.1.3 (p. 32) | configuração do sistema documentada | INV-01 | B |  |
 | 62304 | 8.3 | histórico recuperável da configuração | AUD-06, ATU-05 | C |  |
 | 62304 | 9 (p. 33–34) | resolução de problemas | — | E | processo do fabricante |
 | 62304 | B.4.3 (p. 43) | segregação por qualquer mecanismo que impeça um item de afetar outro | SEG-02 | A |  |
@@ -210,10 +210,10 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **44**: 25 ✅, 9 ◐, 10 ✗ |
-| Por nível | E3 14 · E2 8 · E1 10 · E0 5 · sem evidência 7 |
-| Cláusulas na matriz | **67**: A 15 · B 5 · C 16 · D 4 · E 27 |
-| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 15 · só por inspeção (B) 5 · parcialmente (C) 16 · não (D) 4 |
+| Requisitos técnicos | **44**: 26 ✅, 8 ◐, 10 ✗ |
+| Por nível | E3 14 · E2 8 · E1 11 · E0 4 · sem evidência 7 |
+| Cláusulas na matriz | **67**: A 15 · B 6 · C 15 · D 4 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 15 · só por inspeção (B) 6 · parcialmente (C) 15 · não (D) 4 |
 
 **A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
 das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número

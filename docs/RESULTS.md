@@ -2036,3 +2036,36 @@ menos de um segundo, `make test` o executa, nenhuma imagem é gerada com uma del
 regra foi vista reprovando. **Não** significa que a fronteira esteja provada: a checagem é por padrões
 e por grafo, e o §9 lista o que ela não vê. E a frase defensável é "verificadas a cada construção de
 imagem", não "pelo BitBake em qualquer alvo" — esta exigiria o caminho 1.
+
+---
+
+## 12. Inventário de software (SBOM)
+
+### Método
+
+```bash
+make qemu                                   # o SPDX sai com a imagem (create-spdx, med-os.conf)
+python3 scripts/med-sbom-report.py med-image-eeg
+```
+
+### Resultado (2026-11-07, `med-image-eeg`, QEMU)
+
+| | |
+|---|---|
+| Pacotes instalados com documento SPDX 2.2 | **240 de 240** |
+| Com licença declarada, versão e fornecedor | 240 de 240 |
+| **Com a origem da fonte** (`downloadLocation`) | **0 de 240**, e 0 das 126 receitas |
+| Receitas por trás deles | 126, das quais 23 deste repositório |
+| Receitas com CPE | 119 de 126; as 7 sem são *packagegroups* e `glibc-locale` |
+| Receitas que listam CVEs corrigidos por patch | 28 de 126; dos 12.603 CVEs listados, 12.448 são do `linux-yocto` |
+| Licenças mais comuns (ocorrências nas declarações) | MIT 90, BSD-3-Clause 65, LGPL-2.1-or-later 55, GPL-2.0-only 55, GPL-2.0-or-later 55, GPL-3.0-only 26 |
+
+**O que demonstra**: o SBOM existe para toda imagem, cobre todo pacote instalado e traz nome, versão,
+licença e, para o software de terceiros, o CPE que uma base de vulnerabilidades usa
+(`implementation_plan_conformity.md` INV-01). **O que não demonstra**:
+- **de onde** veio cada fonte, que o SBOM não diz;
+- **quem** é o fabricante de cada componente: o fornecedor declarado é `OpenEmbedded` em todos, e a
+  IEC 62304 §8.1.2 pede o fabricante (INV-02 fica ◐);
+- **quais vulnerabilidades continuam abertas**: o SBOM lista as corrigidas por patch, não as que
+  faltam, e o `cve-check`, que as acharia, não foi rodado (INV-04, primeiro da ordem de corte);
+- o kernel da placa: o `linux-stm32mp` não foi contado, e o número de CVEs do kernel acima é o do QEMU.
