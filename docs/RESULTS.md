@@ -798,10 +798,23 @@ chrt -p $(pidof eeg-acquisition-service)
 
 **O que isso transforma**: o particionamento deixa de ser afirmação em prosa e vira número medido.
 
-**Lacuna conhecida, ainda não corrigida**: a unit não define `CapabilityBoundingSet=`. Somando as
-linhas de capability do relatório dá ~3.0 dos ~5.5 pontos brutos — é o maior item isolado por
-margem larga. Também faltam `UMask=0077`, `ProtectProc=invisible`, `ProcSubset=pid` e
-`IPAddressDeny=any`. Corrigir e remedir daria um antes/depois; **não foi feito**.
+**Corrigido em 2026-11-07** (`implementation_plan_conformity.md` Fase 3): a unit ganhou
+`CapabilityBoundingSet=` vazio, `AmbientCapabilities=`, `UMask=0077`, `ProtectProc=invisible`,
+`ProcSubset=pid` e `IPAddressDeny=any`. O serviço não precisa de capacidade nenhuma: o `SCHED_RR` é
+aplicado pelo systemd antes do `exec`, e tudo o que ele abre é de root.
+
+| | Antes | Depois |
+|---|---|---|
+| *Exposure* | 3.7 | **1.3** |
+| Escalonamento (`acq-realtime`) | `SCHED_RR` 50 | `SCHED_RR` 50 |
+| Taxa (`acq-sample-rate`) | ok | ok |
+| `make check` | 43/43 | 43/43 |
+
+A asserção `sandbox-exposure` passou a ter limite 1.3. Com um *drop-in* em execução que devolve o
+conjunto inteiro de capacidades, o *exposure* sobe para 3.3 e ela reprova
+(`tests/infusion-target/inject_runtime.py sandbox-exposure`). **O que não demonstra**: que o serviço
+resiste a um ataque. O número é a pontuação do systemd sobre as diretivas da unit. O serviço continua
+rodando como root, só que sem nenhuma capacidade (ACE-02).
 
 Itens abertos **por projeto**, não por descuido, e que devem ser descritos assim:
 `RestrictAddressFamilies=~AF_UNIX` e `RestrictRealtime=` (o serviço precisa dos dois);

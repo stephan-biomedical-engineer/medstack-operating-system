@@ -64,10 +64,25 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
+# No capability at all (conformity plan, phase 3; SEG-02). The service needs
+# none: SCHED_RR is applied by systemd before exec, not asked for by the
+# process, and everything it opens - the co-processor's channel, the
+# converter's attributes, /data/eeg - is root's, so being the owner suffices.
+# Before this the bounding set was the full one, the largest single item of
+# `systemd-analyze security` (RESULTS.md section 4).
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Files it creates are its own; the sockets set their mode explicitly.
+UMask=0077
+# Other processes' /proc entries are invisible, and /proc shows only pids.
+ProtectProc=invisible
+ProcSubset=pid
+
 # No network of any kind: acquisition talks to a co-processor and to a local
 # socket. Anything else would be an exfiltration path for patient data.
 RestrictAddressFamilies=AF_UNIX
 PrivateNetwork=yes
+IPAddressDeny=any
 
 # The record volume is the only place outside its own runtime/state
 # directories this service may write.

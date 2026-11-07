@@ -25,7 +25,7 @@ spec = importlib.util.spec_from_file_location("medcheck", os.path.join(ROOT, "sc
 mc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mc)
 
-CHECKS = {c[0]: c for c in mc.PLATFORM_CHECKS + mc.INFUSION_CHECKS}
+CHECKS = {c[0]: c for c in mc.PLATFORM_CHECKS + mc.EEG_CHECKS + mc.INFUSION_CHECKS}
 results = []
 
 
@@ -54,7 +54,9 @@ def case(con, cid, inject, undo, label):
 
 def main():
     os.chdir(ROOT)
-    con = mc.Console(["make", "runqemu-infusion"])
+    # The image to boot: the pump's by default; MED_INJECT_TARGET=runqemu for
+    # the cases that belong to the EEG (sandbox-exposure).
+    con = mc.Console(["make", os.environ.get("MED_INJECT_TARGET", "runqemu-infusion")])
     try:
         if not con.expect(r"login:|Control-D to continue", mc.BOOT_TIMEOUT, "login"):
             # Twice a provisioning boot did not reach the prompt and left no
@@ -94,6 +96,20 @@ def main():
                         "'/run/systemd/system/inject@.service'; systemctl daemon-reload")
 
             case(con, "attack-surface", open_port, close_port, "uma porta não declarada aberta")
+
+        # The acquisition service's sandbox (SEG-02, conformity plan phase 3):
+        # a runtime drop-in gives it back the whole capability bounding set,
+        # which `systemd-analyze security` reads from the unit's configuration.
+        if want("sandbox-exposure"):
+            def full_caps():
+                con.run("caps", "mkdir -p /run/systemd/system/eeg-acquisition.service.d; "
+                        "printf '[Service]\\nCapabilityBoundingSet=~\\n' > "
+                        "/run/systemd/system/eeg-acquisition.service.d/inject.conf; systemctl daemon-reload")
+
+            def no_caps():
+                con.run("nocaps", "rm -rf /run/systemd/system/eeg-acquisition.service.d; systemctl daemon-reload")
+
+            case(con, "sandbox-exposure", full_caps, no_caps, "o conjunto de capacidades devolvido")
 
         if not want("seal") and wanted:
             con.buf = ""

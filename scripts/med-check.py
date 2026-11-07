@@ -260,10 +260,12 @@ def check_exposure(out):
     if not m:
         return False, "não consegui ler o exposure level"
     value = float(m.group(1))
-    # A ratchet, not a target: this is the measured value at the time the suite
-    # was written. It exists to catch a unit file that silently loses its
-    # sandboxing, not to claim 4.0 is good.
-    return value <= 4.0, f"exposure {value} (limite 4.0)"
+    # A ratchet, not a target: the measured value of the unit as it stands. It
+    # was 4.0 over a measured 3.7 until 2026-11-07, when the unit lost its whole
+    # capability bounding set and gained UMask, ProtectProc, ProcSubset and
+    # IPAddressDeny (conformity plan, phase 3): 1.3. It exists to catch a unit
+    # file that silently loses its sandboxing, not to claim 1.3 is good.
+    return value <= 1.3, f"exposure {value} (limite 1.3)"
 
 
 def rx(pattern, flags=0):

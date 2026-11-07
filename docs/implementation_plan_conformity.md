@@ -493,6 +493,10 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 ## 10. Registro de execução
 
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
+- **2026-11-07**, **Fase 3** (SEG-02): o serviço de aquisição sem capacidade nenhuma, mais `UMask`,
+  `ProtectProc`, `ProcSubset` e `IPAddressDeny`. *Exposure* de 3.7 para 1.3, com `SCHED_RR` 50 e a taxa
+  mantidos; `make check` 43/43. O limite de `sandbox-exposure` baixou para 1.3, e um *drop-in* que
+  devolve as capacidades o faz reprovar (3.3). O serviço ainda roda como root (ACE-02).
 - **2026-11-07**, **THR-01 e Fase 2.3**: o modelo de ameaças (`MODELO_DE_AMEACAS.md` §4, 25 ameaças) e
   os dois requisitos que ele revelou (ATU-06, SIS-03). O exportador passou a emitir
   `PatientDataExported`, com a asserção `export-audited`, vista falhar antes da correção. `make

@@ -83,7 +83,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
 | SEG-01 | O item de aquisição fica segregado do sistema de uso geral | 62304 §5.3.5 p. 23 (exigida na classe C) e §4.3 d) p. 17; 81001-5-1 §5.3.3 a) p. 23 (sem classe) | AMP: o conversor só no M33, periféricos atribuídos por RIF | aquisição pelo link `amp` com o Linux sem acesso ao conversor (`BRINGUP_STM32MP2.md` §9.16) | E2 | sim | ✅ (só link `amp`) |
-| SEG-02 | O processo de aquisição roda confinado | 62304 B.4.3 p. 43; 81001-5-1 §5.3.3 a) p. 23, §5.3.2 b) e f) p. 22 | sandbox do systemd | `sandbox-exposure`: 3.7; falta `CapabilityBoundingSet=` (`RESULTS.md` §4) | E2 | — | ◐ |
+| SEG-02 | O processo de aquisição roda confinado | 62304 B.4.3 p. 43; 81001-5-1 §5.3.3 a) p. 23, §5.3.2 b) e f) p. 22 | sandbox do systemd: sem capacidade nenhuma, `UMask=0077`, `ProtectProc=invisible`, `ProcSubset=pid`, sem rede | `sandbox-exposure`: de 3.7 para **1.3**, com o tempo real mantido (`acq-realtime`, `acq-sample-rate`); vista falhar com as capacidades devolvidas em execução, 3.3 (`tests/infusion-target/inject_runtime.py`; `RESULTS.md` §4) | E3 | — | ✅ |
 | SEG-03 | A aquisição tem prioridade de tempo real garantida | 62304 §5.2.2 a) p. 21 (requisitos de tempo), §5.5.4 c) p. 24 ◐ | `SCHED_RR` 50 | `acq-realtime` | E2 | — | ✅ |
 | SEG-04 | A fronteira entre camadas é verificada | 62304 §5.3.6 p. 23 (verificação da arquitetura) e §5.3.1 | `make check-layers` (F1–F9), `med-layer-guard.bbclass` | falha o build de imagem na violação (`RESULTS.md` §11) | E3 | — | ✅ |
 
@@ -156,7 +156,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 62304 | 8.1.3 (p. 32) | configuração do sistema documentada | INV-01 | C |  |
 | 62304 | 8.3 | histórico recuperável da configuração | AUD-06, ATU-05 | C |  |
 | 62304 | 9 (p. 33–34) | resolução de problemas | — | E | processo do fabricante |
-| 62304 | B.4.3 (p. 43) | segregação por qualquer mecanismo que impeça um item de afetar outro | SEG-02 | C |  |
+| 62304 | B.4.3 (p. 43) | segregação por qualquer mecanismo que impeça um item de afetar outro | SEG-02 | A |  |
 
 ### ISO 14971:2019
 
@@ -185,7 +185,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 81001-5-1 | 5.3.2 b) (p. 22) | menor privilégio | ACE-02, DAD-05, SEG-02 | C |  |
 | 81001-5-1 | 5.3.2 f) (p. 22) | redução da superfície de ataque | SIS-01, TST-01 | C |  |
 | 81001-5-1 | 5.3.2 g)–h) (p. 22) | remover acesso e informação de depuração | ACE-03 | D |  |
-| 81001-5-1 | 5.3.3 a) (p. 23) | segregação eficaz dos itens | SEG-01, SEG-02 | C |  |
+| 81001-5-1 | 5.3.3 a) (p. 23) | segregação eficaz dos itens | SEG-01, SEG-02 | A |  |
 | 81001-5-1 | 5.4.2 (p. 23) | projeto cobre as ameaças do modelo | THR-01 | B |  |
 | 81001-5-1 | 5.4.3 (p. 23–24) | interfaces seguras, fronteiras de confiança | THR-03, ACE-01 | C |  |
 | 81001-5-1 | 5.5 (p. 24–25) | implementação e revisão | — | E | processo |
@@ -210,10 +210,10 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **44**: 24 ✅, 10 ◐, 10 ✗ |
-| Por nível | E3 13 · E2 9 · E1 10 · E0 5 · sem evidência 7 |
-| Cláusulas na matriz | **67**: A 13 · B 5 · C 18 · D 4 · E 27 |
-| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 13 · só por inspeção (B) 5 · parcialmente (C) 18 · não (D) 4 |
+| Requisitos técnicos | **44**: 25 ✅, 9 ◐, 10 ✗ |
+| Por nível | E3 14 · E2 8 · E1 10 · E0 5 · sem evidência 7 |
+| Cláusulas na matriz | **67**: A 15 · B 5 · C 16 · D 4 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 15 · só por inspeção (B) 5 · parcialmente (C) 16 · não (D) 4 |
 
 **A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
 das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número
