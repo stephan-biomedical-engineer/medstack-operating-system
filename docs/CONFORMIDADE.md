@@ -76,6 +76,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | ATU-03 | A atualização é atômica e recuperável | 14971 §7.1 a) p. 12–13 e §7.5 p. 14 (o retorno pode reinstalar versão vulnerável) | A/B + contadores do U-Boot | fallback por falha injetada: 3→0, sobe em B (`implementation_plan_uboot_ab.md` §8) | E3 | sim | ✅ (pânico de kernel não testado) |
 | ATU-04 | Um slot só é confirmado se o dispositivo funciona | 14971 §7.1 b) p. 12–13 (medida) e §7.2 p. 13 (eficácia verificada) | `boot-complete.target` + `READY=1` após `device.start()` | slot sem aquisição nunca é confirmado, observado sem ajuda em 2026-10-08 (`BRINGUP_STM32MP2.md` §9.16); `infusion-active` com o simulador ausente: o serviço não fica pronto (`tests/infusion-target/inject_runtime.py`) | E3 | sim | ✅ |
 | ATU-05 | A atualização é registrada na trilha | 62304 §5.2.2 e) p. 21 e §8.3; 81001-5-1 E.2.5 d) p. 50 ◐ (informativo) | — | `UpdateStarted/Succeeded/Failed` nunca são emitidos (§5, A3); para a segunda classe, ver o achado do ATU-02 em `implementation_plan_infusion_pump.md` §13, Fase 8 | — | — | ✗ |
+| ATU-06 | Uma atualização para uma versão anterior é recusada | 14971 §7.5 p. 14 (o retorno pode reinstalar versão vulnerável); 81001-5-1 §7.2 p. 30–31 ◐ (ameaça T05 do modelo) | — | nada recusa uma versão mais antiga: o `system.conf` não tem *handler* de instalação (`MODELO_DE_AMEACAS.md` §4, T05) | — | — | ✗ |
 
 ### Segregação e confinamento
 
@@ -95,6 +96,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | ACE-03 | O produto não oferece login remoto nem depuração | 81001-5-1 §5.3.2 g) e h) p. 22, §7.2 g) e h) p. 31; 14971 Tabela C.2 ("*Unsecured data ports*") | `med-image-prod` remove `debug-tweaks`, ssh, login de root | **a imagem de produção nunca foi construída** (`med-image-prod.bb`); tudo o que foi medido é imagem de desenvolvimento (§5 A1 do plano; Fase 5) | E0 | — | ✗ |
 | SIS-01 | O sistema de arquivos raiz é imutável | 81001-5-1 §5.3.1 e §5.3.2 f) p. 22 ◐ (não exigido nominalmente) | `read-only-rootfs` | só em `med-image-prod.bb`; as imagens medidas têm rootfs gravável, e com ele somente leitura a trilha e o estado da cadeia não teriam onde ser gravados (§5 A1 e A7 do plano; Fase 5) | E0 | — | ✗ |
 | SIS-02 | Controle de acesso obrigatório | 81001-5-1 §5.3.1 e §5.3.2 b) p. 22 ◐ (não exigido nominalmente) | AppArmor (`implementation_plan_mac.md`) | não implementado (`implementation_plan_mac.md`) | — | — | ✗ |
+| SIS-03 | O software em uso (rootfs e kernel) é verificado no boot | 81001-5-1 §5.8.3 p. 27 (verificação de integridade de executáveis e arquivos relevantes) | — | a verity protege só o pacote de atualização; nada verifica o slot em uso nem o kernel no boot (`MODELO_DE_AMEACAS.md` §4, T25) | — | — | ✗ |
 
 ### Inventário de software e terceiros
 
@@ -111,7 +113,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 
 | RT | Requisito | Origem | Mecanismo | Evidência | Nível | Placa | Sit. |
 |---|---|---|---|---|---|---|---|
-| THR-01 | Todo produto tem modelo de ameaças, com fluxo de dados, fronteiras de confiança, portas físicas e de depuração e dependências de terceiros | 81001-5-1 §4.2 p. 20, §7.2 p. 30–31, §5.4.2 | DFD + STRIDE (Anexo C) | não existe; só menções soltas em `BRINGUP_STM32MP2.md` §9 | — | — | ✗ |
+| THR-01 | Todo produto tem modelo de ameaças, com fluxo de dados, fronteiras de confiança, portas físicas e de depuração e dependências de terceiros | 81001-5-1 §4.2 p. 20, §7.2 p. 30–31, §5.4.2 | DFD + STRIDE sobre as 19 interfaces (Anexo C) | `MODELO_DE_AMEACAS.md` §4: fluxo de dados, ativos, atores e 25 ameaças, 7 mitigadas, 9 parciais e 9 não mitigadas, cada uma ligada ao RT que verifica o controle; a revisão anual e a aceitabilidade são do fabricante | E1 | — | ✅ |
 | THR-02 | O contexto de segurança está declarado (posição na rede, segurança física, isolamento, impacto na segurança do paciente) | 81001-5-1 §7.1.2 p. 30 | um parágrafo por perfil | `MODELO_DE_AMEACAS.md` §1: rede, segurança física, isolamento, impacto, hardware dedicado, para o EEG na placa, a bomba e a estação no PC; a segurança física é **suposição declarada**, e o atacante com acesso físico não é mitigado | E1 | — | ✅ |
 | THR-03 | Cada interface, física e lógica, está caracterizada: fronteira de confiança, papéis, ameaças, validação de entrada | 81001-5-1 §5.4.3 a)–j) p. 23–24 | tabela de interfaces | `MODELO_DE_AMEACAS.md` §2: 19 interfaces, todas cruzando fronteira de confiança; 3 sem controle nenhum (console, SWD, sshd), 12 com lacuna declarada, 4 sem lacuna | E1 | — | ✅ |
 | THR-04 | A chave privada de assinatura do código tem controles de proteção declarados | 81001-5-1 §5.8.4 p. 27 | `pki/` fora do git; `MOK.priv` não rastreado | a chave de desenvolvimento é gerada por `med-pki.sh` e fica na árvore de trabalho, fora do git; nada a protege além disso | E1 | — | ◐ |
@@ -167,7 +169,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 14971 | 7.1 b) (p. 12–13) | medidas de proteção no dispositivo | DAD-01, DAD-03, INT-02, INT-03, ATU-01, ATU-04, AUD-02, AUD-03, SEG-02 | C |  |
 | 14971 | 7.1 c) (p. 12–13) | informação de segurança e treinamento | — | E | documentação ao usuário, do fabricante |
 | 14971 | 7.2 (p. 13) | verificar a implementação **e** a eficácia de cada medida | ATU-04 | A | o método inteiro: os níveis E2 e E3 deste documento |
-| 14971 | 7.5 (p. 14) | riscos introduzidos pelas próprias medidas | ATU-03, DAD-02 | C |  |
+| 14971 | 7.5 (p. 14) | riscos introduzidos pelas próprias medidas | ATU-03, DAD-02, ATU-06 | C |  |
 | 14971 | 8–10 (p. 14–16) | risco residual global, revisão, pós-produção | — | E | do fabricante; não há aparelho em campo |
 
 ### IEC 81001-5-1:2021
@@ -175,7 +177,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | Norma | Cláusula | Assunto | RTs | Cat. | Observação |
 |---|---|---|---|---|---|
 | 81001-5-1 | 4.1 (p. 18–20) | gestão da qualidade, divulgação de vulnerabilidades | — | E | do fabricante |
-| 81001-5-1 | 4.2 (p. 20) | risco de segurança com modelagem de ameaças | THR-01 | D |  |
+| 81001-5-1 | 4.2 (p. 20) | risco de segurança com modelagem de ameaças | THR-01 | B |  |
 | 81001-5-1 | 4.3 (p. 20) | itens *maintained*, *supported*, *required* | INV-05 | B |  |
 | 81001-5-1 | 5.1 (p. 21) | planejamento, ambiente de desenvolvimento, codificação segura | — | E | processo; o build em contêiner é a parte técnica do §5.1.2 |
 | 81001-5-1 | 5.2 (p. 21–22) | requisitos de segurança e sua revisão | — | E | processo |
@@ -184,14 +186,14 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 81001-5-1 | 5.3.2 f) (p. 22) | redução da superfície de ataque | SIS-01, TST-01 | C |  |
 | 81001-5-1 | 5.3.2 g)–h) (p. 22) | remover acesso e informação de depuração | ACE-03 | D |  |
 | 81001-5-1 | 5.3.3 a) (p. 23) | segregação eficaz dos itens | SEG-01, SEG-02 | C |  |
-| 81001-5-1 | 5.4.2 (p. 23) | projeto cobre as ameaças do modelo | THR-01 | D |  |
+| 81001-5-1 | 5.4.2 (p. 23) | projeto cobre as ameaças do modelo | THR-01 | B |  |
 | 81001-5-1 | 5.4.3 (p. 23–24) | interfaces seguras, fronteiras de confiança | THR-03, ACE-01 | C |  |
 | 81001-5-1 | 5.5 (p. 24–25) | implementação e revisão | — | E | processo |
 | 81001-5-1 | 5.7.2 (p. 25) | teste de mitigação: tentar derrotá-la | — | E | processo; a injeção de falha deste trabalho é a mesma ideia (nível E3) |
 | 81001-5-1 | 5.7.3 (p. 25) | teste de vulnerabilidades, superfície de ataque, *fuzzing*, composição | INV-04, TST-01, TST-02, INV-06, INV-01 | C |  |
 | 81001-5-1 | 5.7.4–5.7.5 (p. 25–26) | teste de intrusão; objetividade e independência | — | E | processo; **não atendido** e declarado: o trabalho é de uma pessoa (Tabela A.1) |
 | 81001-5-1 | 5.8.2 e 5.8.7 (p. 26–27) | guias de operação segura e de descomissionamento | — | E | documentação do fabricante; não existem |
-| 81001-5-1 | 5.8.3 (p. 27) | verificação de integridade de executáveis e arquivos | ATU-01, INT-02 | A |  |
+| 81001-5-1 | 5.8.3 (p. 27) | verificação de integridade de executáveis e arquivos | ATU-01, INT-02, SIS-03 | C |  |
 | 81001-5-1 | 5.8.4 (p. 27) | proteção da chave privada de assinatura | THR-04 | C |  |
 | 81001-5-1 | 6.1.1, 6.3.2 (p. 28–29) | prazos e disponibilização de atualizações de segurança | — | E | processo; o mecanismo que as entrega é o ATU-01 |
 | 81001-5-1 | 6.2.1 (p. 28) | monitorar fontes de vulnerabilidades | INV-04 | D |  |
@@ -208,10 +210,10 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **42**: 23 ✅, 10 ◐, 9 ✗ |
-| Por nível | E3 13 · E2 9 · E1 9 · E0 5 · sem evidência 6 |
-| Cláusulas na matriz | **67**: A 14 · B 3 · C 17 · D 6 · E 27 |
-| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 14 · só por inspeção (B) 3 · parcialmente (C) 17 · não (D) 6 |
+| Requisitos técnicos | **44**: 24 ✅, 10 ◐, 10 ✗ |
+| Por nível | E3 13 · E2 9 · E1 10 · E0 5 · sem evidência 7 |
+| Cláusulas na matriz | **67**: A 13 · B 5 · C 18 · D 4 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 13 · só por inspeção (B) 5 · parcialmente (C) 18 · não (D) 4 |
 
 **A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
 das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número

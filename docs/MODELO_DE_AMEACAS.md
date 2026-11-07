@@ -2,9 +2,9 @@
 
 > **Status**: 2026-11-07. Atende a três requisitos técnicos de `docs/CONFORMIDADE.md` que a IEC
 > 81001-5-1 exige e o projeto não tinha: **THR-02** (contexto de segurança, §7.1.2, p. 30), **THR-03**
-> (interfaces e fronteiras de confiança, §5.4.3, p. 23–24) e **INV-05** (classificação dos
-> componentes de terceiros, §4.3, p. 20, e A.3, p. 37). O **modelo de ameaças** em si (THR-01, §4.2 e
-> §7.2: STRIDE sobre o fluxo de dados) parte das tabelas abaixo e ainda não está feito.
+> (interfaces e fronteiras de confiança, §5.4.3, p. 23–24), **INV-05** (classificação dos
+> componentes de terceiros, §4.3, p. 20, e A.3, p. 37) e, desde a mesma data, **THR-01** (o modelo de
+> ameaças, §4.2, p. 20, e §7.2, p. 30–31: STRIDE sobre o fluxo de dados, na §4).
 >
 > **O que este documento não é**: uma análise de risco de segurança de um fabricante. É o
 > levantamento técnico que esse processo usaria, feito sobre a plataforma e os três perfis
@@ -105,3 +105,89 @@ rootfs e são atualizados, e a **imagem** do kernel não. Um pacote construído 
 traria módulos que o kernel em campo recusa carregar (`vermagic`), entre eles o driver do conversor. A
 correção é um slot A/B também para `med-boot`/ESP, ou o kernel dentro do slot. Fica como dívida
 declarada, ligada ao backlog do mecanismo de atualização (`implementation_plan_infusion_pump.md` §14.2).
+
+---
+
+## 4. Modelo de ameaças (THR-01)
+
+A IEC 81001-5-1 §7.2 pede, quando aplicável: fluxo da informação, fronteiras de confiança, processos,
+armazenamentos, entidades externas, protocolos, portas físicas e de depuração, conexões de placa
+(JTAG), vetores de ataque contra o hardware, ameaças, questões identificadas e dependências de
+terceiros. A §2 cobre as interfaces e as fronteiras, e a §3 as dependências. Esta seção junta o
+resto. O método é o STRIDE (Anexo C), aplicado a cada interface da §2, e não substitui o processo de
+risco de segurança de um fabricante: a revisão anual (§7.2), a estimativa de risco (§7.3) e a
+aceitabilidade (§7.4) são dele.
+
+### 4.1 Fluxo de dados
+
+```
+ eletrodos ─▶ conversor ─SPI─▶ Cortex-M33 ─rpmsg (13)─▶ serviço de aquisição ─▶ /data (17): sessão, BDF+
+                                    ▲                         │  │                    ▲
+                     (link usb: ponte USB (6) ─▶ IIO (14))    │  └─ eeg.sock (10) ─▶ HMI (8) ◀── operador
+                                                              │                      │
+                                         eeg-control.sock (9) ◀────── HMI, medctl ───┘
+                                                              │
+                                          journald ─▶ /var/log/journal em /data (16) ◀── cadeia (AUD-03)
+
+ pacote de atualização (7, USB) ─▶ RAUC (15) ─▶ slot inativo      configuração selada (18) ─▶ serviços
+ console (1), SWD (2), sshd (3), cartão (5): acesso direto ao Linux, ao M33 ou à mídia
+```
+
+A bomba troca o conversor e o M33 pelo mecanismo simulado (12) e o `eeg-control.sock` pelo
+`infusion-control.sock` (11). O resto do fluxo é o mesmo.
+
+### 4.2 Ativos e atores
+
+| Ativo | O que se perde |
+|---|---|
+| **A1** registro clínico (sessão bruta, BDF+, metadados) | confidencialidade (dado de saúde), integridade (diagnóstico) |
+| **A2** trilha de auditoria | rastreabilidade, não repúdio |
+| **A3** configuração e calibração seladas, biblioteca de fármacos | exatidão da medição ou da dose |
+| **A4** o software (rootfs, kernel, firmware do M33) | tudo o que depende dele |
+| **A5** chaves: de `/data`, de verificação do selo; a de assinatura das atualizações fica fora do aparelho | A1, A2, A4 |
+| **A6** a função: aquisição contínua, terapia | disponibilidade, e na bomba a segurança do paciente |
+
+Atores: o **operador** (confiável, pode errar); alguém com **acesso físico** não autorizado; um
+**processo comprometido** no Linux, por vulnerabilidade; um atacante na **rede local**; um **dispositivo
+USB** malicioso; e a **cadeia de suprimento** (um pacote forjado).
+
+### 4.3 Ameaças
+
+Situação: **mitigada** (há controle, verificado), **parcial** (há controle, que não cobre a ameaça
+inteira) ou **não mitigada**. RT é o requisito de `docs/CONFORMIDADE.md` que verifica o controle.
+
+| ID | Interface | STRIDE | Ameaça | Ativo | Controle | RT | Situação |
+|---|---|---|---|---|---|---|---|
+| T01 | 7 | S, T | pacote de atualização forjado ou alterado | A4 | assinatura, verity, chaveiro do aparelho, `check-purpose=codesign` | ATU-01 | mitigada |
+| T02 | 7 | T | pacote de outro aparelho ou de outra classe | A4, A6 | identidade de compatibilidade, por máquina | ATU-02 | parcial: não distingue classe |
+| T03 | 7 | D | atualização interrompida deixa o aparelho inoperante | A6 | A/B atômico, retorno automático | ATU-03 | mitigada |
+| T04 | 7 | D | versão nova quebrada é confirmada | A6 | slot confirmado só depois de `READY=1` | ATU-04 | mitigada |
+| T05 | 7 | T, E | **atualização para uma versão anterior, com vulnerabilidade conhecida** | A4 | **nenhum**: o `system.conf` não tem *handler* de instalação, e nada recusa uma versão mais antiga | ATU-06 | não mitigada |
+| T06 | 16 | T, R | registros da trilha alterados | A2 | cadeia verificável; selo do SO | AUD-03, AUD-02 | parcial: quem tem root recalcula a cadeia, e o selo tem falso positivo |
+| T07 | 16 | R | **o fim da trilha apagado** | A2 | nenhum: uma cauda cortada parece uma cadeia que parou | AUD-03 | não mitigada |
+| T08 | 16 | R | trilha perdida numa atualização | A2 | estado em `/data`, fora dos slots | AUD-06 | mitigada |
+| T09 | 5, 17 | I | registros lidos com o cartão retirado | A1 | LUKS2 em `/data` | DAD-01, DAD-02 | não mitigada: a chave está no mesmo cartão |
+| T10 | 17 | T | registro clínico alterado | A1 | `.sha256` ao lado do arquivo | INT-01 | parcial: o hash não tem chave, quem altera recalcula |
+| T11 | 18 | T | configuração, calibração ou biblioteca de fármacos alterada | A3 | selo conferido ao carregar, `SafetyLimit` | INT-02, INT-03 | parcial: o selo é um hash sem chave, e o rootfs é gravável nas imagens medidas |
+| T12 | 9, 11 | S, E | comando por um processo não autorizado | A6, A1 | permissões do socket (`0660`, root) | ACE-01 | não mitigada: na bomba, muda uma taxa (H8) |
+| T13 | 8 | S, R | operador se passa por outro, ou nega o que fez | A2 | o operador é afirmado e rotulado assim | AUD-05 | não mitigada |
+| T14 | 10 | I | sinal ao vivo lido por outro processo | A1 | permissões do socket | — | parcial |
+| T15 | 13 | T | quadros forjados no `rpmsg` por um root no Linux | A1 | CRC e sequência protegem contra erro, não contra adversário; o conversor fica fora do Linux | SEG-01 | parcial |
+| T16 | 6 | S, T | dispositivo USB que imita a ponte do conversor | A1 | VID/PID e autoteste no *probe* | — | parcial |
+| T17 | 1, 3 | S, E | login pelo console ou pelo `sshd` | todos | nenhum na imagem de desenvolvimento | ACE-03 | não mitigada: a imagem de produção não foi construída |
+| T18 | 2 | T, I, E | depuração pelo SWD, nos dois núcleos | todos | nenhum | ACE-03 | não mitigada |
+| T19 | todas | E | vulnerabilidade conhecida explorada | A4 | o rootfs é atualizável pelo A/B; o kernel não (INV-05); `cve-check` desligado | INV-04, INV-05 | não mitigada |
+| T20 | 9–15 | E | serviço comprometido escala privilégio | todos | sandbox do systemd | SEG-02, ACE-02, SIS-02 | parcial: 14 de 17 serviços rodam como root, sem MAC |
+| T21 | 17 | D | disco cheio impede a sessão ou a atualização | A6 | reserva do volume | DAD-04 | mitigada |
+| T22 | 10 | D | um leitor lento freia a aquisição | A6 | canal não bloqueante | INT-04 | mitigada |
+| T23 | 12, 13 | D | mecanismo ou produtor mudo ou travado | A6 | homem-morto no mecanismo, alarme no controlador (bomba) | INF-09, INF-10 | mitigada no perfil da bomba |
+| T24 | 19 | I | chave de verificação do selo lida no boot de provisionamento | A5 | `tmpfs`, `0400`, apagada no reboot | THR-04 | parcial |
+| T25 | 5 | T | **rootfs ou kernel alterados no cartão** | A4 | **nenhum**: a verity protege o pacote de atualização, não o slot em uso, e nada verifica o kernel no boot | SIS-03 | não mitigada |
+
+**Contagem**: 25 ameaças. **7 mitigadas** (T01, T03, T04, T08, T21, T22, T23; a T08 só desde a Fase
+5.1), **9 parciais** e **9 não mitigadas** (T05, T07, T09, T12, T13, T17, T18, T19, T25). As não
+mitigadas se concentram em três vetores: o **acesso físico** (T09, T18, T25, e T17 pelo console), a
+**identidade de quem comanda** (T12, T13) e a **manutenção do software** (T05, T19). O modelo
+revelou duas ameaças que nenhum requisito cobria, e que viraram requisitos novos: a atualização para
+versão anterior (T05 → **ATU-06**) e a integridade do software em uso no boot (T25 → **SIS-03**).
+
