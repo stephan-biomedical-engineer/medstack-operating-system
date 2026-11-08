@@ -40,3 +40,7 @@ pki/
 
 
 log/
+
+# Chave de assinatura de módulos (MOK): a privada nunca vai para o git
+MOK.priv
+MOK.der
