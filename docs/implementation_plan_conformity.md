@@ -492,6 +492,13 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 
 ## 10. Registro de execução
 
+- **2026-11-08**, **Fase 7** (contagem e redação): `RESULTS.md` §14 registra o estado final e a
+  evolução (D 10 → 4 → 2). Contagem final: 44 RTs, 28 ✅, 8 ◐, 8 ✗; 40 cláusulas técnicas, A 18,
+  B 6, C 14, D 2. **As duas em D dependem só do INV-04**, então a rodada opcional de `cve-check`
+  (primeiro item da ordem de corte) é o que ainda as tiraria de D. No capítulo da dissertação
+  (`Dissertacao_PTBR/02-elementos-textuais/`), entraram só seções e comentários de esboço, no
+  estilo dos que já existem: o texto corrido é do autor. **O plano está concluído**, exceto pelo
+  que depende de decisão do autor: D7 (e com ela o ATU-05), D9 (b) e D11.
 - **2026-11-08**, **Fases 5.2–5.5** (imagem de produção do EEG, QEMU). **5.3**: a lista do EEG foi
   para `med-image-eeg.inc`; `med-image-eeg` (desenvolvimento) e `med-image-eeg-prod` (sobre
   `med-image-prod.bb`) diferem pela base e pelo revisor. `make qemu IMAGE=med-image-eeg-prod`

@@ -2126,3 +2126,73 @@ aparelho. **O que não demonstra**:
   arquivos dela;
 - a identidade do aparelho na concessão: ela vale para todos os aparelhos do mesmo `compatible`;
 - o SWD, que fica fora do escopo e aberto.
+
+## 14. Requisitos técnicos das três normas: a contagem final (2026-11-08)
+
+Síntese do plano de conformidade (`implementation_plan_conformity.md`, Fase 7). A tabela viva é
+`docs/CONFORMIDADE.md`; esta seção registra o estado no fim do plano e como se chegou a ele.
+
+### Método
+
+```bash
+python3 scripts/med-conformity-check.py    # também em make test
+```
+
+O verificador lê as duas tabelas de `docs/CONFORMIDADE.md` e falha se: um requisito técnico (RT) não
+cita cláusula conferida das três normas; uma cláusula técnica não nomeia RT, ou um RT não é nomeado
+por cláusula nenhuma; a categoria de uma cláusula não é a que os seus RTs lhe dão (A a D,
+**calculada**, nunca escolhida); uma evidência acima de E0 não aponta para algo que existe (asserção,
+seção deste documento, arquivo); ou a contagem escrita difere das tabelas. As regras foram vistas
+falhar com defeitos injetados no documento (`implementation_plan_conformity.md` §10, Fase 1).
+
+### Resultado
+
+| | |
+|---|---|
+| Requisitos técnicos | **44**: 28 ✅, 8 ◐, 8 ✗ |
+| Por nível de evidência | E3 15 · E2 9 · E1 11 · E0 2 · sem evidência 7 |
+| Cláusulas aplicáveis | **67**, das quais 27 são processo do fabricante (E) |
+| **Cláusulas técnicas** | **40**: A 18 · B 6 · C 14 · D 2 |
+| por norma | IEC 62304: A 11 · B 2 · C 4 · D 1 (18) · ISO 14971: A 3 · C 2 (5) · IEC 81001-5-1: A 4 · B 4 · C 8 · D 1 (17) |
+
+Evolução, pela mesma regra de cálculo:
+
+| Data | RTs | ✅ / ◐ / ✗ | A / B / C / D | O que mudou |
+|---|---|---|---|---|
+| 2026-11-07, Fase 1 | 42 | 18 / 11 / 13 | 14 / 1 / 15 / 10 | primeira matriz; a auditoria de evidência rebaixou AUD-05, TMP-01 e ACE-01 |
+| 2026-11-07, Fases 2–4 | 44 | 26 / 8 / 10 | 15 / 6 / 15 / 4 | cadeia de auditoria verificável, trilha fora dos slots, confinamento, SBOM, modelo de ameaças (que acrescentou ATU-06 e SIS-03) |
+| 2026-11-08, Fase 5 | 44 | 28 / 8 / 8 | **18 / 6 / 14 / 2** | imagem de produção e acesso de serviço (ACE-03, SIS-01; §13) |
+
+**O que fica aberto**, pelo vetor:
+- **acesso físico**: a chave do `/data` no mesmo cartão (DAD-02), nada verifica o rootfs e o kernel no
+  boot (SIS-03), o SWD aberto;
+- **identidade de quem comanda**: o requisitante do socket de controle não é identificado (ACE-01),
+  o operador é afirmado (AUD-05), serviços como root (ACE-02, 14 de 17 na bomba);
+- **manutenção do software**: versão anterior não é recusada (ATU-06), a atualização não entra na
+  trilha (ATU-05, depende de D7), vulnerabilidades conhecidas não são levantadas (INV-04), sem
+  controle de acesso obrigatório (SIS-02), sem casos de abuso nem *fuzzing* (TST-02);
+- **parciais**: o selo do journal (AUD-02: falso positivo do systemd 255, D11; e, na produção, uma
+  chave por boot, D9), a hora (TMP-01), a lista de eventos (AUD-04), o fornecedor no SBOM (INV-02), as
+  opções de compilação (INV-06), a custódia da chave de assinatura (THR-04).
+
+**As duas cláusulas em D** (IEC 62304 §7.1.3, IEC 81001-5-1 §6.2.1) dependem só do INV-04. Uma rodada
+de `cve-check` as tiraria de D; tratar o que ela achar é outro trabalho.
+
+**O que a bomba herda** (`implementation_plan_infusion_pump.md` §13, M9, medido em 2026-11-06): dos
+26 RTs que se aplicam a ela, 23 sem uma linha de plataforma, 1 com trabalho na plataforma (AUD-04).
+Os controles da Fase 5 (ACE-03, SIS-01) são da plataforma (`med-image-prod.bb`,
+`med-service-access`), e uma imagem de produção da bomba seria uma receita como a do EEG. **Não foi
+construída**, então para a bomba eles são herdados em código e não medidos.
+
+**O que demonstra**: quantas cláusulas técnicas das três normas a plataforma atende, com que
+evidência, e qual comando produziu cada número; e que a contagem não pode ficar para trás de uma
+mudança na tabela. **O que não demonstra**:
+- conformidade a qualquer das três normas, nem prontidão para certificação: 27 cláusulas são
+  processo do fabricante, e nenhuma delas foi avaliada;
+- independência: a 81001-5-1 §5.7.5 pede testes por pessoa ou organização independente, e todo o
+  trabalho é de uma pessoa;
+- a classe de segurança: B para o EEG e C para a bomba são hipóteses, não resultado de análise de
+  risco do fabricante;
+- a placa: a coluna **Placa** de `CONFORMIDADE.md` marca os 16 RTs observados no STM32MP257; a imagem
+  de produção não foi gravada nela;
+- as fontes não conferidas (LGPD, FDA §524B, RDC 546), listadas em `CONFORMIDADE.md` §5.

@@ -894,6 +894,11 @@ linha de plataforma, e 1 exigiu trabalho** (AUD-04). Ela herdou também o **esta
 (AUD-02, AUD-05, ACE-02, INV-01, INV-02). Herdar um requisito aberto não o fecha. Para a bomba,
 ACE-01 é mais grave que para o EEG (H8: um comando não autorizado muda uma taxa).
 
+*Atualização de 2026-11-08*: desde a medição, três desses foram fechados **na plataforma** e não no
+perfil: AUD-06 (Fase 5.1 da conformidade), ACE-03 e SIS-01 (a imagem de produção, `RESULTS.md` §13).
+A bomba os herda em código (`med-image-prod.bb`, `med-service-access`), mas não tem imagem de
+produção construída, então para ela continuam não medidos.
+
 **Achados da medição** (não estavam no plano):
 - **ATU-02 não vale entre classes de dispositivo, e o defeito não é da ferramenta.** O mecanismo de
   atualização e o bootloader são escolha do integrador e dependem da placa. Qualquer que seja o

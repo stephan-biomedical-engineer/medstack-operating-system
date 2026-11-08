@@ -206,7 +206,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 
 ## 4. Contagem
 
-Saída de `scripts/med-conformity-check.py`, 2026-11-07:
+Saída de `scripts/med-conformity-check.py`, 2026-11-08:
 
 | | |
 |---|---|
