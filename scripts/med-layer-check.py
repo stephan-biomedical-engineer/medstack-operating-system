@@ -89,7 +89,9 @@ THIRD_PARTY_APPS = {
 }
 OWN_APP_DEPENDS = re.compile(r'^(med-framework-api|qt[a-z0-9][a-z0-9-]*)$')
 OWN_APP_RDEPENDS = re.compile(r'^(libmedframework\d*|med-framework-api|qt[a-z0-9][a-z0-9-]*)$')
-FRAMEWORK_DEPENDS = {'systemd', 'openssl', 'med-amp-abi'}
+# med-framework-api: a framework tool (med-service-access) links the framework
+# itself, which adds no external dependency.
+FRAMEWORK_DEPENDS = {'systemd', 'openssl', 'med-amp-abi', 'med-framework-api'}
 
 # F8 - the framework's drivers, by the transport they speak.
 TRANSPORTS = {

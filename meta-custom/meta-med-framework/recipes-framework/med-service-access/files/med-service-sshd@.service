@@ -1,0 +1,13 @@
+[Unit]
+Description=MedOS service access: one audited SSH connection
+
+[Service]
+# The record comes first: a connection that cannot be audited, or that
+# arrives after the window closed, is refused before sshd runs.
+ExecStartPre=/usr/bin/med-service-access session-start %i
+ExecStartPre=/bin/mkdir -p /var/run/sshd
+ExecStart=-/usr/sbin/sshd -i -f /etc/ssh/med-service.sshd_config
+# SERVICE_RESULT is what systemd says became of the connection.
+ExecStopPost=/bin/sh -c '/usr/bin/med-service-access session-end "$1" "$SERVICE_RESULT"' sh %i
+StandardInput=socket
+StandardError=journal

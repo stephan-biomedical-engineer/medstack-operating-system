@@ -1,0 +1,8 @@
+#!/bin/sh
+# MedOS service access: close the window - the listener, every open session,
+# the authorized key - and record why. Run when the grant's duration expires,
+# or by hand: /usr/libexec/med-service-access/stop "<why>".
+systemctl stop med-service-sshd.socket
+systemctl stop 'med-service-sshd@*.service'
+[ "${1:-}" = expired ] || systemctl stop med-service-expiry.timer 2>/dev/null
+exec med-service-access revoke "${1:-stopped}"

@@ -342,8 +342,11 @@ framework: $(TOOL)
 service: $(TOOL)
 	$(KAS) shell $(QEMU_CFG) -c "bitbake eeg-acquisition-service"
 
+# IMAGE picks the EEG image: med-image-eeg (the default, development) or
+# med-image-eeg-prod (production, docs/implementation_plan_conformity.md phase 5).
+# make runqemu takes the same IMAGE.
 qemu: $(TOOL)
-	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build $(QEMU_CFG)
+	$(KEY_ENV) $(KAS) $(KEY_ARGS) $(KERNEL_ARGS) build --target $(IMAGE) $(QEMU_CFG)
 
 # The EEG profile as a container for a desktop Linux host (host/README.md):
 # med-image-eeg minus boot, A/B and LUKS, as a rootfs archive. LINK=usb (the
@@ -534,6 +537,7 @@ test:
 	@$(MAKE) --no-print-directory -C tests/infusion-sim check
 	@$(MAKE) --no-print-directory -C tests/infusion-control check
 	@$(MAKE) --no-print-directory -C tests/layer-check check
+	@$(MAKE) --no-print-directory -C tests/service-access check
 	@python3 scripts/med-layer-check.py
 	@python3 scripts/med-conformity-check.py
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=MedOS service access: open an audited window from a signed grant
+# The grant's nonce and the audit chain's head live in /var/lib/medplatform,
+# which is on /data (var-lib-medplatform.mount).
+Requires=var-lib-medplatform.mount
+After=var-lib-medplatform.mount systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/med-service-access/start

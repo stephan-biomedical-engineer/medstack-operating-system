@@ -1,0 +1,3 @@
+# MedOS service access: a medium labelled "med-service" carries a signed grant.
+# Plugging it in only asks; med-service-access decides.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="med-service", TAG+="systemd", ENV{SYSTEMD_WANTS}+="med-service-access.service"

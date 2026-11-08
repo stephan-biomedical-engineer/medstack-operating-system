@@ -2069,3 +2069,60 @@ licença e, para o software de terceiros, o CPE que uma base de vulnerabilidades
 - **quais vulnerabilidades continuam abertas**: o SBOM lista as corrigidas por patch, não as que
   faltam, e o `cve-check`, que as acharia, não foi rodado (INV-04, primeiro da ordem de corte);
 - o kernel da placa: o `linux-stm32mp` não foi contado, e o número de CVEs do kernel acima é o do QEMU.
+
+## 13. Imagem de produção do EEG (2026-11-08, QEMU)
+
+### Método
+
+```bash
+make qemu IMAGE=med-image-eeg-prod                 # med-image-eeg.inc sobre med-image-prod.bb
+make qemu                                          # o sistema que lê o disco do produto
+python3 tests/conformity/prod_image.py             # console, desligamento, disco lido fora
+python3 tests/conformity/service_access.py         # acesso de serviço por concessão assinada
+make -C tests/service-access check                 # o verificador da concessão, no host
+```
+
+O produto não tem shell, então nada roda **nele**. `prod_image.py` verifica pelo que um inspetor
+teria: o console serial, o botão de energia (`system_powerdown` do monitor do QEMU) e o disco depois
+de desligado. Esse disco é ligado como pendrive USB somente leitura a um sistema de
+desenvolvimento, que abre o `/data` com a chave do próprio disco, lê a trilha com `journalctl -D` e a
+confere com `med-audit-verify`.
+
+### Resultado
+
+| | |
+|---|---|
+| Pacotes | **215** contra 240 do desenvolvimento; os 25 que saem são o `sshd` e o cliente, o revisor, as ferramentas de verificação e o que o `read-only-rootfs` dispensa (`implementation_plan_conformity.md` §10) |
+| Contas | `root:*` e `med-service:*` no `/etc/shadow` do artefato: nenhuma senha funciona |
+| `sshd` de fábrica | `sshd.socket`, `sshd.service` e `sshd@.service` mascarados; nenhum socket SSH habilitado |
+| Boot, 4 execuções seguidas sobre um disco novo | **8/8 em cada**: nenhuma unidade falha, o serviço de aquisição sobe, root é recusado no console, desliga pelo botão |
+| Trilha lida fora do produto | um `SYSTEM_START` por boot (4 em 4), **12 registros, 0 quebras** através dos 4 boots |
+| `machine-id` | um por boot (4 diretórios de journal em 4 boots): transitório, como o rootfs somente leitura exige |
+| Acesso de serviço, duas execuções (antes e depois de corrigir um predicado, abaixo) | **15/15 nas duas**: fechado antes de qualquer concessão; uma concessão de CA estranha não abre nada; a verdadeira abre o `sshd` para `med-service` com a chave concedida, que exporta e verifica a trilha e não grava no rootfs; root e outra chave recusados; fecha ao fim da duração (150 s); a mesma concessão de novo não abre nada; na trilha do produto, 2 recusas, 1 concessão, 5 conexões abertas e 5 encerradas, o fechamento com motivo `expired`, e a cadeia sem quebra (17 registros, 2 componentes) |
+| Verificador no host | 39 verificações; 4 injeções (sem EKU, sem CRL, sem conferir o tipo do blob, qualquer tipo de chave), cada uma reprovando só os seus casos |
+
+**Dois defeitos que só a imagem de produção mostrou**, da mesma causa. O `runqemu` acrescenta
+` rw` à raiz, então o kernel montava gravável o rootfs de uma imagem somente leitura: (1) o
+`systemd-remount-fs` falhou num boot de quatro com `mount: /: mount point is busy`, motivo lido no
+journal do produto **depois de desligado**, porque nele não há shell; (2) no primeiro boot o systemd
+gravou um `machine-id` permanente no rootfs (1 diretório de journal em 4 boots naquele disco).
+Corrigido com `ro` na raiz quando a imagem é `read-only-rootfs` (`med-image-base.bb`).
+
+**A injeção do acesso de serviço**: com a máscara do `sshd` de fábrica removida, 8 asserções
+reprovaram, todas previstas antes da execução; o `sshd` de fábrica responde antes da concessão,
+e o socket da concessão não consegue a porta (`MED_ACCESS_REASON=listener failed`). Uma nona, também prevista,
+**passou**, e era a asserção que estava errada: "não grava no rootfs" aceitava `denied`, que também
+aparece num login recusado. O predicado passou a exigir o login e `Read-only file system`.
+
+**O que demonstra**: no QEMU, a imagem de produção do EEG adquire sem nenhuma unidade falha e sem
+acesso que não seja autenticado; o único acesso é desligado por padrão, limitado no tempo, de uso
+único e auditado na mesma cadeia que a trilha clínica; e a trilha é lida e verificada fora do
+aparelho. **O que não demonstra**:
+- nada na placa: a imagem de produção não foi gravada no STM32MP257, cujo projeto declara
+  `MED_DATA_KEY_SOURCE = "tpm2"`, que recusa provisionar;
+- o selo do journal na produção: com um `machine-id` por boot, o `med-journal-seal` gera uma chave
+  por boot, e a de verificação de cada uma se perde em `/run` (D9, opção (b));
+- que a mídia de concessão seja inofensiva antes da verificação: o kernel analisa o sistema de
+  arquivos dela;
+- a identidade do aparelho na concessão: ela vale para todos os aparelhos do mesmo `compatible`;
+- o SWD, que fica fora do escopo e aberto.

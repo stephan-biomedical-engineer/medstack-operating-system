@@ -1,0 +1,33 @@
+#!/bin/sh
+# MedOS service access: open one window from a signed grant on a removable
+# medium labelled "med-service" (ACE-03, docs/CONFORMIDADE.md).
+#
+# Started by udev when such a medium appears (90-med-service-access.rules).
+# The grant is verified, audited and spent by med-service-access; this script
+# only mounts the medium read-only, starts the listener and schedules the end.
+# Nothing here decides whether access is allowed.
+set -u
+R=/run/med-service
+M=$R/media
+
+DEV=$(blkid -L med-service) || { echo "no medium labelled med-service" >&2; exit 1; }
+mkdir -p "$R" && chmod 0755 "$R"
+mkdir -p "$M"
+# A host key per window, in tmpfs: the rootfs is read-only and carries none.
+# Its fingerprint goes into the grant's audit record, which is how the
+# technician checks the device they reached.
+if [ ! -f "$R/ssh_host_ed25519_key" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C med-service -f "$R/ssh_host_ed25519_key" || exit 1
+fi
+mount -o ro,nosuid,nodev,noexec "$DEV" "$M" || exit 1
+D=$(med-service-access grant "$M/grant.p7s")
+rc=$?
+umount "$M"
+[ "$rc" -eq 0 ] || exit 1
+
+if ! systemctl start med-service-sshd.socket; then
+    /usr/libexec/med-service-access/stop "listener failed"
+    exit 1
+fi
+systemd-run --collect --unit=med-service-expiry --on-active="${D}s" \
+    --timer-property=AccuracySec=1s /usr/libexec/med-service-access/stop expired

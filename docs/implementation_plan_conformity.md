@@ -492,6 +492,49 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 
 ## 10. Registro de execução
 
+- **2026-11-08**, **Fases 5.2–5.5** (imagem de produção do EEG, QEMU). **5.3**: a lista do EEG foi
+  para `med-image-eeg.inc`; `med-image-eeg` (desenvolvimento) e `med-image-eeg-prod` (sobre
+  `med-image-prod.bb`) diferem pela base e pelo revisor. `make qemu IMAGE=med-image-eeg-prod`
+  constrói (o alvo passou a respeitar `IMAGE`). **Diferença de pacotes**: 240 → 215; saem os 25 do
+  desenvolvimento: `openssh*` (6 pacotes e o *packagegroup*), o revisor (`med-review`,
+  `edfbrowser`, `desktop-file-utils`, `shared-mime-info-data`), as ferramentas de verificação
+  (`systemd-analyze`, `procps*`, `util-linux-chrt`, `-taskset`, `libproc2`, `ncurses`), e o que o
+  `read-only-rootfs` dispensa (`base-passwd`, `shadow`, `update-rc.d`, `update-alternatives-opkg`).
+  Root fica `root:*` no `/etc/shadow` do artefato. **5.4, dois defeitos, da mesma causa**: o
+  `runqemu` acrescenta ` rw` ao `QB_KERNEL_ROOT`, então o kernel montava gravável a raiz de uma
+  imagem somente leitura. (1) O `systemd-remount-fs` falhou num boot de quatro, e o motivo só
+  apareceu lendo o journal do produto depois de desligado: `mount: /: mount point is busy`. (2) No
+  primeiro boot, com a raiz ainda gravável, o systemd gravou um `machine-id` **permanente** no
+  rootfs: aquele disco tinha 1 diretório de journal para 4 boots, e o disco corrigido tem um por
+  boot, com `Initializing machine ID from random generator` e `Installed transient
+  /etc/machine-id` no console. Correção: `QB_KERNEL_ROOT:append = " ro"` quando a imagem é
+  `read-only-rootfs` (`med-image-base.bb`), o mesmo que o poky faz com o `APPEND` do bootloader;
+  o dispositivo continua sendo resposta do `meta-med-bsp`. **5.5**: `tests/conformity/prod_image.py`
+  verifica sem shell no produto. Console: boota, nenhuma unidade falha, o serviço de aquisição
+  sobe, root é recusado. Desliga pelo botão de energia (ACPI, `system_powerdown`). Depois, um
+  sistema de desenvolvimento recebe o disco do produto como pendrive USB somente leitura, abre o
+  `/data` com a chave do próprio disco, lê a trilha com `journalctl -D` e a confere com
+  `med-audit-verify`. **8/8 em 4 execuções seguidas** sobre um disco novo: `SystemStart` em cada
+  boot, cadeia sem quebra através dos boots. **5.2 (D9), resultado do experimento (a)**: com a raiz
+  realmente somente leitura, o `machine-id` muda a cada boot. O `journalctl -D` lê todos os
+  diretórios, e a cadeia do `MedicalLogger` não depende dele (o estado dela está em `/data`).
+  **Mas o selo do SO fica inverificável por construção**: o `med-journal-seal` gera chave por
+  `machine-id`, então gera uma por boot, e a de verificação de cada uma se perde em `/run`. Na
+  produção, o AUD-02 só se sustenta com a opção (b).
+  **Acesso de serviço** (política decidida pelo autor em 2026-11-08, ACE-03 reescrito): nenhuma conta
+  com senha utilizável; o `sshd` de fábrica mascarado; uma concessão CMS assinada com o **chaveiro de
+  atualização** (as mesmas regras do RAUC: `codeSigning`, CRL), numa mídia USB rotulada
+  `med-service`, abre por uma duração contada desde a aceitação (não pelo relógio) um `sshd` próprio,
+  para `med-service` e a chave concedida, com *nonce* de uso único. Concessão, recusa, cada conexão
+  e o fechamento são registros `SecurityEvent` da cadeia do `MedicalLogger`
+  (`meta-med-framework/recipes-framework/med-service-access`). Host: 39 verificações, 4 injeções.
+  QEMU: `tests/conformity/service_access.py` 15/15. **Injeção**: sem a máscara do `sshd` de fábrica,
+  8 asserções reprovaram, todas previstas; uma nona prevista passou, e o defeito era do predicado
+  ("não grava no rootfs" aceitava `denied`, que um login recusado também imprime), corrigido e
+  revalidado em 15/15. Um defeito de construção: o `useradd` falhou porque o grupo
+  `systemd-journal` ainda não existia (sem `RDEPENDS` em `systemd`, o opkg roda a pré-instalação
+  antes). **Contagem**: 44 RTs (28 ✅, 8 ◐, 8 ✗); cláusulas técnicas A 18, B 6, C 14, D 2. Fora:
+  a placa, o SWD, e a identidade por aparelho na concessão (vale por `compatible`).
 - **2026-11-02**, A6: selo medido ausente no QEMU; `RESULTS.md` §5 corrigido.
 - **2026-11-07**, **Fase 4** (INV-01, INV-02): o SBOM aberto e contado pela primeira vez
   (`scripts/med-sbom-report.py`, `RESULTS.md` §12). São 240 de 240 pacotes com documento, licença, versão e

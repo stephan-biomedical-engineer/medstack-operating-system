@@ -1,0 +1,10 @@
+[Unit]
+Description=MedOS service access: SSH listener, open only during a granted window
+# No [Install] section, on purpose: nothing enables this socket. It is started
+# by med-service-access.service after a grant verifies, and stopped when the
+# window closes.
+
+[Socket]
+ListenStream=22
+Accept=yes
+MaxConnections=2

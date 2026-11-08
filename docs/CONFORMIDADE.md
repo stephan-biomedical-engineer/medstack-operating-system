@@ -93,8 +93,8 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 |---|---|---|---|---|---|---|---|
 | ACE-01 | Comandos ao serviço vêm de requisitante identificado | 81001-5-1 §5.4.3 d) e f) p. 23–24, §3.43 (autenticação na fronteira de confiança) | socket `0660 root` | quem alcança o socket comanda; sem credencial do requisitante | — | sim | ✗ |
 | ACE-02 | Cada processo roda com o menor privilégio | 81001-5-1 §5.3.2 b) p. 22 (literal) | usuários de serviço | a HMI do EEG roda como root, não como `med-hmi` (`implementation_plan_hmi_desktop.md`); **14 de 17 serviços em execução rodam como root** na imagem da bomba (`attack-surface`), os da bomba entre eles, com `CapabilityBoundingSet=` vazio | E2 | — | ◐ |
-| ACE-03 | O produto não oferece login remoto nem depuração | 81001-5-1 §5.3.2 g) e h) p. 22, §7.2 g) e h) p. 31; 14971 Tabela C.2 ("*Unsecured data ports*") | `med-image-prod` remove `debug-tweaks`, ssh, login de root | **a imagem de produção nunca foi construída** (`med-image-prod.bb`); tudo o que foi medido é imagem de desenvolvimento (§5 A1 do plano; Fase 5) | E0 | — | ✗ |
-| SIS-01 | O sistema de arquivos raiz é imutável | 81001-5-1 §5.3.1 e §5.3.2 f) p. 22 ◐ (não exigido nominalmente) | `read-only-rootfs` | só em `med-image-prod.bb`; as imagens medidas têm rootfs gravável, e com ele somente leitura a trilha e o estado da cadeia não teriam onde ser gravados (§5 A1 e A7 do plano; Fase 5) | E0 | — | ✗ |
+| ACE-03 | Nenhum acesso ao dispositivo sem autenticação; o acesso de serviço é autenticado, desligado por padrão e auditado | 81001-5-1 §5.3.2 g) e h) p. 22 (remover **ou** documentar e proteger), §7.2 g) e h) p. 31; 14971 Tabela C.2 ("*Unsecured data ports*") | `med-image-eeg-prod` sobre `med-image-prod.bb`: nenhuma senha utilizável (`root:*`), `sshd` de fábrica mascarado; acesso de serviço por concessão CMS assinada com o chaveiro de atualização, numa mídia USB, que abre por tempo limitado um `sshd` próprio para `med-service` e uma chave, de uso único, com cada passo auditado (`med-service-access`) | no QEMU, console e disco lido depois de desligado (`prod_image.py`, 8/8 em 4 execuções) e acesso de serviço (`service_access.py`, 15/15): fechado antes da concessão, concessão de CA estranha e reuso recusados, root e outra chave recusados, fecha ao fim da duração, tudo na trilha; com o `sshd` de fábrica desmascarado, 8 asserções reprovam (`RESULTS.md` §13); o verificador, 39 verificações e 4 injeções no host (`tests/service-access`). Na placa, não medido; o SWD fica aberto, fora do escopo, declarado | E3 | — | ✅ |
+| SIS-01 | O sistema de arquivos raiz é imutável | 81001-5-1 §5.3.1 e §5.3.2 f) p. 22 ◐ (não exigido nominalmente) | `read-only-rootfs` em `med-image-prod.bb`, e a raiz montada `ro` já pelo kernel (`QB_KERNEL_ROOT`, `med-image-base.bb`) | na produção do QEMU, uma escrita do usuário de serviço em `/etc` dá `Read-only file system` (`service_access.py`), e o boot não tem unidade falha (`prod_image.py`); a imagem de desenvolvimento segue gravável, de propósito; na placa, não medido | E2 | — | ✅ |
 | SIS-02 | Controle de acesso obrigatório | 81001-5-1 §5.3.1 e §5.3.2 b) p. 22 ◐ (não exigido nominalmente) | AppArmor (`implementation_plan_mac.md`) | não implementado (`implementation_plan_mac.md`) | — | — | ✗ |
 | SIS-03 | O software em uso (rootfs e kernel) é verificado no boot | 81001-5-1 §5.8.3 p. 27 (verificação de integridade de executáveis e arquivos relevantes) | — | a verity protege só o pacote de atualização; nada verifica o slot em uso nem o kernel no boot (`MODELO_DE_AMEACAS.md` §4, T25) | — | — | ✗ |
 
@@ -165,7 +165,7 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 14971 | 4.1–4.5 (p. 7–10) | processo, política, plano e arquivo de risco | — | E | do fabricante; não há arquivo de risco, só a análise ilustrativa da bomba |
 | 14971 | 5.1–5.5 (p. 10–12) | análise de risco | — | E | do fabricante; ilustrativa para a bomba (`REQUISITOS_INFUSAO.md`) |
 | 14971 | 5.3 (p. 11) | características ligadas à segurança e seus limites | INT-03 | A |  |
-| 14971 | 7.1 a) (p. 12–13) | projeto inerentemente seguro (primeira prioridade) | SEG-01, SEG-04, ATU-03, DAD-04, ACE-03 | C |  |
+| 14971 | 7.1 a) (p. 12–13) | projeto inerentemente seguro (primeira prioridade) | SEG-01, SEG-04, ATU-03, DAD-04, ACE-03 | A |  |
 | 14971 | 7.1 b) (p. 12–13) | medidas de proteção no dispositivo | DAD-01, DAD-03, INT-02, INT-03, ATU-01, ATU-04, AUD-02, AUD-03, SEG-02 | C |  |
 | 14971 | 7.1 c) (p. 12–13) | informação de segurança e treinamento | — | E | documentação ao usuário, do fabricante |
 | 14971 | 7.2 (p. 13) | verificar a implementação **e** a eficácia de cada medida | ATU-04 | A | o método inteiro: os níveis E2 e E3 deste documento |
@@ -181,10 +181,10 @@ classifica como indireta. A coluna **Placa** marca o que foi observado no STM32M
 | 81001-5-1 | 4.3 (p. 20) | itens *maintained*, *supported*, *required* | INV-05 | B |  |
 | 81001-5-1 | 5.1 (p. 21) | planejamento, ambiente de desenvolvimento, codificação segura | — | E | processo; o build em contêiner é a parte técnica do §5.1.2 |
 | 81001-5-1 | 5.2 (p. 21–22) | requisitos de segurança e sua revisão | — | E | processo |
-| 81001-5-1 | 5.3.1 (p. 22) | arquitetura de defesa em profundidade | SIS-01, SIS-02 | D |  |
+| 81001-5-1 | 5.3.1 (p. 22) | arquitetura de defesa em profundidade | SIS-01, SIS-02 | C |  |
 | 81001-5-1 | 5.3.2 b) (p. 22) | menor privilégio | ACE-02, DAD-05, SEG-02 | C |  |
-| 81001-5-1 | 5.3.2 f) (p. 22) | redução da superfície de ataque | SIS-01, TST-01 | C |  |
-| 81001-5-1 | 5.3.2 g)–h) (p. 22) | remover acesso e informação de depuração | ACE-03 | D |  |
+| 81001-5-1 | 5.3.2 f) (p. 22) | redução da superfície de ataque | SIS-01, TST-01 | A |  |
+| 81001-5-1 | 5.3.2 g)–h) (p. 22) | remover acesso e informação de depuração | ACE-03 | A |  |
 | 81001-5-1 | 5.3.3 a) (p. 23) | segregação eficaz dos itens | SEG-01, SEG-02 | A |  |
 | 81001-5-1 | 5.4.2 (p. 23) | projeto cobre as ameaças do modelo | THR-01 | B |  |
 | 81001-5-1 | 5.4.3 (p. 23–24) | interfaces seguras, fronteiras de confiança | THR-03, ACE-01 | C |  |
@@ -210,10 +210,10 @@ Saída de `scripts/med-conformity-check.py`, 2026-11-07:
 
 | | |
 |---|---|
-| Requisitos técnicos | **44**: 26 ✅, 8 ◐, 10 ✗ |
-| Por nível | E3 14 · E2 8 · E1 11 · E0 4 · sem evidência 7 |
-| Cláusulas na matriz | **67**: A 15 · B 6 · C 15 · D 4 · E 27 |
-| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 15 · só por inspeção (B) 6 · parcialmente (C) 15 · não (D) 4 |
+| Requisitos técnicos | **44**: 28 ✅, 8 ◐, 8 ✗ |
+| Por nível | E3 15 · E2 9 · E1 11 · E0 2 · sem evidência 7 |
+| Cláusulas na matriz | **67**: A 18 · B 6 · C 14 · D 2 · E 27 |
+| Cláusulas técnicas (sem as E) | **40**: atendidas com evidência que falha sozinha (A) 18 · só por inspeção (B) 6 · parcialmente (C) 14 · não (D) 2 |
 
 **A afirmação que este documento sustenta** é a última linha da tabela: quantas das cláusulas técnicas
 das três normas (as que não são processo do fabricante) são atendidas, e com que evidência, cada número
@@ -245,8 +245,9 @@ foi conferido), RDC 657/2022, Guia ANVISA 38/2020 e Portaria Inmetro 384. Fora d
   departamento ou organização independente para os testes de mitigação e de intrusão.
 - **Classe de segurança**: hipótese declarada (B para o EEG, C para a bomba), não resultado de uma
   análise de risco do fabricante (62304 §4.3; 14971 cl. 4).
-- **Imagem de produção**: nunca construída; tudo o que foi medido é imagem de desenvolvimento (ACE-03,
-  SIS-01).
+- **Imagem de produção**: construída e verificada só no QEMU (ACE-03, SIS-01; `RESULTS.md` §13). Nela
+  o `machine-id` muda a cada boot, e com ele o selo do journal perde a chave de verificação a cada
+  boot: na produção, o AUD-02 depende da opção (b) de D9.
 - **Selo do SO**: o systemd 255 reprova arquivos íntegros depois do boot de provisionamento (AUD-02;
   `implementation_plan_conformity.md` §5 A8, decisão D11 em aberto).
 - **Defesa em profundidade** (81001-5-1 §3.11) não é a arquitetura em camadas: as camadas do MedStack

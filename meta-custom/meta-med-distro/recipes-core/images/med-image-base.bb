@@ -98,6 +98,17 @@ IMAGE_FSTYPES += "wic wic.bmap"
 # different layers; the QB_* pair is now in meta-med-bsp next to the layout it
 # is coupled to.
 
+# A read-only image is mounted read-only by the kernel, not mounted read-write
+# and remounted by systemd-remount-fs. The remount fails with EBUSY when
+# anything already holds a file open for writing on /, and on the production
+# EEG image it did, on one boot in four ("mount: /: mount point is busy", read
+# from the product's own journal after shutdown -
+# tests/conformity/prod_image.py). poky does the same for the bootloader's
+# APPEND (rootfs-postcommands.bbclass); runqemu appends " rw" to
+# QB_KERNEL_ROOT unless ro or rw is already there. Which root device it is
+# stays meta-med-bsp's answer: this adds only the mode.
+QB_KERNEL_ROOT:append = "${@bb.utils.contains('IMAGE_FEATURES', 'read-only-rootfs', ' ro', '', d)}"
+
 # A machine with no disk layout produces a wic failure with no useful cause, so
 # say the cause here. The check is scoped to images that actually build a wic,
 # but it does fire at parse time for any build of such an image - deliberately:

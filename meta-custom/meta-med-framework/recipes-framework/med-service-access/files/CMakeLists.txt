@@ -1,0 +1,15 @@
+# med-service-access - MedOS service access, audited through MedicalLogger.
+# Links the MedFramework and libcrypto (the framework's own two dependencies).
+cmake_minimum_required(VERSION 3.16)
+project(med-service-access VERSION 1.0.0 LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(GNUInstallDirs)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MEDFRAMEWORK REQUIRED IMPORTED_TARGET medframework)
+pkg_check_modules(CRYPTO REQUIRED IMPORTED_TARGET libcrypto)
+add_executable(med-service-access src/main.cpp src/ServiceGrant.cpp)
+target_compile_options(med-service-access PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror)
+target_compile_definitions(med-service-access PRIVATE MED_SERVICE_ACCESS_VERSION="${PROJECT_VERSION}")
+target_link_libraries(med-service-access PRIVATE PkgConfig::MEDFRAMEWORK PkgConfig::CRYPTO)
+install(TARGETS med-service-access RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

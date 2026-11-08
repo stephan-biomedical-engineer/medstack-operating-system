@@ -22,7 +22,7 @@ degradação da segurança na segurança do paciente; e) controles em hardware d
 
 | Item | Suposição ou fato | Consequência |
 |---|---|---|
-| a) Rede | A função clínica **não precisa de rede**. A placa tem Ethernet, e a imagem de desenvolvimento a usa (DHCP, `sshd`). A de produção não deveria expor serviço nenhum, e **nunca foi construída** (ACE-03) | Toda porta exposta é superfície sem função clínica. Medido na imagem de desenvolvimento: `22/tcp` (sshd) e `68/udp` (DHCP) (`attack-surface`, TST-01) |
+| a) Rede | A função clínica **não precisa de rede**. A placa tem Ethernet, e a imagem de desenvolvimento a usa (DHCP, `sshd`). A de produção (`med-image-eeg-prod`, 2026-11-08) não escuta em porta nenhuma até que uma concessão assinada abra o acesso de serviço, por tempo limitado (ACE-03) | Toda porta exposta é superfície sem função clínica. Medido na imagem de desenvolvimento: `22/tcp` (sshd) e `68/udp` (DHCP) (`attack-surface`, TST-01) |
 | b) Segurança física | **Suposição declarada**: o equipamento fica numa sala clínica, e quem tem acesso físico a ele é pessoal da instituição. O operador alcança a tela, as portas USB, o cartão de memória e o conector do ST-LINK (serial e SWD) | Um atacante com acesso físico **não é mitigado**: o cartão sai da placa com o rootfs, a trilha e o `/data` cifrado com a chave de desenvolvimento **no mesmo cartão** (DAD-02), e o SWD dá depuração total dos dois núcleos (§2, linha 2) |
 | c) Isolamento | Estação isolada, sem rede clínica e sem integração com prontuário | A troca de dados com outros sistemas (exportar o BDF+) é por mídia, fora do escopo |
 | d) Impacto na segurança do paciente | Registro perdido, alterado ou atribuído a outro paciente → diagnóstico errado ou exame repetido; indisponibilidade → exame não feito. Classe B como hipótese (62304 §4.3) | A integridade e a autenticidade do registro são o ativo central (AUD-*, INT-*) |
@@ -53,9 +53,9 @@ service, **E**levation of privilege.
 
 | # | Interface | Tipo | Fronteira? | Quem alcança | Ameaças | Controles existentes | Lacuna |
 |---|---|---|---|---|---|---|---|
-| 1 | Console serial (`ttyS0` no QEMU; VCP do ST-LINK na placa) | física, externa | sim | quem tem o cabo | S, E | nenhum na imagem de desenvolvimento: login de root sem senha (`debug-tweaks`) | a imagem de produção o remove, e nunca foi construída (ACE-03) |
+| 1 | Console serial (`ttyS0` no QEMU; VCP do ST-LINK na placa) | física, externa | sim | quem tem o cabo | S, E | na produção: nenhuma conta tem senha utilizável (`root:*`), e o login de root é recusado (`prod_image.py`); na de desenvolvimento, nenhum: root sem senha (`debug-tweaks`) | a imagem de desenvolvimento; a de produção não foi gravada na placa (ACE-03) |
 | 2 | SWD/JTAG do ST-LINK | física, externa | sim | acesso físico | T, I, E | nenhum | a porta de depuração não é fechada (81001-5-1 §5.3.2 g)–h), §7.2 h)) |
-| 3 | Ethernet + `sshd` em `22/tcp` | rede, externa | sim | a rede local | S, I, E | nenhum: login de root sem senha; só a imagem de desenvolvimento tem o `sshd` | ACE-03 |
+| 3 | Ethernet + `sshd` em `22/tcp` | rede, externa | sim | a rede local | S, I, E | na produção: o `sshd` de fábrica mascarado; só escuta numa janela aberta por concessão (linha 20), para `med-service` com a chave concedida, sem senha, sem root, sem encaminhamento, cada conexão auditada (`service_access.py`); na de desenvolvimento, nenhum: root sem senha | a imagem de desenvolvimento; a chave de host muda a cada janela, e o técnico a confere pelo registro de auditoria, não por um `known_hosts` (ACE-03) |
 | 4 | Cliente DHCP em `68/udp` | rede, externa | sim | a rede local | T, D | o `systemd-networkd` roda como `systemd-network` | — |
 | 5 | Cartão de memória (rootfs, `med-boot`, `/data`) | física, armazenamento | sim | quem retira o cartão | I, T | LUKS2 em `/data` (DAD-01) | a chave de desenvolvimento está no mesmo cartão (DAD-02); este projeto não configura verificação do rootfs nem do kernel no boot (se a cadeia do ST autentica o FIP, não foi conferido) |
 | 6 | USB: ponte do conversor (link `usb`) | física, externa | sim | quem pluga um dispositivo | T, D, E | o driver aceita só o VID/PID da ponte; autoteste do conversor no *probe*; o udev nomeia só o que passou nele | um dispositivo que imite o VID/PID é aceito pelo kernel |
@@ -70,13 +70,15 @@ service, **E**levation of privilege.
 | 15 | D-Bus do mecanismo de atualização | lógica, interna | sim | processos com acesso ao barramento de sistema | T, E | política do D-Bus do RAUC (só root instala) | — |
 | 16 | Trilha de auditoria (`/var/log/journal`) | armazenamento | sim | root | T, R | selo do journal (AUD-02, com o falso positivo do systemd 255) e cadeia verificável (AUD-03); desde 2026-11-07 em `/data`, fora dos slots A/B (AUD-06) | o selo do systemd 255 (AUD-02) |
 | 17 | Registros clínicos em `/data` | armazenamento | sim | o serviço (escrita); `med-review` lê só o BDF+ publicado | I, T | LUKS2; `.sha256` ao lado de cada arquivo (INT-01); `EACCES` medido e injetado (DAD-05) | a chave no mesmo cartão (DAD-02) |
-| 18 | Configuração selada (`/etc/medplatform/*.conf`) | armazenamento | sim | root | T | selo SHA-256 conferido ao carregar (INT-02); fora do envelope, recusa subir (INT-03) | o rootfs é gravável nas imagens medidas (SIS-01) |
+| 18 | Configuração selada (`/etc/medplatform/*.conf`) | armazenamento | sim | root | T | selo SHA-256 conferido ao carregar (INT-02); fora do envelope, recusa subir (INT-03) | o rootfs é gravável na imagem de desenvolvimento; na de produção é somente leitura desde o kernel (SIS-01) |
 | 19 | Entrega da chave de verificação do selo (`/run/med-journal-seal/verify-key`) | lógica, interna | sim | root, só no boot de provisionamento | I | `tmpfs`, `0400`, apagada no reboot, nunca no journal | quem é root no primeiro boot a lê |
+| 20 | USB: mídia com concessão de acesso de serviço (`med-service`) | física, externa | sim | quem pluga a mídia | S, T, E | CMS verificada contra o **chaveiro de atualização** (CA, CRL, `codeSigning`); `compatible` do aparelho; *nonce* gasto antes de abrir; duração limitada, contada a partir da aceitação e não do relógio; montada somente leitura, `nosuid,nodev,noexec`; recusa e concessão auditadas (ACE-03) | o kernel analisa o sistema de arquivos de uma mídia não confiável antes de qualquer verificação; a concessão vale para todos os aparelhos do mesmo `compatible`, não para um número de série |
 
-**O que a tabela mostra, contado**: 19 interfaces, 8 físicas ou de rede e 11 lógicas ou de
-armazenamento. Todas cruzam uma fronteira de confiança. **Três não têm controle nenhum** (1, 2 e 3,
-de depuração ou de acesso remoto), **doze têm controle e lacuna declarada**, e **quatro não têm lacuna**
-(4, 12, 14 e 15). A fronteira mais fraca do produto é a física: o SWD e o cartão (linhas 2 e 5).
+**O que a tabela mostra, contado**: 20 interfaces, 9 físicas ou de rede e 11 lógicas ou de
+armazenamento. Todas cruzam uma fronteira de confiança. **Uma não tem controle nenhum** (2, o SWD),
+**quinze têm controle e lacuna declarada**, e **quatro não têm lacuna** (4, 12, 14 e 15). Até
+2026-11-08 eram três sem controle: o console (1) e o `sshd` (3) ganharam controle com a imagem de
+produção, e a mídia de concessão (20) entrou com ele. A fronteira mais fraca do produto é a física: o SWD e o cartão (linhas 2 e 5).
 
 ---
 
@@ -174,7 +176,7 @@ inteira) ou **não mitigada**. RT é o requisito de `docs/CONFORMIDADE.md` que v
 | T14 | 10 | I | sinal ao vivo lido por outro processo | A1 | permissões do socket | — | parcial |
 | T15 | 13 | T | quadros forjados no `rpmsg` por um root no Linux | A1 | CRC e sequência protegem contra erro, não contra adversário; o conversor fica fora do Linux | SEG-01 | parcial |
 | T16 | 6 | S, T | dispositivo USB que imita a ponte do conversor | A1 | VID/PID e autoteste no *probe* | — | parcial |
-| T17 | 1, 3 | S, E | login pelo console ou pelo `sshd` | todos | nenhum na imagem de desenvolvimento | ACE-03 | não mitigada: a imagem de produção não foi construída |
+| T17 | 1, 3 | S, E | login pelo console ou pelo `sshd` | todos | na produção: nenhuma senha utilizável, `sshd` de fábrica mascarado, acesso só por concessão | ACE-03 | parcial: mitigada na imagem de produção do QEMU; a de desenvolvimento não tem o controle, e a de produção não foi gravada na placa |
 | T18 | 2 | T, I, E | depuração pelo SWD, nos dois núcleos | todos | nenhum | ACE-03 | não mitigada |
 | T19 | todas | E | vulnerabilidade conhecida explorada | A4 | o rootfs é atualizável pelo A/B; o kernel não (INV-05); `cve-check` desligado | INV-04, INV-05 | não mitigada |
 | T20 | 9–15 | E | serviço comprometido escala privilégio | todos | sandbox do systemd | SEG-02, ACE-02, SIS-02 | parcial: 14 de 17 serviços rodam como root, sem MAC |
@@ -182,11 +184,13 @@ inteira) ou **não mitigada**. RT é o requisito de `docs/CONFORMIDADE.md` que v
 | T22 | 10 | D | um leitor lento freia a aquisição | A6 | canal não bloqueante | INT-04 | mitigada |
 | T23 | 12, 13 | D | mecanismo ou produtor mudo ou travado | A6 | homem-morto no mecanismo, alarme no controlador (bomba) | INF-09, INF-10 | mitigada no perfil da bomba |
 | T24 | 19 | I | chave de verificação do selo lida no boot de provisionamento | A5 | `tmpfs`, `0400`, apagada no reboot | THR-04 | parcial |
+| T26 | 20, 3 | S, E | **concessão de serviço forjada, alterada ou reaproveitada** | todos | CMS contra o chaveiro de atualização, `codeSigning`, CRL; *nonce* de uso único; duração limitada; cada passo auditado | ACE-03 | mitigada (QEMU: concessão de CA estranha e reuso recusados, `service_access.py`) |
 | T25 | 5 | T | **rootfs ou kernel alterados no cartão** | A4 | **nenhum**: a verity protege o pacote de atualização, não o slot em uso, e nada verifica o kernel no boot | SIS-03 | não mitigada |
 
-**Contagem**: 25 ameaças. **7 mitigadas** (T01, T03, T04, T08, T21, T22, T23; a T08 só desde a Fase
-5.1), **9 parciais** e **9 não mitigadas** (T05, T07, T09, T12, T13, T17, T18, T19, T25). As não
-mitigadas se concentram em três vetores: o **acesso físico** (T09, T18, T25, e T17 pelo console), a
+**Contagem**: 26 ameaças. **8 mitigadas** (T01, T03, T04, T08, T21, T22, T23, T26; a T08 só desde a
+Fase 5.1, a T26 desde 2026-11-08), **10 parciais** e **8 não mitigadas** (T05, T07, T09, T12, T13, T18,
+T19, T25). A T17 passou de não mitigada a parcial com a imagem de produção, e a T26 entrou com o
+acesso de serviço. As não mitigadas se concentram em três vetores: o **acesso físico** (T09, T18, T25), a
 **identidade de quem comanda** (T12, T13) e a **manutenção do software** (T05, T19). O modelo
 revelou duas ameaças que nenhum requisito cobria, e que viraram requisitos novos: a atualização para
 versão anterior (T05 → **ATU-06**) e a integridade do software em uso no boot (T25 → **SIS-03**).

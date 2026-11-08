@@ -1,0 +1,12 @@
+#!/bin/sh
+# The device's audit trail in journalctl's export format, on stdout, and its
+# chain verified on the device, on stderr - for the service user:
+#   ssh med-service@<device> med-trail-export > trail.export
+# The same file verifies again off the device with med-audit-verify.
+T=$(mktemp) || exit 2
+journalctl -q -o export MED_AUDIT=1 > "$T"
+med-audit-verify "$T" >&2
+rc=$?
+cat "$T"
+rm -f "$T"
+exit $rc
