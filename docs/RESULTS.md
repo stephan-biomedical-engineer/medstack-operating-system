@@ -2105,6 +2105,78 @@ demonstra**:
 - tratamento: nenhuma foi analisada nem corrigida. Os 892 estão **declarados**, não tratados;
 - monitoramento: é uma rodada, não o processo contínuo que a 81001-5-1 §6.2.1 pede.
 
+#### Triagem dos 9 críticos fora do kernel (2026-11-08)
+
+A pergunta de cada um: **o produto alcança a condição que o CVE exige?** Respondida lendo o fonte de
+quem usa a biblioteca (`downloads/rauc-1.15.2.tar.xz`, `downloads/openssh-9.6p1.tar.gz`) e
+inspecionando os binários das duas imagens EEG, extraídas sem root (`debugfs rdump`): `readelf -d`
+para quem liga cada biblioteca, `nm -D` para quem chama cada função, `strings` para formatos.
+
+| CVE | Componente | O que exige | Quem alcança na imagem | Veredito |
+|---|---|---|---|---|
+| 2026-10536 (9,8) | libcurl 8.7.1 | `CURLOPT_STREAM_DEPENDS` e `curl_easy_reset()` | só o `rauc` liga o libcurl, e não usa nenhum dos dois | não alcançado |
+| 2026-11856 (9,8) | libcurl | autenticação Digest e troca de origem no mesmo *handle* | o `rauc` não ativa `CURLOPT_HTTPAUTH` (o padrão é Basic) | não alcançado |
+| 2026-18924 (9,1) | libcurl | *server push* do HTTP/2 com conexões compartilhadas | o `rauc` não registra *push* nem usa `curl_share` | não alcançado |
+| 2026-19931 (9,8) | libcurl | autenticação Negotiate com credenciais vazias | idem `CURLOPT_HTTPAUTH` | não alcançado |
+| 2026-8924 (9,1) | libcurl | o motor de cookies | o `rauc` não ativa cookie nenhum | não alcançado |
+| 2026-8927 (9,1) | libcurl | proxy por variável de ambiente com Digest, reusado | o `rauc` não ativa `CURLOPT_PROXYAUTH` | não alcançado |
+| 2026-63073 (9,8) | OpenSSL 3.5.7 | um **cliente** CMP falando com um servidor malicioso | só o programa `openssl` (subcomando `cmp`), que nenhum serviço executa | não alcançado sem shell |
+| 2026-75803 (9,1) | OpenSSL | `EVP_Cipher()` com ChaCha20-Poly1305 ou AES-OCB e texto cifrado vazio | chamam `EVP_Cipher`: `sshd`, `ssh-keygen`, `openssl`, `libssl`. O OpenSSH usa ChaCha20 **sem** AEAD, com Poly1305 próprio, e AES-GCM, nunca as duas cifras afetadas. A `libssl` só é usada pelo libcurl do `rauc` em rede | não alcançado pelo OpenSSH; o caminho da `libssl` não foi analisado |
+| 2026-5450 (9,8) | glibc 2.39 | `scanf` com `%Nmc` e N > 1024 | nenhum ELF das duas imagens contém um formato `%Nmc` literal, de largura nenhuma (controle positivo: um binário de teste com `%2000mc` foi achado pela mesma busca) | nenhum chamador encontrado |
+
+**Resultado: nenhum dos 9 é alcançado pelo uso que o produto faz de cada componente**, segundo a
+leitura do fonte e a inspeção dos binários. Dois achados laterais: o produto ainda instala o programa
+`openssl`, puxado pelo `ca-certificates` (`RDEPENDS` em `openssl-bin`), e ele é o único caminho do
+CVE de CMP; e o `rauc` liga o libcurl para pacotes por rede, que o produto não usa.
+**O que não demonstra**: que nenhum é explorável. Nada foi testado com uma prova de conceito; a busca
+por formato só acha formatos literais, não os montados em tempo de execução; e o caminho TLS da
+`libssl` ficou sem análise. Os 9 continuam `Unpatched` no manifesto, porque a triagem não muda o
+status. O mecanismo do Yocto para registrá-la é `CVE_STATUS` com justificativa, o que é uma decisão
+do fabricante.
+
+#### O número do kernel, refinado (2026-11-08)
+
+```bash
+git clone --depth 1 https://git.kernel.org/pub/scm/linux/security/vulns.git build/linux-vulns
+python3 scripts/med-kernel-compiled-files.py \
+    build/tmp-glibc/work/qemux86_64-med-linux/linux-yocto/6.6.144+git/linux-qemux86_64-standard-build \
+    build/kernel-compiled.json.zst
+python3 layers/poky/scripts/contrib/improve_kernel_cve_report.py --datadir build/linux-vulns/cve \
+    --old-cve-report build/cve-summary-detail.json \
+    --debug-sources-file build/kernel-compiled.json.zst --new-cve-report build/cve-kernel-compiled.json
+```
+
+O script do poky troca a fonte do kernel: em vez do casamento por CPE do NVD, usa os registros da
+CNA do próprio kernel (`linux-vulns`, retrato de 2026-11-07), com as faixas de versão por ramo
+*stable*, e descarta o CVE cujos arquivos afetados este kernel não compila. A lista de compilados não
+veio do poky: o arquivo de fontes de depuração dele está **vazio** para o kernel (482 entradas, 0
+arquivos), porque o kernel do QEMU é construído sem `CONFIG_DEBUG_INFO`. Ela veio dos registros do
+próprio kbuild: `scripts/med-kernel-compiled-files.py` lê os 4.803 `.o.cmd` da árvore de build e reúne
+o fonte e cada cabeçalho que entrou num objeto (8.941 arquivos: 4.109 `.c`, 4.776 `.h`, 56 `.S`). Dois
+ajustes para rodar no Scarthgap: o relatório ganhou um campo `detail` vazio onde faltava (10.390
+entradas; o script foi escrito para um `cve-check` mais novo), sem mudar nenhum status.
+
+| `linux-yocto` 6.6.144 | Sem patch | Críticos | Altos | Médios | Baixos | Sem nota no NVD |
+|---|---|---|---|---|---|---|
+| NVD por CPE (o `cve-check`) | 778 | 42 | 335 | 390 | 9 | 2 |
+| CNA do kernel, por versão | 4.181 | 298 | 1.450 | 397 | 9 | 2.027 |
+| **CNA, por versão e pelo que este kernel compila** | **1.476** | 113 | 524 | 162 | 8 | 669 |
+
+**O número refinado é maior, não menor.** O NVD errava nos dois sentidos: contava 472 CVEs de código
+que este kernel não compila, e **não via 1.162** que a CNA do kernel publica e o NVD não casou por
+CPE, a maioria ainda sem nota (o atraso de análise do NVD). Dos 778 originais, 306 continuam, 470
+saíram por configuração e 2 por versão. Dos 1.476, 88 só existem no NVD (CVEs anteriores à CNA do
+kernel). Com o refinamento, a imagem tem **1.590 CVEs sem patch** (1.476 + 114).
+
+**Verificação do filtro**: nenhum CVE descartado por configuração tem arquivo compilado, e nenhum que
+ficou deixou de ter a lista de arquivos afetados na CNA (sem a lista, o script o conta como afetado).
+Injeção: tirar `kernel/bpf/verifier.c` da lista de compilados levou o `CVE-2026-98599` de
+`Unpatched` a `not-applicable-config`, e o total de 1.476 para 1.456 (os 20 CVEs desse arquivo).
+**O que não demonstra**: que cada um dos 1.476 é explorável neste aparelho, porque um arquivo
+compilado não é um caminho alcançável; o kernel da placa (`linux-stm32mp`), que não foi medido; e
+nada sobre a correção, porque o kernel fica **fora dos slots A/B** e a atualização da plataforma não o
+troca (INV-05, `MODELO_DE_AMEACAS.md` §3).
+
 ## 13. Imagem de produção do EEG (2026-11-08, QEMU)
 
 ### Método
@@ -2205,7 +2277,7 @@ Evolução, pela mesma regra de cálculo:
 - **identidade de quem comanda**: o requisitante do socket de controle não é identificado (ACE-01),
   o operador é afirmado (AUD-05), serviços como root (ACE-02, 14 de 17 na bomba);
 - **manutenção do software**: versão anterior não é recusada (ATU-06), a atualização não entra na
-  trilha (ATU-05, depende de D7), as 892 vulnerabilidades levantadas não foram tratadas (INV-04), sem
+  trilha (ATU-05, depende de D7), as 1.590 vulnerabilidades levantadas não foram tratadas (INV-04), sem
   controle de acesso obrigatório (SIS-02), sem casos de abuso nem *fuzzing* (TST-02);
 - **parciais**: o selo do journal (AUD-02: falso positivo do systemd 255, D11; e, na produção, uma
   chave por boot, D9), a hora (TMP-01), a lista de eventos (AUD-04), o fornecedor no SBOM (INV-02), as

@@ -492,6 +492,14 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 
 ## 10. Registro de execução
 
+- **2026-11-08**, triagem e kernel (INV-04): os **9 críticos fora do kernel** (6 do libcurl, 2 do OpenSSL,
+  1 da glibc) foram triados pela condição de cada um contra o uso do produto: **nenhum alcançado**, por
+  leitura do fonte (RAUC, OpenSSH) e inspeção dos binários das duas imagens; o programa `openssl` na
+  produção, puxado pelo `ca-certificates`, é o único caminho do CVE de CMP. O **kernel** foi refinado com
+  o `improve_kernel_cve_report.py` do poky, a CNA do kernel e a lista do que ele compila, tirada dos
+  `.o.cmd` do kbuild (`scripts/med-kernel-compiled-files.py`), porque a lista de depuração do poky vem
+  vazia sem `CONFIG_DEBUG_INFO`. **De 778 para 1.476**: o NVD contava 472 de código não compilado e não
+  via 1.162. Injeção no filtro: um arquivo retirado muda os seus 20 CVEs. Imagem: 1.590 sem patch.
 - **2026-11-08**, `cve-check` (INV-04, o opcional da Fase 4): uma rodada sobre `med-image-eeg`, com a
   configuração fora do repositório (`bitbake -R build/cve.conf`). 120 receitas; **892 CVEs sem patch**,
   778 deles do kernel (um teto: o `cve-check` não olha a configuração do kernel) e 114 em 18 receitas;
