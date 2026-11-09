@@ -2067,8 +2067,43 @@ licença e, para o software de terceiros, o CPE que uma base de vulnerabilidades
 - **quem** é o fabricante de cada componente: o fornecedor declarado é `OpenEmbedded` em todos, e a
   IEC 62304 §8.1.2 pede o fabricante (INV-02 fica ◐);
 - **quais vulnerabilidades continuam abertas**: o SBOM lista as corrigidas por patch, não as que
-  faltam, e o `cve-check`, que as acharia, não foi rodado (INV-04, primeiro da ordem de corte);
+  faltam; o `cve-check`, rodado depois, está na subseção abaixo (INV-04);
 - o kernel da placa: o `linux-stm32mp` não foi contado, e o número de CVEs do kernel acima é o do QEMU.
+
+### Vulnerabilidades conhecidas: uma rodada de `cve-check` (2026-11-08, INV-04)
+
+```bash
+printf 'INHERIT += "cve-check"\n' > build/cve.conf
+.kas-container/kas-container-5.2 shell kas/project-eeg-qemu.yml -c "bitbake -R /work/build/cve.conf med-image-eeg"
+# manifesto: build/tmp-glibc/deploy/images/qemux86-64/med-image-eeg-qemux86-64.rootfs.json
+```
+
+A configuração fica fora do repositório (`bitbake -R`), porque é uma medição e não uma política. A
+base é a do NVD (API 2.0, sem chave), baixada no mesmo dia.
+
+| | |
+|---|---|
+| Receitas da imagem verificadas | 120 |
+| CVEs `Patched` (corrigidos por patch ou fora da faixa de versão) | 17.867 |
+| CVEs `Ignored` (declarados não aplicáveis pelas receitas) | 35 |
+| **CVEs `Unpatched`** | **892**, em 19 receitas |
+| do kernel (`linux-yocto` 6.6) | 778: 42 críticos, 335 altos, 390 médios, 9 baixos, 2 sem nota |
+| do resto | 114, em 18 receitas: 9 críticos, 28 altos, 54 médios, 22 baixos, 1 sem nota |
+| maiores fora do kernel | `openssl` 23, `curl` 20, `expat` 19, `openssh` 15, `libxml2` 8, `libssh` 7 |
+
+Faixas pela nota CVSS v3: crítico ≥ 9, alto ≥ 7, médio ≥ 4.
+
+**O que demonstra**: as vulnerabilidades publicadas que casam com o nome e a versão dos componentes
+da imagem, num dia, e que o levantamento roda sobre a mesma construção, sem mudar receita. **O que não
+demonstra**:
+- que cada uma se aplica: o casamento é por CPE e faixa de versão. No kernel, o `cve-check` não
+  olha a configuração, então conta CVEs de subsistemas que este kernel nem compila (o número do
+  kernel é um teto);
+- nada sobre o código próprio: as receitas deste repositório não têm CPE, e nenhuma base pública
+  as conhece;
+- nada sobre a placa: o `linux-stm32mp` não foi verificado;
+- tratamento: nenhuma foi analisada nem corrigida. Os 892 estão **declarados**, não tratados;
+- monitoramento: é uma rodada, não o processo contínuo que a 81001-5-1 §6.2.1 pede.
 
 ## 13. Imagem de produção do EEG (2026-11-08, QEMU)
 
@@ -2149,11 +2184,11 @@ falhar com defeitos injetados no documento (`implementation_plan_conformity.md` 
 
 | | |
 |---|---|
-| Requisitos técnicos | **44**: 28 ✅, 8 ◐, 8 ✗ |
-| Por nível de evidência | E3 15 · E2 9 · E1 11 · E0 2 · sem evidência 7 |
+| Requisitos técnicos | **44**: 28 ✅, 9 ◐, 7 ✗ |
+| Por nível de evidência | E3 15 · E2 9 · E1 12 · E0 2 · sem evidência 6 |
 | Cláusulas aplicáveis | **67**, das quais 27 são processo do fabricante (E) |
-| **Cláusulas técnicas** | **40**: A 18 · B 6 · C 14 · D 2 |
-| por norma | IEC 62304: A 11 · B 2 · C 4 · D 1 (18) · ISO 14971: A 3 · C 2 (5) · IEC 81001-5-1: A 4 · B 4 · C 8 · D 1 (17) |
+| **Cláusulas técnicas** | **40**: A 18 · B 6 · C 16 · D 0 |
+| por norma | IEC 62304: A 11 · B 2 · C 5 (18) · ISO 14971: A 3 · C 2 (5) · IEC 81001-5-1: A 4 · B 4 · C 9 (17) |
 
 Evolução, pela mesma regra de cálculo:
 
@@ -2161,7 +2196,8 @@ Evolução, pela mesma regra de cálculo:
 |---|---|---|---|---|
 | 2026-11-07, Fase 1 | 42 | 18 / 11 / 13 | 14 / 1 / 15 / 10 | primeira matriz; a auditoria de evidência rebaixou AUD-05, TMP-01 e ACE-01 |
 | 2026-11-07, Fases 2–4 | 44 | 26 / 8 / 10 | 15 / 6 / 15 / 4 | cadeia de auditoria verificável, trilha fora dos slots, confinamento, SBOM, modelo de ameaças (que acrescentou ATU-06 e SIS-03) |
-| 2026-11-08, Fase 5 | 44 | 28 / 8 / 8 | **18 / 6 / 14 / 2** | imagem de produção e acesso de serviço (ACE-03, SIS-01; §13) |
+| 2026-11-08, Fase 5 | 44 | 28 / 8 / 8 | 18 / 6 / 14 / 2 | imagem de produção e acesso de serviço (ACE-03, SIS-01; §13) |
+| 2026-11-08, `cve-check` | 44 | 28 / 9 / 7 | **18 / 6 / 16 / 0** | vulnerabilidades levantadas, não tratadas (INV-04 ◐; §12) |
 
 **O que fica aberto**, pelo vetor:
 - **acesso físico**: a chave do `/data` no mesmo cartão (DAD-02), nada verifica o rootfs e o kernel no
@@ -2169,14 +2205,15 @@ Evolução, pela mesma regra de cálculo:
 - **identidade de quem comanda**: o requisitante do socket de controle não é identificado (ACE-01),
   o operador é afirmado (AUD-05), serviços como root (ACE-02, 14 de 17 na bomba);
 - **manutenção do software**: versão anterior não é recusada (ATU-06), a atualização não entra na
-  trilha (ATU-05, depende de D7), vulnerabilidades conhecidas não são levantadas (INV-04), sem
+  trilha (ATU-05, depende de D7), as 892 vulnerabilidades levantadas não foram tratadas (INV-04), sem
   controle de acesso obrigatório (SIS-02), sem casos de abuso nem *fuzzing* (TST-02);
 - **parciais**: o selo do journal (AUD-02: falso positivo do systemd 255, D11; e, na produção, uma
   chave por boot, D9), a hora (TMP-01), a lista de eventos (AUD-04), o fornecedor no SBOM (INV-02), as
   opções de compilação (INV-06), a custódia da chave de assinatura (THR-04).
 
-**As duas cláusulas em D** (IEC 62304 §7.1.3, IEC 81001-5-1 §6.2.1) dependem só do INV-04. Uma rodada
-de `cve-check` as tiraria de D; tratar o que ela achar é outro trabalho.
+**Nenhuma cláusula técnica fica em D.** As duas últimas (IEC 62304 §7.1.3, IEC 81001-5-1 §6.2.1)
+dependiam só do INV-04 e passaram a C com a rodada de `cve-check`: levantar não é tratar nem monitorar,
+por isso C e não A.
 
 **O que a bomba herda** (`implementation_plan_infusion_pump.md` §13, M9, medido em 2026-11-06): dos
 26 RTs que se aplicam a ela, 23 sem uma linha de plataforma, 1 com trabalho na plataforma (AUD-04).

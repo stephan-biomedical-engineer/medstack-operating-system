@@ -492,6 +492,13 @@ falso positivo que ela revelou (A8) fica para D11; a bomba segue antes dele.
 
 ## 10. Registro de execução
 
+- **2026-11-08**, `cve-check` (INV-04, o opcional da Fase 4): uma rodada sobre `med-image-eeg`, com a
+  configuração fora do repositório (`bitbake -R build/cve.conf`). 120 receitas; **892 CVEs sem patch**,
+  778 deles do kernel (um teto: o `cve-check` não olha a configuração do kernel) e 114 em 18 receitas;
+  17.867 corrigidos e 35 ignorados (`RESULTS.md` §12). Nada foi tratado. INV-04 passa a ◐ E1, e as duas
+  cláusulas que estavam em D passam a C. **Contagem**: 44 RTs (28 ✅, 9 ◐, 7 ✗); cláusulas técnicas
+  A 18, B 6, C 16, **D 0**. Custo medido: ligar a classe muda a assinatura das tarefas, e a construção
+  recompilou boa parte da imagem (Qt inclusive); com o download do NVD sem chave, foram mais de 2 h.
 - **2026-11-08**, **Fase 7** (contagem e redação): `RESULTS.md` §14 registra o estado final e a
   evolução (D 10 → 4 → 2). Contagem final: 44 RTs, 28 ✅, 8 ◐, 8 ✗; 40 cláusulas técnicas, A 18,
   B 6, C 14, D 2. **As duas em D dependem só do INV-04**, então a rodada opcional de `cve-check`
