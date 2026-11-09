@@ -34,7 +34,9 @@ A distinção que organiza esta seção é a mesma que organiza o repositório: 
 | Reuso entre classes de dispositivo | 206 pacotes comuns, delta de 3; `diff` só com remoções | QEMU |
 | Caminho de aquisição íntegro | Resto zero na divisão por 488 B; taxa entregue = taxa configurada com a HMI conectada, depois de corrigida a contrapressão da publicação (`RESULTS.md` §3) | QEMU |
 | Particionamento de software | `exposure 3.7`; `SCHED_RR` prio. 50 concedido pelo kernel | QEMU |
-| Trilha de auditoria selada | `journalctl --verify` → `PASS`, nos dois alvos | **Hardware** |
+| Trilha de auditoria persistente e estruturalmente íntegra | `journalctl --verify` → `PASS`, nos dois alvos. Sem `--verify-key=`, o comando confere a estrutura, **não** um selo: até 2026-11-02 nenhuma chave de selo existia (`RESULTS.md` §5, correção) | **Hardware** |
+| Trilha de auditoria selada | selo provisionado no 1º boot; um byte alterado é recusado com a chave, mas também sem ela (pelo hash do objeto), então não ficou provado que foi o selo; nos boots seguintes o systemd 255 reprova arquivos íntegros (D11); na produção, uma chave por boot (D9) (`RESULTS.md` §5, §13) | QEMU, parcial |
+| Cadeia de auditoria verificável | `med-audit-verify` refaz a cadeia do `MedicalLogger`, vista falhar com um registro alterado, e verifica a trilha do produto lida fora dele (`RESULTS.md` §5, §13) | QEMU |
 | Política de atualização A/B | Bundle assinado verificado contra o keyring do dispositivo e escrito no slot inativo | QEMU |
 | Volume `/data` LUKS2 | Provisionado em 13 s no primeiro boot; `dm/uuid` começa com `CRYPT-` | **Hardware** |
 | Portabilidade para o alvo físico | Boot completo da STM32MP257F-DK; slot A pelo PARTUUID que o layout fixa | **Hardware** |

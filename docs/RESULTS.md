@@ -834,7 +834,7 @@ reboot && journalctl --list-boots
 ### Resultado
 
 `/var/log/journal` é diretório real com setgid `systemd-journal`; `journalctl --verify` retorna
-`PASS`; e `--list-boots` lista o boot anterior depois de um reboot.
+`PASS` (a estrutura; selo, ver a correção abaixo); e `--list-boots` lista o boot anterior depois de um reboot.
 
 **O que isso demonstra**: a **persistência** do journal funciona de ponta a ponta, e os arquivos são
 estruturalmente íntegros. Isto é teste de regressão de um defeito real — o `VOLATILE_LOG_DIR`
@@ -1290,7 +1290,7 @@ console serial pelo ST-LINK V3. O registro narrativo, com os defeitos e suas cau
 | 6 | A asserção do `MedicalStorage` | `cat /sys/block/dm-0/dm/uuid` | `CRYPT-LUKS2-c1480c70…-med-data` |
 | 7 | `/data` montado do mapeamento | `awk '$2=="/data"' /proc/mounts` | `/dev/mapper/med-data ext4` |
 | 8 | Custódia da chave | `stat -c '%U:%G %a'` em `med-boot` | `root:root 400` |
-| 9 | Trilha de auditoria | `journalctl --verify` | `PASS` |
+| 9 | Trilha de auditoria | `journalctl --verify` | `PASS`: estrutura íntegra; **não** é selo, porque não havia chave (§5, correção de 2026-11-02) |
 | 10 | Unidades falhas | `systemctl list-units --state=failed` | apenas `weston.service` |
 | 11 | Fragmento de kernel | `zcat /proc/config.gz \| grep TCG_TIS` | `CONFIG_TCG_TIS=m` (o fragmento pede `y`) |
 

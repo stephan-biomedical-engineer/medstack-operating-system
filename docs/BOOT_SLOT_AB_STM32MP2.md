@@ -347,7 +347,7 @@ ou reverter mentalmente que a regravação sobrescreve a `med-boot` de qualquer 
   ls /var/log/journal/                    # quantos machine-id existem neste slot
   cat /etc/machine-id                     # e compare com o do slot A
   journalctl --list-boots | head          # o histórico do slot A aparece?
-  journalctl --verify                     # o selo ainda valida neste slot
+  journalctl --verify                     # a estrutura ainda valida (sem --verify-key, não confere selo)
   ```
 
 - **Atualização que troca a versão do kernel** (§5.4). Nunca tentada; o esquema atual não a suporta.

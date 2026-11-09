@@ -750,9 +750,11 @@ dezenas de `Fixed dependency cycle(s)` do devicetree da ST; `regulatory.db` ause
 deste repositório.
 
 **Auditoria do kernel desligada**: `systemd-journald: Collecting audit messages is disabled`. A
-trilha de auditoria do MedOS é o journald com Forward Secure Sealing, que **validou na placa**
-(`journalctl --verify` → `PASS`), então isto não invalida a §5 do `RESULTS.md` — mas convém saber
-que o subsistema `audit` do kernel não está coletando.
+trilha de auditoria do MedOS é o journald, e o `journalctl --verify` → `PASS` daqui mostra só que
+ela é estruturalmente íntegra. *Corrigido em 2026-11-08*: esta frase dizia que o *Forward Secure
+Sealing* tinha **validado na placa**, e não havia selo nenhum. Sem `--verify-key=`, o comando não
+confere selo, e nenhuma chave tinha sido gerada (`RESULTS.md` §5, correção de 2026-11-02). Fica de
+pé o resto: o subsistema `audit` do kernel não está coletando.
 
 ---
 
@@ -2055,7 +2057,7 @@ custódia de chave — que é o que garante que nada regrediu no alvo que já ti
 | `/data` LUKS2 provisionado no primeiro boot | `cryptsetup status`, 13 s, `dm/uuid` `CRYPT-…` |
 | Chave em partição fora dos slots A/B, `0400` | `stat` em `med-boot` (`mmcblk0p8`, ext4) |
 | RAUC enumera slots e identifica o bootado | `rauc status`: `Booted from: rootfs.0` |
-| Trilha de auditoria selada | `journalctl --verify` → `PASS` |
+| Trilha de auditoria estruturalmente íntegra (não selada: não havia chave; `RESULTS.md` §5) | `journalctl --verify` → `PASS` |
 | Cortex-M33 presente e disponível | `remoteproc remoteproc1: m33 is available` |
 | **HMI Qt renderizando em monitor HDMI** (§9.9) | `NRestarts=0`, 1,099 s de CPU em 2 min 22 s; plano DRM de 1030x633 = a janela do QML |
 | **`/etc/fw_env.config` da receita, leitura e escrita** (§9.9) | `fw_printenv`/`fw_setenv` round-trip; `BOOT_ORDER` persiste entre regravações do cartão |
